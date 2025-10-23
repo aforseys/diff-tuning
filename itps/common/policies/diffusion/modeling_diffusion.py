@@ -41,6 +41,13 @@ from common.policies.utils import (
 )
 import time
 
+## --- helper functions --- ##
+
+def extract(a, t, x_shape):
+    b, *_ = t.shape
+    out = a.gather(-1, t)
+    return out.reshape(b, *((1,) * (len(x_shape) - 1)))
+
 class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
     """
     Diffusion Policy as per "Diffusion Policy: Visuomotor Policy Learning via Action Diffusion"
@@ -79,7 +86,7 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
         # queues are populated during rollout of the policy, they contain the n latest observations and actions
         self._queues = None
 
-        self.diffusion = DiffusionModel(config, alginment_strategy=alignment_strategy)
+        self.diffusion = EBMDiffusionModel(config, alginment_strategy=alignment_strategy)
 
         self.expected_image_keys = [k for k in config.input_shapes if k.startswith("observation.image")]
         self.use_env_state = "observation.environment_state" in config.input_shapes
@@ -93,7 +100,7 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
         return set(self.config.input_shapes)
 
     @torch.no_grad
-    def run_inference(self, observation_batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None) -> Tensor:
+    def run_inference(self, observation_batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, return_energy=False, return_full=False) -> Tensor:
         observation_batch = self.normalize_inputs(observation_batch)
         if guide is not None:
             guide = self.normalize_targets({"action": guide})["action"]
@@ -101,18 +108,26 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
             observation_batch["observation.images"] = torch.stack(
                 [observation_batch[k] for k in self.expected_image_keys], dim=-4
             )
-        actions = self.diffusion.generate_actions(observation_batch, guide=guide, visualizer=visualizer, normalizer=self)
-        actions = self.unnormalize_outputs({"action": actions})["action"]
+        gen_actions = self.diffusion.generate_actions(observation_batch, guide=guide, visualizer=visualizer, normalizer=self, return_energy=return_energy, return_full=return_full)
+        actions = self.unnormalize_outputs({"action": gen_actions['action']})["action"]
+
+        if return_full: 
+            full_traj = self.unnormalize_outputs({"action": gen_actions['full_traj']})["action"]
+            if return_energy:
+                return actions, gen_actions['energy'], full_traj
+        elif return_energy:
+            return actions, gen_actions['energy']
+        
         return actions
 
     def forward(self, batch: dict[str, Tensor]) -> dict[str, Tensor]:
         """Run the batch through the model and compute the loss for training or validation."""
         batch = self.normalize_inputs(batch)
-        if len(self.expected_image_keys) > 0:
+        if len(self.expected_image_keys) > 0: #TODO: Need to make shallow copy here? (Done in Irene's code)
             batch["observation.images"] = torch.stack([batch[k] for k in self.expected_image_keys], dim=-4)
         batch = self.normalize_targets(batch)
-        loss = self.diffusion.compute_loss(batch)
-        return {"loss": loss}
+        loss, (loss_denoise, loss_energy) = self.diffusion.compute_loss(batch)
+        return {"loss": loss, "loss_breakdown": {"MSE": loss_denoise, "energy_landscape": loss_energy}}
 
 
 def _make_noise_scheduler(name: str, **kwargs: dict) -> DDPMScheduler | DDIMScheduler:
@@ -127,8 +142,35 @@ def _make_noise_scheduler(name: str, **kwargs: dict) -> DDPMScheduler | DDIMSche
     else:
         raise ValueError(f"Unsupported noise scheduler type {name}")
 
+class EBMWrapper(nn.Module):
+    def __init__(self, ebm):
+        super(EBMWrapper, self).__init__()
+        self.ebm = ebm
+        
+    def forward(self, x: Tensor, timestep: Tensor | int, global_cond=None, return_energy=False, return_both=False, mask=None):
+        x.requires_grad_(True)
 
-class DiffusionModel(nn.Module):
+        out = self.model(x, timestep, global_cond)
+        energy_per_state = out.pow(2).sum(dim=1)  #TODO: Why is energy squared? Keep positive? Other ways to do this?
+
+        # Don't use padding actions in energy calculation
+        if mask is not None:
+            energy_per_state = (energy_per_state * mask.unsqueeze(-1))
+
+        energy = energy_per_state.sum(dim=1)[:, None] #(B, 1)
+
+        if return_energy:
+            return energy 
+        
+        opt_grad = torch.autgrad.grad([energy.sum()], [x], create_graph=True)[0]
+
+        if return_both:
+            return energy, opt_grad
+        else:
+            return opt_grad 
+
+
+class EBMDiffusionModel(nn.Module):
     def __init__(self, config: DiffusionConfig, alginment_strategy: str):
         super().__init__()
         self.config = config
@@ -146,7 +188,8 @@ class DiffusionModel(nn.Module):
             self._use_env_state = True
             global_cond_dim += config.input_shapes["observation.environment_state"][0]
 
-        self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps)
+        self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps) 
+        self.model = EBMWrapper(self.unet)
 
         self.noise_scheduler = _make_noise_scheduler(
             config.noise_scheduler_type,
@@ -158,6 +201,19 @@ class DiffusionModel(nn.Module):
             clip_sample_range=config.clip_sample_range,
             prediction_type=config.prediction_type,
         )
+
+        register_buffer = lambda name, val: self.register_buffer(name, val.to(torch.float32))
+
+        # save noise weighting, no effect when doing noise prediction
+        alphas_cumprod=self.noise_scheduler.alphas_cumprod
+        snr = alphas_cumprod / (1-alphas_cumprod)
+        if self.config.prediction_type == "epsilon":
+            loss_weight = torch.ones_like(snr)
+        elif self.config.prediction_type == "sample":
+            loss_weight = snr 
+        else:
+            raise NotImplementedError("Prediction type not recognized")
+        register_buffer('loss_weight')
 
         if config.num_inference_steps is None:
             self.num_inference_steps = self.noise_scheduler.config.num_train_timesteps
@@ -215,7 +271,7 @@ class DiffusionModel(nn.Module):
                 continue
             for i in range(MCMC_steps):
                 # Predict model output.
-                model_output = self.unet(
+                model_output = self.model(
                     sample,
                     torch.full(sample.shape[:1], t, dtype=torch.long, device=sample.device),
                     global_cond=global_cond,
@@ -292,7 +348,9 @@ class DiffusionModel(nn.Module):
         # Concatenate features then flatten to (B, global_cond_dim).
         return torch.cat(global_cond_feats, dim=-1).flatten(start_dim=1)
 
-    def generate_actions(self, batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, normalizer=None) -> Tensor:
+    def 
+
+    def generate_actions(self, batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, normalizer=None, return_energy=False, return_full=False) -> Tensor:
         """
         This function expects `batch` to have:
         {
@@ -303,6 +361,7 @@ class DiffusionModel(nn.Module):
             "observation.environment_state": (B, environment_dim)
         }
         """
+        action_dict={}
         batch_size, n_obs_steps = batch["observation.state"].shape[:2]
         assert n_obs_steps == self.config.n_obs_steps, f"{n_obs_steps=} {self.config.n_obs_steps=}"
 
@@ -312,14 +371,20 @@ class DiffusionModel(nn.Module):
         # run sampling
         actions = self.conditional_sample(batch_size, global_cond=global_cond, guide=guide, visualizer=visualizer, normalizer=normalizer)
 
+        if return_full:
+            action_dict['full_traj'] = actions
+
+        if return_energy:
+            action_dict['energy'] = self.get_energy_from_traj(actions)
+
         # Extract `n_action_steps` steps worth of actions (from the current observation).
         start = n_obs_steps - 1
         end = start + self.config.n_action_steps
-        actions = actions[:, start:end]
+        action_dict['actions'] = actions[:, start:end]
 
-        return actions
+        return action_dict
 
-    def compute_loss(self, batch: dict[str, Tensor]) -> Tensor:
+    def compute_loss(self, batch: dict[str, Tensor], t) -> Tensor:
         """
         This function expects `batch` to have (at least):
         {
@@ -358,10 +423,21 @@ class DiffusionModel(nn.Module):
         # Add noise to the clean trajectories according to the noise magnitude at each timestep.
         noisy_trajectory = self.noise_scheduler.add_noise(trajectory, eps, timesteps)
 
-        # Run the denoising network (that might denoise the trajectory, or attempt to predict the noise).
-        pred = self.unet(noisy_trajectory, timesteps, global_cond=global_cond)
+        # Get batch mask for energy calculation (don't use repeated actions)
+        if self.config.do_mask_loss_for_padding:
+            if "action_is_pad" not in batch:
+                raise ValueError(
+                    "You need to provide 'action_is_pad' in the batch when "
+                    f"{self.config.do_mask_loss_for_padding=}."
+                )
+            mask = ~batch["action_is_pad"]
+        else:
+            mask = None
 
-        # Compute the loss.
+        # Run the denoising network (that might denoise the trajectory, or attempt to predict the noise).
+        pred = self.model(noisy_trajectory, timesteps, global_cond=global_cond, mask=mask)
+
+        # Compute the MSE loss.
         # The target is either the original trajectory, or the noise.
         if self.config.prediction_type == "epsilon":
             target = eps
@@ -374,15 +450,42 @@ class DiffusionModel(nn.Module):
 
         # Mask loss wherever the action is padded with copies (edges of the dataset trajectory).
         if self.config.do_mask_loss_for_padding:
-            if "action_is_pad" not in batch:
-                raise ValueError(
-                    "You need to provide 'action_is_pad' in the batch when "
-                    f"{self.config.do_mask_loss_for_padding=}."
-                )
-            in_episode_bound = ~batch["action_is_pad"]
-            loss = loss * in_episode_bound.unsqueeze(-1)
+            loss = loss * mask.unsqueeze(-1)
 
-        return loss.mean()
+        loss = einops.reduce(loss, 'b ... -> b (...)', 'mean')
+        loss = loss * extract(self.loss_weight, t, loss.shape)
+        loss_mse = loss
+
+        # Compute contrastive loss 
+        if self.config.supervise_energy_landscape:
+
+            # resample noise trajectory 
+            eps = torch.randn(trajectory.shape, device=trajectory.device)
+            data_sample = self.noise_scheduler.add_noise(trajectory, eps, timesteps)
+
+            #TODO: Test different ways of getting corrupted sample. Below is starting point in IRED and used in itps (3x noise)
+            xmin_noise = self.noise_scheduler.add_noise(trajectory, 3.0*eps, timesteps)
+            loss_scale = 0.5 # TODO: test values. This is from itps, one found in IRED.
+
+            # Compute energy of both samples (positive and negative)
+            global_cond_concat = torch.cat([global_cond, global_cond], dim=0)
+            traj_concat = torch.cat([data_sample, xmin_noise], dim=0)
+            t_concat = torch.cat([timesteps, timesteps], dim=0)
+            energy = self.model(traj_concat, t_concat, global_con=global_cond_concat, return_energy=True)
+
+            # Compute contrastive loss
+            energy_positive, energy_negative = torch.chunk(energy, 2, 0)
+            energy_stack = torch.cat([energy_positive, energy_negative], dim=-1)
+            target = torch.zeros(energy_positive.size(0)).to(energy_stack.device)
+            loss_energy = F.cross_entropy(-1 * energy_stack, target.long(), reduction='none')[:, None]
+
+            loss = loss_mse + loss_scale * loss_energy 
+            return loss.mean(), (loss_mse.mean(), loss_energy.mean())
+
+        else: 
+            loss = loss_mse
+            return loss.mean(), (loss_mse.mean(), -1) #TODO: Does -1 need to be a tensor? Set as such in Irene's code
+        #return loss.mean()
 
 
 class SpatialSoftmax(nn.Module):
