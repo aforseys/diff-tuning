@@ -99,7 +99,7 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
     def input_keys(self) -> set[str]:
         return set(self.config.input_shapes)
 
-    @torch.no_grad
+    @torch.no_grad 
     def run_inference(self, observation_batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, return_energy=False, return_full=False) -> Tensor:
         observation_batch = self.normalize_inputs(observation_batch)
         if guide is not None:
@@ -145,7 +145,7 @@ def _make_noise_scheduler(name: str, **kwargs: dict) -> DDPMScheduler | DDIMSche
 class EBMWrapper(nn.Module):
     def __init__(self, ebm):
         super(EBMWrapper, self).__init__()
-        self.ebm = ebm
+        self.model = ebm
         
     def forward(self, x: Tensor, timestep: Tensor | int, global_cond=None, return_energy=False, return_both=False, mask=None):
         x.requires_grad_(True)
@@ -213,7 +213,7 @@ class EBMDiffusionModel(nn.Module):
             loss_weight = snr 
         else:
             raise NotImplementedError("Prediction type not recognized")
-        register_buffer('loss_weight')
+        register_buffer('loss_weight', loss_weight)
 
         if config.num_inference_steps is None:
             self.num_inference_steps = self.noise_scheduler.config.num_train_timesteps
@@ -223,7 +223,7 @@ class EBMDiffusionModel(nn.Module):
         assert alginment_strategy in ['post-hoc', 'guided-diffusion', 'stochastic-sampling', 'biased-initialization', 'output-perturb'], 'Invalid alignment strategy: ' + str(alginment_strategy)
         self.alignment_strategy = alginment_strategy
 
-    # ========= inference  ============
+    # ========= inference  ============ #TODO: Update to generate based on energy minimums (IRED)? Or leave same as typical diffusion? Think I do need to because min is shifted?
     def conditional_sample(
         self, batch_size: int, global_cond: Tensor | None = None, generator: torch.Generator | None = None, guide: Tensor | None = None, visualizer=None, normalizer=None
     ) -> Tensor:
@@ -348,7 +348,43 @@ class EBMDiffusionModel(nn.Module):
         # Concatenate features then flatten to (B, global_cond_dim).
         return torch.cat(global_cond_feats, dim=-1).flatten(start_dim=1)
 
-    def 
+    def get_traj_energies(self, trajectories: Tensor, global_cond: Tensor | None = None, mask: Tensor | None = None):
+        """
+            trajectory: (B, horizon, action_dim)
+            mask gives trajectory padding mask.
+        }
+        """
+
+        #TODO: Check shape of trajectories (?) and pad as necessary 
+        
+        #TODO: Test different values of these settings
+        n = 20 #number of energies averaging over
+        timestep_min = 10 #min possible value 0
+        timestep_max = 30 #max possible value self.noise_scheduler.config.num_train_timesteps
+
+        energy_sum = torch.zeros((trajectories.shape[0],1), device=trajectories.device)
+
+        # average over energy calculated at varying noise levels
+        for _ in range(n):
+
+            #add the same noise to all trajectories in batch 
+            eps=torch.randn(trajectories.shape[1:], device=trajectories.device)
+            eps = einops.repeat(eps, 'l t -> b l t', b=trajectories.shape[0])
+            t = torch.randint(
+                low=timestep_min,
+                high=timestep_max,
+                size=(1,),
+                device=trajectories.device,
+            ).long()
+            timesteps = t.repeat(trajectories.shape[0])
+            noisy_trajectories = self.noise_scheduler.add_noise(trajectories, eps, timesteps)
+
+            e = self.model(noisy_trajectories, timesteps, global_cond=global_cond, return_energy=True, mask=mask)
+
+            energy_sum +=e
+
+        return energy_sum/ n
+
 
     def generate_actions(self, batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, normalizer=None, return_energy=False, return_full=False) -> Tensor:
         """
@@ -375,7 +411,7 @@ class EBMDiffusionModel(nn.Module):
             action_dict['full_traj'] = actions
 
         if return_energy:
-            action_dict['energy'] = self.get_energy_from_traj(actions)
+            action_dict['energy'] = self.get_traj_energies(actions, global_cond=global_cond)
 
         # Extract `n_action_steps` steps worth of actions (from the current observation).
         start = n_obs_steps - 1
@@ -471,7 +507,7 @@ class EBMDiffusionModel(nn.Module):
             global_cond_concat = torch.cat([global_cond, global_cond], dim=0)
             traj_concat = torch.cat([data_sample, xmin_noise], dim=0)
             t_concat = torch.cat([timesteps, timesteps], dim=0)
-            energy = self.model(traj_concat, t_concat, global_con=global_cond_concat, return_energy=True)
+            energy = self.model(traj_concat, t_concat, global_con=global_cond_concat, return_energy=True, mask=mask)
 
             # Compute contrastive loss
             energy_positive, energy_negative = torch.chunk(energy, 2, 0)

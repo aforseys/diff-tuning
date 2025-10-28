@@ -210,15 +210,16 @@ class MazeEnv:
 
 class UnconditionalMaze(MazeEnv):
     # for dragging the agent around to explore motion manifold
-    def __init__(self, policy, policy_tag=None):
+    def __init__(self, policy, policy_tag=None, vis_energy=False):
         super().__init__()
         self.mouse_pos = None
         self.agent_in_collision = False
         self.agent_history_xy = []
         self.policy = policy
         self.policy_tag = policy_tag
+        self.vis_energy = vis_energy
 
-    def infer_target(self, guide=None, visualizer=None):
+    def infer_target(self, guide=None, visualizer=None, return_energy=False):
         agent_hist_xy = self.agent_history_xy[-1] 
         agent_hist_xy = np.array(agent_hist_xy).reshape(1, 2)
         if self.policy_tag == 'dp':
@@ -239,10 +240,13 @@ class UnconditionalMaze(MazeEnv):
         with torch.autocast(device_type="cuda"), seeded_context(0):
             if self.policy_tag == 'act':
                 actions = self.policy.run_inference(obs_batch).cpu().numpy()
+            elif return_energy:
+                actions, energy = self.policy.run_inference(obs_batch, guide=guide, visualizer=visualizer, return_energy=True).cpu().numpy() # directly call the policy in order to visualize the intermediate steps
+                return actions, energy
             else:
                 actions = self.policy.run_inference(obs_batch, guide=guide, visualizer=visualizer).cpu().numpy() # directly call the policy in order to visualize the intermediate steps
         return actions
-
+    
     def update_mouse_pos(self):
         self.mouse_pos = np.array(pygame.mouse.get_pos())
 
@@ -268,8 +272,12 @@ class UnconditionalMaze(MazeEnv):
                     break
 
             self.update_agent_pos(self.mouse_pos.copy())
-            xy_pred = self.infer_target()
-            self.update_screen(xy_pred)
+            if self.vis_energy: 
+                xy_pred, energy = self.infer_target(return_energy=True)
+                self.update_screen(xy_pred, score=energy)
+            else: 
+                xy_pred = self.infer_target()
+                self.update_screen(xy_pred)
             self.clock.tick(30)
 
         pygame.quit()
@@ -472,6 +480,7 @@ if __name__ == "__main__":
     parser.add_argument('-v', '--vis_dp_dynamics', action='store_true', help="Visualize dynamics in DP")
     parser.add_argument('-s', '--savepath', type=str, default=None, help="Filename to save the drawing")
     parser.add_argument('-l', '--loadpath', type=str, default=None, help="Filename to load the drawing")
+    parser.add_argument('-e', '--vis_energy', action='store_true', help="Visualize energy")
 
     args = parser.parse_args()
 
@@ -491,7 +500,8 @@ if __name__ == "__main__":
         alignment_strategy = 'stochastic-sampling'
 
     if args.policy in ["diffusion", "dp"]:
-        checkpoint_path = 'weights_dp'
+        # checkpoint_path = 'weights_dp'
+        checkpoint_path = 'weights/weights_maze2d_energy_dp_100k'
     elif args.policy in ["act"]:
         checkpoint_path = 'weights_act'
     else:
@@ -519,7 +529,7 @@ if __name__ == "__main__":
         policy_tag = None
 
     if args.unconditional:
-        interactiveMaze = UnconditionalMaze(policy, policy_tag=policy_tag)
+        interactiveMaze = UnconditionalMaze(policy, policy_tag=policy_tag, vis_energy=args.vis_energy)
     elif args.loadpath is not None:
         if args.savepath is None:
             savepath = None
