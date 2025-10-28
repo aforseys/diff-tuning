@@ -150,14 +150,16 @@ class EBMWrapper(nn.Module):
     def forward(self, x: Tensor, timestep: Tensor | int, global_cond=None, return_energy=False, return_both=False, mask=None):
         x.requires_grad_(True)
 
-        out = self.model(x, timestep, global_cond)
-        energy_per_state = out.pow(2).sum(dim=1)  #TODO: Why is energy squared? Keep positive? Other ways to do this?
+        with torch.enable_grad(): #need to enable grad to take energy grad wrt x
 
-        # Don't use padding actions in energy calculation
-        if mask is not None:
-            energy_per_state = (energy_per_state * mask.unsqueeze(-1))
+            out = self.model(x, timestep, global_cond)
+            energy_per_state = out.pow(2).sum(dim=1)  #TODO: Why is energy squared? Keep positive? Other ways to do this?
 
-        energy = energy_per_state.sum(dim=1)[:, None] #(B, 1)
+            # Don't use padding actions in energy calculation
+            if mask is not None:
+                energy_per_state = (energy_per_state * mask.unsqueeze(-1))
+
+            energy = energy_per_state.sum(dim=1)[:, None] #(B, 1)
 
         if return_energy:
             return energy 
