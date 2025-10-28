@@ -162,7 +162,7 @@ class EBMWrapper(nn.Module):
         if return_energy:
             return energy 
         
-        opt_grad = torch.autgrad.grad([energy.sum()], [x], create_graph=True)[0]
+        opt_grad = torch.autograd.grad([energy.sum()], [x], create_graph=True)[0]
 
         if return_both:
             return energy, opt_grad

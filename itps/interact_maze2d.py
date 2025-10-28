@@ -501,7 +501,7 @@ if __name__ == "__main__":
 
     if args.policy in ["diffusion", "dp"]:
         # checkpoint_path = 'weights_dp'
-        checkpoint_path = 'weights/weights_maze2d_energy_dp_100k'
+        checkpoint_path = 'weights_maze2d_energy_dp_100k'
     elif args.policy in ["act"]:
         checkpoint_path = 'weights_act'
     else:
