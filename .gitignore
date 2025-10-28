@@ -4,5 +4,6 @@ itps/weights/
 itps/weights_*/
 itps/weights_*.zip
 itps/data/
+__pycache__/
 .DS_Store
 .vscode
