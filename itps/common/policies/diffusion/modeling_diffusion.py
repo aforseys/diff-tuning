@@ -169,15 +169,15 @@ class EBMWrapper(nn.Module):
 
             energy = energy_per_state.sum(dim=1)[:, None] #(B, 1)
 
-        if return_energy:
-            return energy 
-        
-        opt_grad = torch.autograd.grad([energy.sum()], [x], create_graph=True)[0]
+            if return_energy:
+                return energy 
 
-        if return_both:
-            return energy, opt_grad
-        else:
-            return opt_grad 
+            opt_grad = torch.autograd.grad([energy.sum()], [x], create_graph=True)[0]
+
+            if return_both:
+                return energy, opt_grad
+            else:
+                return opt_grad 
 
 
 class EBMDiffusionModel(nn.Module):
