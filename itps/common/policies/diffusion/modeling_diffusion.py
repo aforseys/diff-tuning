@@ -109,7 +109,7 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
                 [observation_batch[k] for k in self.expected_image_keys], dim=-4
             )
         gen_actions = self.diffusion.generate_actions(observation_batch, guide=guide, visualizer=visualizer, normalizer=self, return_energy=return_energy, return_full=return_full)
-        actions = self.unnormalize_outputs({"action": gen_actions['action']})["action"]
+        actions = self.unnormalize_outputs({"action": gen_actions['actions']})["action"]
 
         if return_full: 
             full_traj = self.unnormalize_outputs({"action": gen_actions['full_traj']})["action"]
@@ -148,11 +148,19 @@ class EBMWrapper(nn.Module):
         self.model = ebm
         
     def forward(self, x: Tensor, timestep: Tensor | int, global_cond=None, return_energy=False, return_both=False, mask=None):
+        
+        
         x.requires_grad_(True)
 
         with torch.enable_grad(): #need to enable grad to take energy grad wrt x
 
+            assert torch.is_grad_enabled(), "torch.enable_grad() failed"
+
             out = self.model(x, timestep, global_cond)
+
+            # Check differentiability
+            assert out.requires_grad, "model output is not differentiable — autograd graph broken!"
+
             energy_per_state = out.pow(2).sum(dim=1)  #TODO: Why is energy squared? Keep positive? Other ways to do this?
 
             # Don't use padding actions in energy calculation

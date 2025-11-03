@@ -170,7 +170,10 @@ class MazeEnv:
                     if scores is None: 
                         circle_size = 5 if collisions[idx] else 5
                     else: # when similarity scores are provided, visualizing them by changing the trajectory size
-                        circle_size = int(3 + 20 * scores[idx])
+                        print('Scores:', scores)
+                        #circle_size = int(3 + 20 * scores[idx])
+                        circle_size = int(1+ scores)
+                        print('circle size:', circle_size)
                     if traj_in_gui_space:
                         start_pos = pred[step_idx]
                         end_pos = pred[step_idx + 1]
@@ -241,8 +244,8 @@ class UnconditionalMaze(MazeEnv):
             if self.policy_tag == 'act':
                 actions = self.policy.run_inference(obs_batch).cpu().numpy()
             elif return_energy:
-                actions, energy = self.policy.run_inference(obs_batch, guide=guide, visualizer=visualizer, return_energy=True).cpu().numpy() # directly call the policy in order to visualize the intermediate steps
-                return actions, energy
+                actions, energy = self.policy.run_inference(obs_batch, guide=guide, visualizer=visualizer, return_energy=True) # directly call the policy in order to visualize the intermediate steps
+                return actions.detach().cpu().numpy(), energy.detach().cpu().numpy()
             else:
                 actions = self.policy.run_inference(obs_batch, guide=guide, visualizer=visualizer).cpu().numpy() # directly call the policy in order to visualize the intermediate steps
         return actions
@@ -274,7 +277,7 @@ class UnconditionalMaze(MazeEnv):
             self.update_agent_pos(self.mouse_pos.copy())
             if self.vis_energy: 
                 xy_pred, energy = self.infer_target(return_energy=True)
-                self.update_screen(xy_pred, score=energy)
+                self.update_screen(xy_pred, scores=energy)
             else: 
                 xy_pred = self.infer_target()
                 self.update_screen(xy_pred)
