@@ -518,7 +518,8 @@ class EBMDiffusionModel(nn.Module):
             global_cond_concat = torch.cat([global_cond, global_cond], dim=0)
             traj_concat = torch.cat([data_sample, xmin_noise], dim=0)
             t_concat = torch.cat([timesteps, timesteps], dim=0)
-            energy = self.model(traj_concat, t_concat, global_con=global_cond_concat, return_energy=True, mask=mask)
+            mask_concat = torch.cat([mask, mask], dim=0)
+            energy = self.model(traj_concat, t_concat, global_cond=global_cond_concat, return_energy=True, mask=mask_concat)
 
             # Compute contrastive loss
             energy_positive, energy_negative = torch.chunk(energy, 2, 0)
