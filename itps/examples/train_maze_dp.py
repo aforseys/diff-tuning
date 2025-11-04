@@ -34,7 +34,7 @@ delta_timestamps = {
     # used to supervise the policy.
     "action": [-0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4],
 }
-dataset = LeRobotDataset('maze2d', '../data/maze2d-large-sparse-v1.hdf5', split=None, delta_timestamps=delta_timestamps)
+dataset = LeRobotDataset('maze2d', 'data/maze2d-large-sparse-v1.hdf5', split=None, delta_timestamps=delta_timestamps)
 
 # Set up the the policy.
 # Policies are initialized with a configuration class, in this case `DiffusionConfig`.
