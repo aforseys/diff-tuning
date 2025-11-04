@@ -10,6 +10,7 @@ import torch
 
 from itps.common.datasets.lerobot_dataset import LeRobotDataset
 from itps.common.policies.factory import make_policy
+from itps.common.datasets.factory import make_dataset
 from itps.common.policies.diffusion.configuration_diffusion import DiffusionConfig
 from itps.common.policies.diffusion.modeling_diffusion import DiffusionPolicy
 
@@ -24,17 +25,17 @@ device = torch.device("cuda")
 log_freq = 250
 
 # Set up the dataset.
-delta_timestamps = {
-    # Load the previous image and state at -0.1 seconds before current frame,
-    # then load current image and state corresponding to 0.0 second.
-    "observation.environment_state": [-0.1, 0.0],
-    "observation.state": [-0.1, 0.0],
-    # Load the previous action (-0.1), the next action to be executed (0.0),
-    # and 14 future actions with a 0.1 seconds spacing. All these actions will be
-    # used to supervise the policy.
-    "action": [-0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4],
-}
-dataset = LeRobotDataset('maze2d', 'data/maze2d-large-sparse-v1.hdf5', split=None, delta_timestamps=delta_timestamps)
+# delta_timestamps = {
+#     # Load the previous image and state at -0.1 seconds before current frame,
+#     # then load current image and state corresponding to 0.0 second.
+#     "observation.environment_state": [-0.1, 0.0],
+#     "observation.state": [-0.1, 0.0],
+#     # Load the previous action (-0.1), the next action to be executed (0.0),
+#     # and 14 future actions with a 0.1 seconds spacing. All these actions will be
+#     # used to supervise the policy.
+#     "action": [-0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4],
+# }
+# dataset = LeRobotDataset('maze2d', 'data/maze2d-large-sparse-v1.hdf5', split=None, delta_timestamps=delta_timestamps)
 
 # Set up the the policy.
 # Policies are initialized with a configuration class, in this case `DiffusionConfig`.
@@ -55,6 +56,8 @@ cfg = compose(
         "policy=maze2d_dp",
     ],
 )
+dataset=make_dataset(cfg)
+
 policy = make_policy(
     hydra_cfg=cfg,
     dataset_stats=dataset.stats,
