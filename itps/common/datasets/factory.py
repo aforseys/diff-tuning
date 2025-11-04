@@ -18,8 +18,8 @@ import logging
 import torch
 from omegaconf import ListConfig, OmegaConf
 
-from common.datasets.lerobot_dataset import LeRobotDataset, MultiLeRobotDataset
-from common.datasets.transforms import get_image_transforms
+from itps.common.datasets.lerobot_dataset import LeRobotDataset, MultiLeRobotDataset
+from itps.common.datasets.transforms import get_image_transforms
 
 
 def resolve_delta_timestamps(cfg):
