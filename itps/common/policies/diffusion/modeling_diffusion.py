@@ -161,13 +161,13 @@ class EBMWrapper(nn.Module):
             # Check differentiability
             assert out.requires_grad, "model output is not differentiable — autograd graph broken!"
 
-            energy_per_state = out.pow(2).sum(dim=1)  #TODO: Why is energy squared? Keep positive? Other ways to do this?
+            energy_per_state = out.pow(2)  #TODO: Why is energy squared? Keep positive? Other ways to do this?
 
             # Don't use padding actions in energy calculation
             if mask is not None:
                 energy_per_state = (energy_per_state * mask.unsqueeze(-1))
 
-            energy = energy_per_state.sum(dim=1)[:, None] #(B, 1)
+            energy = energy_per_state.sum(dim=1).sum(dim=1)[:, None] #(B, 1)
 
             if return_energy:
                 return energy 
@@ -449,6 +449,7 @@ class EBMDiffusionModel(nn.Module):
         assert "observation.images" in batch or "observation.environment_state" in batch
         n_obs_steps = batch["observation.state"].shape[1]
         horizon = batch["action"].shape[1]
+        print(horizon)
         assert horizon == self.config.horizon
         assert n_obs_steps == self.config.n_obs_steps
 
