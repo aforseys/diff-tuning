@@ -3,12 +3,13 @@
 Once you have trained a model with this script, you can try to evaluate it on
 examples/2_evaluate_pretrained_policy.py
 """
-
+from hydra import initialize, compose
+from omegaconf import OmegaConf
 from pathlib import Path
-
 import torch
 
 from itps.common.datasets.lerobot_dataset import LeRobotDataset
+from itps.common.policies.factory import make_policy
 from itps.common.policies.diffusion.configuration_diffusion import DiffusionConfig
 from itps.common.policies.diffusion.modeling_diffusion import DiffusionPolicy
 
@@ -33,14 +34,32 @@ delta_timestamps = {
     # used to supervise the policy.
     "action": [-0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4],
 }
-dataset = LeRobotDataset('maze2d', 'maze2d-large-sparse-v1.hdf5', split=None, delta_timestamps=delta_timestamps)
+dataset = LeRobotDataset('maze2d', '../data/maze2d-large-sparse-v1.hdf5', split=None, delta_timestamps=delta_timestamps)
 
 # Set up the the policy.
 # Policies are initialized with a configuration class, in this case `DiffusionConfig`.
 # For this example, no arguments need to be passed because the defaults are set up for PushT.
 # If you're doing something different, you will likely need to change at least some of the defaults.
-cfg = DiffusionConfig()
-policy = DiffusionPolicy(cfg, dataset_stats=dataset.stats)
+# cfg = DiffusionConfig()
+# policy = DiffusionPolicy(cfg, dataset_stats=dataset.stats)
+
+# Initialize Hydra from the same config directory as train.py
+initialize(config_path="../configs")
+
+# Emulate CLI arguments like:
+# python train.py env=sim policy=diffusion training.lr=1e-4
+cfg = compose(
+    config_name="default",
+    overrides=[
+        "env=maze2d",
+        "policy=maze2d_dp",
+    ],
+)
+policy = make_policy(
+    hydra_cfg=cfg,
+    dataset_stats=dataset.stats,
+    pretrained_policy_name_or_path=None,
+)
 policy.train()
 policy.to(device)
 

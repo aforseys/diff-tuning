@@ -1,7 +1,7 @@
 defaults:
   - _self_
-  - env: pusht
-  - policy: diffusion
+  - env: maze2d
+  - policy: maze2d_dp.yaml
 
 hydra:
   run:
