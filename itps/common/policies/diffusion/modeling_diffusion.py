@@ -430,7 +430,7 @@ class EBMDiffusionModel(nn.Module):
 
         return action_dict
 
-    def compute_loss(self, batch: dict[str, Tensor], t) -> Tensor:
+    def compute_loss(self, batch: dict[str, Tensor]) -> Tensor:
         """
         This function expects `batch` to have (at least):
         {
@@ -499,7 +499,7 @@ class EBMDiffusionModel(nn.Module):
             loss = loss * mask.unsqueeze(-1)
 
         loss = einops.reduce(loss, 'b ... -> b (...)', 'mean')
-        loss = loss * extract(self.loss_weight, t, loss.shape)
+        loss = loss * extract(self.loss_weight, timesteps, loss.shape)
         loss_mse = loss
 
         # Compute contrastive loss 
