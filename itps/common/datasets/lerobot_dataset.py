@@ -72,7 +72,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         # TODO(rcadene, aliberts): implement faster transfer
         # https://huggingface.co/docs/huggingface_hub/en/guides/download#faster-downloads
         self.hf_dataset = load_hf_dataset(repo_id, CODEBASE_VERSION, root, split)
-        if split == "train" and 'maze2d' not in repo_id and 'zarr' not in repo_id:
+        if split == "train" and 'maze2d' not in repo_id and 'zarr' not in repo_id and 'gmm' not in repo_id:
             self.episode_data_index = load_episode_data_index(repo_id, CODEBASE_VERSION, root)
         else:
             self.episode_data_index = calculate_episode_data_index(self.hf_dataset)
