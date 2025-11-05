@@ -151,8 +151,8 @@ def load_hf_dataset(repo_id: str, version: str, root: Path, split: str) -> datas
             import numpy as np
             observations = np.load(root)
             data_dict = {
-                'observation.state': observations[:, 0],
-                'observation.environment_state': observations[:, 0],
+                'observation.state': observations[:, 0][:, None],
+                'observation.environment_state': observations[:, 0][:, None],
                 'action': observations[:, 1:],
                 'episode_index': np.arange(len(observations)),
                 'frame_index': np.zeros(len(observations)),
