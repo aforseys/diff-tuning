@@ -449,7 +449,7 @@ class EBMDiffusionModel(nn.Module):
         assert "observation.images" in batch or "observation.environment_state" in batch
         n_obs_steps = batch["observation.state"].shape[1]
         horizon = batch["action"].shape[1]
-        print(horizon)
+        # print(horizon)
         assert horizon == self.config.horizon
         assert n_obs_steps == self.config.n_obs_steps
 
