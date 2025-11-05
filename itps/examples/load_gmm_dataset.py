@@ -52,9 +52,9 @@ dataloader = torch.utils.data.DataLoader(
     shuffle=True,
 )
 for batch in dataloader:
-    print(f"{batch['observation.environment_state'].shape=}")  # (32,4,c,h,w)
-    print(f"{batch['observation.state'].shape=}")  # (32,8,c)
-    print(f"{batch['action'].shape=}")  # (32,64,c)
+    print(f"{batch['observation.environment_state'].shape=}")  # (32,1,1)
+    print(f"{batch['observation.state'].shape=}")  # (32,1,1)
+    print(f"{batch['action'].shape=}")  # (32,1,2)
     if 'action_is_pad' in batch: 
         print('Includes padded actions')
         print('Pads:', batch['action_is_pad'])
