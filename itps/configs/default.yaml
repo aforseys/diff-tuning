@@ -1,7 +1,7 @@
 defaults:
   - _self_
-  - env: maze2d
-  - policy: maze2d_dp.yaml
+  - env: gmm
+  - policy: gmm_dp
 
 hydra:
   run:

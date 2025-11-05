@@ -77,7 +77,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         else:
             self.episode_data_index = calculate_episode_data_index(self.hf_dataset)
             self.hf_dataset = reset_episode_index(self.hf_dataset)
-        if 'maze2d' in repo_id or 'zarr' in repo_id:
+        if 'maze2d' in repo_id or 'zarr' in repo_id or 'gmm' in repo_id:
             self.stats = calc_stats_from_hf_dataset(self.hf_dataset)
             self.info = {'codebase_version': 'v0.0',
                          'fps': 10,

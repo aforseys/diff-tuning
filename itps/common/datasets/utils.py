@@ -147,6 +147,19 @@ def load_hf_dataset(repo_id: str, version: str, root: Path, split: str) -> datas
                 'timestamp': np.copy(frame_index)/10.0,
                 'index': index
             }
+        elif 'npy' in root: # GMM datset
+            import numpy as np
+            observations = np.load(root)
+            data_dict = {
+                'observation.state': observations[:, 0],
+                'observation.environment_state': observations[:, 0],
+                'action': observations[:, 1:],
+                'episode_index': np.arange(len(observations)),
+                'frame_index': np.zeros(len(observations)),
+                'timestamp': np.zeros(len(observations)),
+                'index': np.arange(len(observations))
+            }
+
             hf_dataset = datasets.Dataset.from_dict(data_dict)
         elif 'zarr' in root: # diffusion policy repo data format
             import numpy as np

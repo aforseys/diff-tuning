@@ -1,0 +1,10 @@
+# @package _global_
+
+fps: 10
+
+env:
+  name: gmm
+  task: null
+  state_dim: 1
+  action_dim: 2
+  fps: ${fps}
