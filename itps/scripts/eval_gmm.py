@@ -212,7 +212,7 @@ if __name__ == "__main__":
     if args.pretrained_policy_name_or_path is None:
         main(hydra_cfg_path=args.config, out_dir=args.out_dir, config_overrides=args.overrides)
     else:
-        pretrained_policy_path = args.pretrained_policy_name_or_path
+        pretrained_policy_path = Path(args.pretrained_policy_name_or_path)
 
         main(
             pretrained_policy_path=pretrained_policy_path,
