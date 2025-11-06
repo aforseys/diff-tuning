@@ -69,10 +69,10 @@ def run_inference(policy, N=100, conditional=False, return_energy=False):
     for o in obs: 
         if return_energy: 
             actions, energy = policy.run_inference(o, return_energy=return_energy)
-            inference_output.append((actions.detach().cpu().numpy(), energy.detach().cpu().numpy())) 
+            inference_output.append((actions.detach().cpu().unsqueeze(1).numpy(), energy.detach().cpu().numpy())) 
 
         actions = policy.run_inference(o, return_energy=return_energy)
-        inference_output.append(actions.detach().cpu().numpy())
+        inference_output.append(actions.detach().cpu().unsqueeze(1).numpy())
 
     return inference_output
 
@@ -95,18 +95,19 @@ def vis_inference(policy, conditional, N, x_range=(-8, 8), y_range=(-8,8)):
 
     trajs = gen_xy_grid(x_range=x_range, y_range=y_range)
     energies = eval_energy(policy, trajs, conditional=conditional)
-    inference_output = run_inference(policy, N=N, conditional=conditional)
+    samples = run_inference(policy, N=N, conditional=conditional)
 
     print(trajs.shape)
     print(energies.shape)
-    print(inference_output.shape)
-    assert False
+    print(samples.shape)
+
+    xx = trajs[:, 0, 0].cpu().numpy().reshape(200,200)
+    yy = trajs[:, 0, 1].cpu().numpy().reshape(200,200)
 
     #plot all energy landscapes in list given trajs
     for i in range(len(energies)):
         #plot 
-        x,y = trajs
-        z = energies[i]
+        zz = energies[i].reshape(200,200)
         if conditional:
             title = "Energy landscape conditioned on cluster observation {i}"
         else:
@@ -115,6 +116,7 @@ def vis_inference(policy, conditional, N, x_range=(-8, 8), y_range=(-8,8)):
         plt.figure(i)
         plt.contourf(xx, yy, zz, levels=20)
         # plot where sampled points are with x's 
+        plt.plot(samples[:,0], samples[:,1], marker='x', markersize=4)
         plt.xlabel("X")
         plt.ylabel("Y")
         plt.title(title)
@@ -145,6 +147,7 @@ def vis_energy_landscape(policy, conditional, x_range=(-8, 8), y_range=(-8,8)):
         plt.xlabel("X")
         plt.ylabel("Y")
         plt.title(title)
+        plt.show()
 
 def main(
     pretrained_policy_path: Path | None = None,
