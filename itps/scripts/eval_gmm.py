@@ -145,14 +145,19 @@ def main(
     conditional: bool | None = False
 ):
     assert (pretrained_policy_path is None) ^ (hydra_cfg_path is None)
-    if pretrained_policy_path is not None:
-        hydra_cfg = init_hydra_config(str(pretrained_policy_path / "config.yaml"), config_overrides)
-    else:
+    if hydra_cfg_path is not None:
+    #     hydra_cfg = init_hydra_config(str(pretrained_policy_path / "config.yaml"), config_overrides)
+    # else:
         hydra_cfg = init_hydra_config(hydra_cfg_path, config_overrides)
+    else: 
+        hydra_cfg = None
 
     if out_dir is None:
-        out_dir = f"outputs/eval/{dt.now().strftime('%Y-%m-%d/%H-%M-%S')}_{hydra_cfg.env.name}_{hydra_cfg.policy.name}"
-
+        if hydra_cfg is not None:
+            out_dir = f"outputs/eval/{dt.now().strftime('%Y-%m-%d/%H-%M-%S')}_{hydra_cfg.env.name}_{hydra_cfg.policy.name}"
+        else:
+            out_dir = f"outputs/eval/{dt.now().strftime('%Y-%m-%d/%H-%M-%S')}_{str(pretrained_policy_path).split('/')[-1]}"
+    
     # Check device is available
     device = get_safe_torch_device(hydra_cfg.device, log=True)
 
