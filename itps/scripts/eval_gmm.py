@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import argparse
 import numpy as np
 import torch
 import logging 
@@ -170,3 +171,52 @@ def main(
 
     vis_energy_landscape(policy, conditional)
     vis_inference(policy, conditional, N=500)
+
+
+if __name__ == "__main__":
+    init_logging()
+
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "-p",
+        "--pretrained-policy-path",
+        help=(
+            "Path to a directory containing weights saved using `Policy.save_pretrained`."
+            "This argument is mutually exclusive with `--config`."
+        ),
+    )
+    group.add_argument(
+        "--config",
+        help=(
+            "Path to a yaml config you want to use for initializing a policy from scratch (useful for "
+            "debugging). This argument is mutually exclusive with `--pretrained-policy-name-or-path` (`-p`)."
+        ),
+    )
+    parser.add_argument("--revision", help="Optionally provide the Hugging Face Hub revision ID.")
+    parser.add_argument(
+        "--out-dir",
+        help=(
+            "Where to save the evaluation outputs. If not provided, outputs are saved in "
+            "outputs/eval/{timestamp}_{env_name}_{policy_name}"
+        ),
+    )
+    parser.add_argument(
+        "overrides",
+        nargs="*",
+        help="Any key=value arguments to override config values (use dots for.nested=overrides)",
+    )
+    args = parser.parse_args()
+
+    if args.pretrained_policy_name_or_path is None:
+        main(hydra_cfg_path=args.config, out_dir=args.out_dir, config_overrides=args.overrides)
+    else:
+        pretrained_policy_path = args.pretrained_policy_name_or_path
+
+        main(
+            pretrained_policy_path=pretrained_policy_path,
+            out_dir=args.out_dir,
+            config_overrides=args.overrides,
+        )
