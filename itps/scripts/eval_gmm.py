@@ -26,6 +26,7 @@ from itps.common.policies.factory import make_policy
 from itps.common.datasets.factory import make_dataset
 from itps.common.envs.factory import make_env
 from itps.common.utils.utils import get_safe_torch_device, init_hydra_config, init_logging, set_global_seed
+from itps.common.policies.diffusion.modeling_diffusion import DiffusionPolicy
 
 def gen_obs(conditional, N):
     "generates a batch object that matches same type as passed through model, only contains obs"
@@ -161,7 +162,8 @@ def main(
 
     logging.info("Making policy.")
     if hydra_cfg_path is None:
-        policy = make_policy(hydra_cfg=hydra_cfg, pretrained_policy_name_or_path=str(pretrained_policy_path))
+        #policy = make_policy(hydra_cfg=hydra_cfg, pretrained_policy_name_or_path=str(pretrained_policy_path))
+        policy = DiffusionPolicy.from_pretrained(pretrained_policy_path, alignment_strategy=None)
     else:
         # Note: We need the dataset stats to pass to the policy's normalization modules.
         policy = make_policy(hydra_cfg=hydra_cfg, dataset_stats=make_dataset(hydra_cfg).stats)
