@@ -26,6 +26,10 @@ from itps.common.policies.factory import make_policy
 from itps.common.datasets.factory import make_dataset
 from itps.common.envs.factory import make_env
 from itps.common.utils.utils import get_safe_torch_device, init_hydra_config, init_logging, set_global_seed
+from itps.common.policies.utils import (
+    get_device_from_parameters,
+    get_dtype_from_parameters,
+)
 from itps.common.policies.diffusion.modeling_diffusion import DiffusionPolicy
 
 def gen_obs(conditional, N):
@@ -33,7 +37,7 @@ def gen_obs(conditional, N):
 
     observations=[]
     for i in range(1 if not conditional else 3):
-        obs_tensor = torch.full((N, 1, 1), i, device=torch.device("cuda"))
+        obs_tensor = torch.full((N, 1, 1), i, dtype=float, device=torch.device("cuda"))
         obs_dict= {
             'observation.state':obs_tensor, 
             'observation.environment_state':obs_tensor
@@ -53,7 +57,7 @@ def gen_xy_grid(x_range, y_range):
     )
 
     grid = np.column_stack([xx.ravel(), yy.ravel()]) 
-    trajs = torch.tensor(grid, device=torch.device("cuda")).unsqueeze(dim=1) 
+    trajs = torch.tensor(grid, dtype=float, device=torch.device("cuda")).unsqueeze(dim=1) 
     return trajs
 
 
@@ -142,7 +146,8 @@ def main(
     hydra_cfg_path: str | None = None,
     out_dir: str | None = None,
     config_overrides: list[str] | None = None,
-    conditional: bool | None = False
+    conditional: bool | None = False,
+    seed: int | None = 0
 ):
     assert (pretrained_policy_path is None) ^ (hydra_cfg_path is None)
     if hydra_cfg_path is not None:
@@ -159,11 +164,7 @@ def main(
             out_dir = f"outputs/eval/{dt.now().strftime('%Y-%m-%d/%H-%M-%S')}_{str(pretrained_policy_path).split('/')[-1]}"
     
     # Check device is available
-    device = get_safe_torch_device(hydra_cfg.device, log=True)
-
-    torch.backends.cudnn.benchmark = True
-    torch.backends.cuda.matmul.allow_tf32 = True
-    set_global_seed(hydra_cfg.seed)
+    #device = get_safe_torch_device(hydra_cfg.device, log=True)
 
     logging.info("Making policy.")
     if hydra_cfg_path is None:
@@ -172,9 +173,10 @@ def main(
     else:
         # Note: We need the dataset stats to pass to the policy's normalization modules.
         policy = make_policy(hydra_cfg=hydra_cfg, dataset_stats=make_dataset(hydra_cfg).stats)
-
     assert isinstance(policy, nn.Module)
 
+    # device = get_device_from_parameters(policy)
+    set_global_seed(seed)
     vis_energy_landscape(policy, conditional)
     vis_inference(policy, conditional, N=500)
 
