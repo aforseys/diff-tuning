@@ -37,7 +37,7 @@ def gen_obs(conditional, N):
 
     observations=[]
     for i in range(1 if not conditional else 3):
-        obs_tensor = torch.full((N, 1, 1), i, dtype=float, device=torch.device("cuda"))
+        obs_tensor = torch.full((N, 1, 1), i, dtype=torch.float32, device=torch.device("cuda"))
         obs_dict= {
             'observation.state':obs_tensor, 
             'observation.environment_state':obs_tensor
@@ -57,7 +57,7 @@ def gen_xy_grid(x_range, y_range):
     )
 
     grid = np.column_stack([xx.ravel(), yy.ravel()]) 
-    trajs = torch.tensor(grid, dtype=float, device=torch.device("cuda")).unsqueeze(dim=1) 
+    trajs = torch.tensor(grid, dtype=torch.float32, device=torch.device("cuda")).unsqueeze(dim=1) 
     return trajs
 
 
@@ -76,15 +76,20 @@ def run_inference(policy, N=100, conditional=False, return_energy=False):
 
     return inference_output
 
-def eval_energy(policy, trajs, conditional=False):
+def eval_energy(policy, trajs, conditional=False, batch_size=256):
 
     obs = gen_obs(conditional=conditional, N=len(trajs))
-    global_conds = [policy._prepare_global_cond(o) for o in obs]
+    global_conds = [policy.diffusion._prepare_global_conditioning(o) for o in obs]
     energies = []
     for gc in global_conds:
-        energy = policy.get_traj_energies(trajectories=trajs, global_cond=gc)
-        energies.append(energy.detach().cpu().numpy())
-    return energies 
+        #print(gc.dtype)
+        #print(trajs.dtype)
+        outputs=[]
+        for i in range(0, trajs.size(0), batch_size):
+            out = policy.diffusion.get_traj_energies(trajectories=trajs[i:i+batch_size], global_cond=gc[i:i+batch_size])
+            outputs.append(out.detach().cpu().numpy())
+        energies.append(np.concatenate(outputs, axis=0))
+    return energies
 
 def vis_inference(policy, conditional, N, x_range=(-8, 8), y_range=(-8,8)):
 
@@ -121,9 +126,8 @@ def vis_energy_landscape(policy, conditional, x_range=(-8, 8), y_range=(-8,8)):
     energies = eval_energy(policy, trajs, conditional=conditional)
 
     print(trajs.shape)
-    print(energies.shape)
-
-    assert False
+    print(len(energies))
+    print(energies[0].shape)
 
     #plot all energy landscapes in list given trajs
     for i in range(len(energies)):
@@ -174,7 +178,8 @@ def main(
         # Note: We need the dataset stats to pass to the policy's normalization modules.
         policy = make_policy(hydra_cfg=hydra_cfg, dataset_stats=make_dataset(hydra_cfg).stats)
     assert isinstance(policy, nn.Module)
-
+    policy.cuda()
+    policy.eval()
     # device = get_device_from_parameters(policy)
     set_global_seed(seed)
     vis_energy_landscape(policy, conditional)
