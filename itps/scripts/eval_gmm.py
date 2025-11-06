@@ -129,19 +129,19 @@ def vis_energy_landscape(policy, conditional, x_range=(-8, 8), y_range=(-8,8)):
     print(len(energies))
     print(energies[0].shape)
 
-    x = trajs[:, 0, 0].cpu().numpy()
-    y = trajs[:, 0, 1].cpu().numpy()
+    xx = trajs[:, 0, 0].cpu().numpy().reshape(200,200)
+    yy = trajs[:, 0, 1].cpu().numpy().reshape(200,200)
 
     #plot all energy landscapes in list given trajs
     for i in range(len(energies)):
-        z = energies[i]
+        zz = energies[i].reshape(200,200)
         if conditional:
             title = "Energy landscape conditioned on cluster observation {i}"
         else:
             title = "Energy landscape (unconditional)"
 
         plt.figure(i)
-        plt.axes(projection="3d").plot_surface(x, y, z, cmap="viridis", edgecolor="none")
+        plt.axes(projection="3d").plot_surface(xx, yy, zz, cmap="viridis", edgecolor="none")
         plt.xlabel("X")
         plt.ylabel("Y")
         plt.title(title)
