@@ -129,10 +129,11 @@ def vis_energy_landscape(policy, conditional, x_range=(-8, 8), y_range=(-8,8)):
     print(len(energies))
     print(energies[0].shape)
 
+    x = trajs[:, 0, 0].cpu().numpy()
+    y = trajs[:, 0, 1].cpu().numpy()
+
     #plot all energy landscapes in list given trajs
     for i in range(len(energies)):
-        #plot 
-        x,y = trajs
         z = energies[i]
         if conditional:
             title = "Energy landscape conditioned on cluster observation {i}"
