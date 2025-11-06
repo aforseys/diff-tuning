@@ -66,9 +66,8 @@ def run_inference(policy, N=100, conditional=False, return_energy=False):
             inference_output.append((actions.detach().cpu().numpy(), energy.detach().cpu().numpy())) 
 
         actions = policy.run_inference(o, return_energy=return_energy)
-        inference_output.append(actions)
+        inference_output.append(actions.detach().cpu().numpy())
 
-    #TODO: REMOVE FROM DEVICE CORRECTLY
     return inference_output
 
 def eval_energy(policy, trajs, conditional=False):
@@ -141,7 +140,7 @@ def main(
     hydra_cfg_path: str | None = None,
     out_dir: str | None = None,
     config_overrides: list[str] | None = None,
-    conditional: bool | False = False
+    conditional: bool | None = False
 ):
     assert (pretrained_policy_path is None) ^ (hydra_cfg_path is None)
     if pretrained_policy_path is not None:
