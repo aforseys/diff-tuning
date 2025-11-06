@@ -28,7 +28,7 @@ from itps.common.datasets.lerobot_dataset import LeRobotDataset
 repo_id = "maze2d"
 
 # You can easily load a dataset from a Hugging Face repository
-dataset = LeRobotDataset(repo_id, 'itps/data/maze2d-large-sparse-v1.hdf5', split=None)
+dataset = LeRobotDataset(repo_id, 'data/maze2d-large-sparse-v1.hdf5', split=None)
 
 # LeRobotDataset is actually a thin wrapper around an underlying Hugging Face dataset
 # (see https://huggingface.co/docs/datasets/index for more information).
@@ -86,7 +86,7 @@ delta_timestamps = {
     # loads 64 action vectors: current frame, 1 frame in the future, 2 frames, ... 63 frames in the future
     "action": [t / dataset.fps for t in range(64)],
 }
-dataset = LeRobotDataset(repo_id, 'itps/data/maze2d-large-sparse-v1.hdf5', split=None, delta_timestamps=delta_timestamps)
+dataset = LeRobotDataset(repo_id, 'data/maze2d-large-sparse-v1.hdf5', split=None, delta_timestamps=delta_timestamps)
 print(f"\n{dataset[0]['observation.environment_state'].shape=}")  # (4,c,h,w)
 print(f"{dataset[0]['observation.state'].shape=}")  # (8,c)
 print(f"{dataset[0]['action'].shape=}\n")  # (64,c)

@@ -518,7 +518,10 @@ class EBMDiffusionModel(nn.Module):
             global_cond_concat = torch.cat([global_cond, global_cond], dim=0)
             traj_concat = torch.cat([data_sample, xmin_noise], dim=0)
             t_concat = torch.cat([timesteps, timesteps], dim=0)
-            mask_concat = torch.cat([mask, mask], dim=0)
+            if mask is not None:
+                mask_concat = torch.cat([mask, mask], dim=0)
+            else: 
+                mask_concat = None
             energy = self.model(traj_concat, t_concat, global_cond=global_cond_concat, return_energy=True, mask=mask_concat)
 
             # Compute contrastive loss
@@ -869,6 +872,8 @@ class DiffusionConditionalUnet1d(nn.Module):
         # Run decoder, using the skip features from the encoder.
         for resnet, resnet2, upsample in self.up_modules:
             x = torch.cat((x, encoder_skip_features.pop()), dim=1)
+            if x.shape[-1] != encoder_skip_features[-1].shape: # In case of dim mismatch for encode /decode outputs (happens in GMM given input size of 2)
+                x = F.interpolate(x, size=encoder_skip_features[-1].shape[-1], mode = "nearest")
             x = resnet(x, global_feature)
             x = resnet2(x, global_feature)
             x = upsample(x)

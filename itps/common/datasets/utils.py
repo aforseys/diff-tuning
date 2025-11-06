@@ -147,6 +147,8 @@ def load_hf_dataset(repo_id: str, version: str, root: Path, split: str) -> datas
                 'timestamp': np.copy(frame_index)/10.0,
                 'index': index
             }
+            hf_dataset = datasets.Dataset.from_dict(data_dict)
+            
         elif 'npy' in root: # GMM datset
             import numpy as np
             observations = np.load(root)
