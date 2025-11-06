@@ -34,10 +34,10 @@ training:
   adam_weight_decay: 1.0e-6
   online_steps_between_rollouts: 1
 
-  delta_timestamps: null
-    # observation.environment_state: "[i / ${fps} for i in range(1 - ${policy.n_obs_steps}, 1)]"
-    # observation.state: "[i / ${fps} for i in range(1 - ${policy.n_obs_steps}, 1)]"
-    #action: "[i / ${fps} for i in range(1 - ${policy.n_obs_steps}, 1 - ${policy.n_obs_steps} + ${policy.horizon})]"
+  delta_timestamps: 
+    observation.environment_state: "[0]"
+    observation.state: "[0]"
+    action: "[0]"
 
   # The original implementation doesn't sample frames for the last 7 steps,
   # which avoids excessive padding and leads to improved training results.

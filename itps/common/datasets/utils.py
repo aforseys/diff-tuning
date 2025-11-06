@@ -148,14 +148,14 @@ def load_hf_dataset(repo_id: str, version: str, root: Path, split: str) -> datas
                 'index': index
             }
             hf_dataset = datasets.Dataset.from_dict(data_dict)
-            
+
         elif 'npy' in root: # GMM datset
             import numpy as np
             observations = np.load(root)
             data_dict = {
-                'observation.state': observations[:, 0].reshape(-1, 1, 1),
-                'observation.environment_state': observations[:, 0].reshape(-1, 1, 1),
-                'action': observations[:, np.newaxis, 1:],
+                'observation.state': observations[:, 0][:, None],
+                'observation.environment_state': observations[:, 0][:, None],
+                'action': observations[:, 1:],
                 'episode_index': np.arange(len(observations)),
                 'frame_index': np.zeros(len(observations)),
                 'timestamp': np.zeros(len(observations)),

@@ -27,8 +27,14 @@ from itps.common.datasets.lerobot_dataset import LeRobotDataset
 # Let's take one for this example
 repo_id = "gmm"
 
+delta_timestamps = {
+    "observation.environment_state": [0],
+    "observation.state": [0],
+    "action": [0]
+}
+
 # You can easily load a dataset from a Hugging Face repository
-dataset = LeRobotDataset(repo_id, 'data/gmm_conditional_1000_42_20251105_152834.npy', split=None)
+dataset = LeRobotDataset(repo_id, 'data/gmm_conditional_1000_42_20251105_161707.npy', split=None, delta_timestamps=delta_timestamps)
 
 # LeRobotDataset is actually a thin wrapper around an underlying Hugging Face dataset
 # (see https://huggingface.co/docs/datasets/index for more information).
@@ -40,10 +46,9 @@ print(f"\naverage number of frames per episode: {dataset.num_samples / dataset.n
 print(f"frames per second used during data collection: {dataset.fps=}")
 print(f"keys to access images from cameras: {dataset.camera_keys=}\n")
 
-# Access frame indexes associated to first episode
-episode_index = 0
-from_idx = dataset.episode_data_index["from"][episode_index].item()
-to_idx = dataset.episode_data_index["to"][episode_index].item()
+print(f"\n{dataset[0]['observation.environment_state'].shape=}")  # (4,c,h,w)
+print(f"{dataset[0]['observation.state'].shape=}")  # (8,c)
+print(f"{dataset[0]['action'].shape=}\n")  # (64,c)
 
 dataloader = torch.utils.data.DataLoader(
     dataset,
@@ -60,51 +65,3 @@ for batch in dataloader:
         print('Pads:', batch['action_is_pad'])
         print('Pad counts:', batch['action_is_pad'].sum(dim=1))
     break
-
-# LeRobot datasets actually subclass PyTorch datasets so you can do everything you know and love from working
-# with the latter, like iterating through the dataset. Here we grab all the image frames.
-# frames = [dataset[idx]["observation.image"] for idx in range(from_idx, to_idx)]
-
-# Video frames are now float32 in range [0,1] channel first (c,h,w) to follow pytorch convention. To visualize
-# them, we convert to uint8 in range [0,255]
-# frames = [(frame * 255).type(torch.uint8) for frame in frames]
-# and to channel last (h,w,c).
-# frames = [frame.permute((1, 2, 0)).numpy() for frame in frames]
-
-# Finally, we save the frames to a mp4 video for visualization.
-# Path("outputs/examples/1_load_lerobot_dataset").mkdir(parents=True, exist_ok=True)
-# imageio.mimsave("outputs/examples/1_load_lerobot_dataset/episode_0.mp4", frames, fps=dataset.fps)
-
-# For many machine learning applications we need to load the history of past observations or trajectories of
-# future actions. Our datasets can load previous and future frames for each key/modality, using timestamps
-# differences with the current loaded frame. For instance:
-# delta_timestamps = {
-#     # loads 4 images: 1 second before current frame, 500 ms before, 200 ms before, and current frame
-#     "observation.environment_state": [-1, -0.5, -0.20, 0],
-#     # loads 8 state vectors: 1.5 seconds before, 1 second before, ... 20 ms, 10 ms, and current frame
-#     "observation.state": [-1.5, -1, -0.5, -0.20, -0.10, -0.02, -0.01, 0],
-#     # loads 64 action vectors: current frame, 1 frame in the future, 2 frames, ... 63 frames in the future
-#     "action": [t / dataset.fps for t in range(64)],
-# }
-# dataset = LeRobotDataset(repo_id, 'itps/data/maze2d-large-sparse-v1.hdf5', split=None, delta_timestamps=delta_timestamps)
-# print(f"\n{dataset[0]['observation.environment_state'].shape=}")  # (4,c,h,w)
-# print(f"{dataset[0]['observation.state'].shape=}")  # (8,c)
-# print(f"{dataset[0]['action'].shape=}\n")  # (64,c)
-
-# # Finally, our datasets are fully compatible with PyTorch dataloaders and samplers because they are just
-# # PyTorch datasets.
-# dataloader = torch.utils.data.DataLoader(
-#     dataset,
-#     num_workers=0,
-#     batch_size=32,
-#     shuffle=True,
-# )
-# for batch in dataloader:
-#     print(f"{batch['observation.environment_state'].shape=}")  # (32,4,c,h,w)
-#     print(f"{batch['observation.state'].shape=}")  # (32,8,c)
-#     print(f"{batch['action'].shape=}")  # (32,64,c)
-#     if 'action_is_pad' in batch: 
-#         print('Includes padded actions')
-#         print('Pads:', batch['action_is_pad'])
-#         print('Pad counts:', batch['action_is_pad'].sum(dim=1))
-#     break
