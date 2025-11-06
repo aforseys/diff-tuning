@@ -169,7 +169,7 @@ def main(
     logging.info("Making policy.")
     if hydra_cfg_path is None:
         #policy = make_policy(hydra_cfg=hydra_cfg, pretrained_policy_name_or_path=str(pretrained_policy_path))
-        policy = DiffusionPolicy.from_pretrained(pretrained_policy_path, alignment_strategy=None)
+        policy = DiffusionPolicy.from_pretrained(pretrained_policy_path)
     else:
         # Note: We need the dataset stats to pass to the policy's normalization modules.
         policy = make_policy(hydra_cfg=hydra_cfg, dataset_stats=make_dataset(hydra_cfg).stats)
