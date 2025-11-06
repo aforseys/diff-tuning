@@ -168,7 +168,6 @@ def main(
 
     assert isinstance(policy, nn.Module)
 
-
     vis_energy_landscape(policy, conditional)
     vis_inference(policy, conditional, N=500)
 
@@ -182,7 +181,7 @@ if __name__ == "__main__":
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
         "-p",
-        "--pretrained-policy-path",
+        "--pretrained-policy-name-or-path",
         help=(
             "Path to a directory containing weights saved using `Policy.save_pretrained`."
             "This argument is mutually exclusive with `--config`."
