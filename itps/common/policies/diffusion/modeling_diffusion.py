@@ -109,8 +109,9 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
                 [observation_batch[k] for k in self.expected_image_keys], dim=-4
             )
         gen_actions = self.diffusion.generate_actions(observation_batch, guide=guide, visualizer=visualizer, normalizer=self, return_energy=return_energy, return_full=return_full)
+        #print('gen actions output:', gen_actions['actions'].shape)
         actions = self.unnormalize_outputs({"action": gen_actions['actions']})["action"]
-
+        #print('actions after unnormalization output:', actions.shape)
         if return_full: 
             full_traj = self.unnormalize_outputs({"action": gen_actions['full_traj']})["action"]
             if return_energy:
@@ -286,6 +287,7 @@ class EBMDiffusionModel(nn.Module):
                     torch.full(sample.shape[:1], t, dtype=torch.long, device=sample.device),
                     global_cond=global_cond,
                 )
+                #print('model output while sampling:', model_output.shape)
 
                 # add interaction gradient
                 if guide is not None and t > final_influence_step:
@@ -314,7 +316,7 @@ class EBMDiffusionModel(nn.Module):
                 else:
                     # print('final diffusion step at t:', t)
                     sample = prev_sample
-
+        #print('returned sample shape:', sample.shape)
         return sample
     
     def guide_gradient(self, naction, guide):
@@ -370,7 +372,7 @@ class EBMDiffusionModel(nn.Module):
         #TODO: Test different values of these settings
         n = 20 #number of energies averaging over
         timestep_min = 10 #min possible value 0
-        timestep_max = 30 #max possible value self.noise_scheduler.config.num_train_timesteps
+        timestep_max = 30 #self.noise_scheduler.config.num_train_timesteps #max possible value self.noise_scheduler.config.num_train_timesteps
 
         energy_sum = torch.zeros((trajectories.shape[0],1), device=trajectories.device)
 
@@ -390,8 +392,9 @@ class EBMDiffusionModel(nn.Module):
             noisy_trajectories = self.noise_scheduler.add_noise(trajectories, eps, timesteps)
 
             e = self.model(noisy_trajectories, timesteps, global_cond=global_cond, return_energy=True, mask=mask)
+            #sigma_t_sqr = 1 - self.noise_scheduler.alphas_cumprod[t]
 
-            energy_sum +=e
+            energy_sum += e #/sigma_t_sqr
 
         return energy_sum/ n
 
@@ -416,7 +419,7 @@ class EBMDiffusionModel(nn.Module):
 
         # run sampling
         actions = self.conditional_sample(batch_size, global_cond=global_cond, guide=guide, visualizer=visualizer, normalizer=normalizer)
-
+        #print('actions from sampling:', actions.shape)
         if return_full:
             action_dict['full_traj'] = actions
 
@@ -426,6 +429,7 @@ class EBMDiffusionModel(nn.Module):
         # Extract `n_action_steps` steps worth of actions (from the current observation).
         start = n_obs_steps - 1
         end = start + self.config.n_action_steps
+        #print('extracted actions from sampling', actions[:, start:end])
         action_dict['actions'] = actions[:, start:end]
 
         return action_dict
@@ -483,7 +487,7 @@ class EBMDiffusionModel(nn.Module):
 
         # Run the denoising network (that might denoise the trajectory, or attempt to predict the noise).
         pred = self.model(noisy_trajectory, timesteps, global_cond=global_cond, mask=mask)
-
+        #print('MODEL OUTPUT SHAPE:', pred.shape)
         # Compute the MSE loss.
         # The target is either the original trajectory, or the noise.
         if self.config.prediction_type == "epsilon":
