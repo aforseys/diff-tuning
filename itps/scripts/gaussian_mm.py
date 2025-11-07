@@ -54,17 +54,18 @@ def gen_samples(weights, means, covs, N, seed):
     X, comps = sample_gmm(N, weights, means, covs, seed)
     return X, comps
 
-def gen_dataset(N, seed):
+def get_weights():
+    return  np.array([0.45, 0.35, 0.20])
 
-    # ------- Example configuration -------
-    # 3-component 2D GMM
-    weights = np.array([0.45, 0.35, 0.20])
-    means = [
+def get_means():
+    return [
         np.array([0.0, 0.0]),
         np.array([3.5, 1.5]),
         np.array([-2.5, 3.0]),
     ]
-    covs = [
+
+def get_covs():
+    return [
         np.array([[1.0, 0.6],
                 [0.6, 1.2]]),
         np.array([[0.8, -0.3],
@@ -73,6 +74,14 @@ def gen_dataset(N, seed):
                 [0.0, 0.9]]),
     ]
 
+
+def gen_dataset(N, seed):
+
+    # ------- Example configuration -------
+    # 3-component 2D GMM
+    weights = get_weights()
+    means = get_means()
+    covs = get_covs()
     X, comps = gen_samples(weights, means, covs, N, seed)
 
     data_dict ={

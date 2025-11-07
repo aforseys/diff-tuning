@@ -31,6 +31,7 @@ from itps.common.policies.utils import (
     get_dtype_from_parameters,
 )
 from itps.common.policies.diffusion.modeling_diffusion import DiffusionPolicy
+from itps.scripts.gaussian_mm import get_weights, get_means, get_covs, mixture_pdf
 
 def gen_obs(conditional, N):
     "generates a batch object that matches same type as passed through model, only contains obs"
@@ -46,7 +47,7 @@ def gen_obs(conditional, N):
     return observations
 
 
-def gen_xy_grid(x_range, y_range):
+def gen_xy_grid(x_range, y_range, torchify=True):
 
     xmin,xmax=x_range
     ymin,ymax=y_range
@@ -56,8 +57,11 @@ def gen_xy_grid(x_range, y_range):
     np.linspace(ymin, ymax, 200)
     )
 
-    grid = np.column_stack([xx.ravel(), yy.ravel()]) 
-    trajs = torch.tensor(grid, dtype=torch.float32, device=torch.device("cuda")).unsqueeze(dim=1) 
+    trajs = np.column_stack([xx.ravel(), yy.ravel()]) 
+
+    if torchify: 
+        trajs = torch.tensor(trajs, dtype=torch.float32, device=torch.device("cuda")).unsqueeze(dim=1) 
+
     return trajs
 
 
@@ -93,20 +97,30 @@ def eval_energy(policy, trajs, conditional=False, batch_size=256):
         energies.append(np.concatenate(outputs, axis=0))
     return energies
 
-def vis_inference(policy, conditional, N, x_range=(-8, 8), y_range=(-8,8)):
+def vis_inference(policy, conditional, N, learned_contour=True, x_range=(-8, 8), y_range=(-8,8)):
 
-    trajs = gen_xy_grid(x_range=x_range, y_range=y_range)
-    print('Evaluating energy')
-    energies = eval_energy(policy, trajs, conditional=conditional)
-    print('Energy evaluated, generating samples')
+     #if plotting over learned energy contour
+    if learned_contour:
+        trajs = gen_xy_grid(x_range=x_range, y_range=y_range)
+        print('Evaluating energy')
+        energies = eval_energy(policy, trajs, conditional=conditional)
+        trajs = trajs.cpu().numpy()
+        print('Energy evaluated, generating samples')
+
+    #otherwise plot over gt pdf 
+    else: 
+        trajs = gen_xy_grid(x_range=x_range, y_range=y_range, torchify=False)
+        energies = mixture_pdf(trajs, get_weights(), get_means(), get_covs())
+
     samples = run_inference(policy, N=N, conditional=conditional)
+
     print('Samples collected')
     print(trajs.shape)
     print(energies[0].shape)
     print(samples[0].shape)
 
-    xx = trajs[:, 0, 0].cpu().numpy().reshape(200,200)
-    yy = trajs[:, 0, 1].cpu().numpy().reshape(200,200)
+    xx = trajs[:, 0, 0].reshape(200,200)
+    yy = trajs[:, 0, 1].reshape(200,200)
 
     #plot all energy landscapes in list given trajs
     for i in range(len(energies)):
@@ -193,7 +207,7 @@ def main(
     # device = get_device_from_parameters(policy)
     set_global_seed(seed)
     #vis_energy_landscape(policy, conditional)
-    vis_inference(policy, conditional, N=50)
+    vis_inference(policy, conditional, N=50, learned_contour=False)
 
 
 if __name__ == "__main__":
