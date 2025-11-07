@@ -66,13 +66,15 @@ def run_inference(policy, N=100, conditional=False, return_energy=False):
     obs = gen_obs(conditional=conditional, N=N)
 
     inference_output = []
-    for o in obs: 
+    for o in obs:
+        #print('obs shape:', o.shape) 
         if return_energy: 
             actions, energy = policy.run_inference(o, return_energy=return_energy)
-            inference_output.append((actions.detach().cpu().unsqueeze(1).numpy(), energy.detach().cpu().numpy())) 
-
-        actions = policy.run_inference(o, return_energy=return_energy)
-        inference_output.append(actions.detach().cpu().unsqueeze(1).numpy())
+            inference_output.append((actions.detach().cpu().squeeze(1).numpy(), energy.detach().cpu().numpy())) 
+        else:
+            actions = policy.run_inference(o, return_energy=return_energy)
+            inference_output.append(actions.detach().cpu().squeeze(1).numpy())
+    #print('actions output shape:', actions.shape)
 
     return inference_output
 
@@ -94,19 +96,21 @@ def eval_energy(policy, trajs, conditional=False, batch_size=256):
 def vis_inference(policy, conditional, N, x_range=(-8, 8), y_range=(-8,8)):
 
     trajs = gen_xy_grid(x_range=x_range, y_range=y_range)
+    print('Evaluating energy')
     energies = eval_energy(policy, trajs, conditional=conditional)
+    print('Energy evaluated, generating samples')
     samples = run_inference(policy, N=N, conditional=conditional)
-
+    print('Samples collected')
     print(trajs.shape)
-    print(energies.shape)
-    print(samples.shape)
+    print(energies[0].shape)
+    print(samples[0].shape)
 
     xx = trajs[:, 0, 0].cpu().numpy().reshape(200,200)
     yy = trajs[:, 0, 1].cpu().numpy().reshape(200,200)
 
     #plot all energy landscapes in list given trajs
     for i in range(len(energies)):
-        #plot 
+        #plot
         zz = energies[i].reshape(200,200)
         if conditional:
             title = "Energy landscape conditioned on cluster observation {i}"
@@ -116,12 +120,12 @@ def vis_inference(policy, conditional, N, x_range=(-8, 8), y_range=(-8,8)):
         plt.figure(i)
         plt.contourf(xx, yy, zz, levels=20)
         # plot where sampled points are with x's 
-        plt.plot(samples[:,0], samples[:,1], marker='x', markersize=4)
+        plt.scatter(samples[i][:,0], samples[i][:,1], marker='x')
         plt.xlabel("X")
         plt.ylabel("Y")
         plt.title(title)
-  
-        
+        plt.show()
+
 def vis_energy_landscape(policy, conditional, x_range=(-8, 8), y_range=(-8,8)):
 
     trajs = gen_xy_grid(x_range=x_range, y_range=y_range)
@@ -184,10 +188,12 @@ def main(
     assert isinstance(policy, nn.Module)
     policy.cuda()
     policy.eval()
+    #print('MY OUTPUT ACTION SPACE', policy.config.output_shapes["action"])
+    #print('MY CONFIG HORIZON SIZE', policy.config.horizon)
     # device = get_device_from_parameters(policy)
     set_global_seed(seed)
-    vis_energy_landscape(policy, conditional)
-    vis_inference(policy, conditional, N=500)
+    #vis_energy_landscape(policy, conditional)
+    vis_inference(policy, conditional, N=50)
 
 
 if __name__ == "__main__":
