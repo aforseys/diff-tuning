@@ -104,13 +104,20 @@ def vis_inference(policy, conditional, N, learned_contour=True, x_range=(-8, 8),
         trajs = gen_xy_grid(x_range=x_range, y_range=y_range)
         print('Evaluating energy')
         energies = eval_energy(policy, trajs, conditional=conditional)
-        trajs = trajs.cpu().numpy()
+        xx = trajs[:, 0, 0].cpu().numpy().reshape(200,200)
+        yy = trajs[:, 0, 1].cpu().numpy().reshape(200,200)
         print('Energy evaluated, generating samples')
 
     #otherwise plot over gt pdf 
     else: 
         trajs = gen_xy_grid(x_range=x_range, y_range=y_range, torchify=False)
-        energies = mixture_pdf(trajs, get_weights(), get_means(), get_covs())
+        if not conditional:
+            energies = [mixture_pdf(trajs, get_weights(), get_means(), get_covs())]
+        else:  #set weight to be nonzero for non conditional cluster
+            energies = [mixture_pdf(trajs, np.eye(3, dtype=int)[i], get_means(), get_covs()) for i in range(3)]
+
+        xx = trajs[:,0].reshape(200,200)
+        yy = trajs[:,1].reshape(200,200)
 
     samples = run_inference(policy, N=N, conditional=conditional)
 
@@ -118,9 +125,6 @@ def vis_inference(policy, conditional, N, learned_contour=True, x_range=(-8, 8),
     print(trajs.shape)
     print(energies[0].shape)
     print(samples[0].shape)
-
-    xx = trajs[:, 0, 0].reshape(200,200)
-    yy = trajs[:, 0, 1].reshape(200,200)
 
     #plot all energy landscapes in list given trajs
     for i in range(len(energies)):
