@@ -146,12 +146,12 @@ if __name__ == "__main__":
     dataset = gen_dataset(N, seed)
 
     # -- Comment out to generate visualizations -- 
-    # visualize_samples_and_pdf(dataset)
+    visualize_samples_and_pdf(dataset)
 
-    save_dir = "data/"
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    unconditional_file = f"gmm_unconditional_{N}_{seed}_{timestamp}.npy"
-    conditional_file = f"gmm_conditional_{N}_{seed}_{timestamp}.npy"
+    #save_dir = "data/"
+    #timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    #unconditional_file = f"gmm_unconditional_{N}_{seed}_{timestamp}.npy"
+    #conditional_file = f"gmm_conditional_{N}_{seed}_{timestamp}.npy"
 
-    np.save(save_dir+unconditional_file, dataset['unconditional_observation'])
-    np.save(save_dir+conditional_file, dataset['conditional_observation'])
+    #np.save(save_dir+unconditional_file, dataset['unconditional_observation'])
+    #np.save(save_dir+conditional_file, dataset['conditional_observation'])
