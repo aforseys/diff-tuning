@@ -7,7 +7,7 @@ from hydra import initialize, compose
 from omegaconf import OmegaConf
 from pathlib import Path
 import torch
-import datetime
+from datetime import datetime
 from itps.common.datasets.lerobot_dataset import LeRobotDataset
 from itps.common.policies.factory import make_policy
 from itps.common.datasets.factory import make_dataset
@@ -15,7 +15,7 @@ from itps.common.policies.diffusion.configuration_diffusion import DiffusionConf
 from itps.common.policies.diffusion.modeling_diffusion import DiffusionPolicy
 
 # Create a directory to store the training checkpoint.
-cond_type = 'unconditional'
+cond_type = 'conditional'
 run_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 output_directory = Path(f"outputs/train/gmm/run_{cond_type}_{run_timestamp}")
 output_directory.mkdir(parents=True, exist_ok=True)
@@ -24,7 +24,7 @@ output_directory.mkdir(parents=True, exist_ok=True)
 # Adjust as you prefer. 5000 steps are needed to get something worth evaluating.
 training_steps = 5000
 device = torch.device("cuda")
-log_freq = 250
+log_freq = 500
 
 # Set up the dataset.
 # delta_timestamps = {

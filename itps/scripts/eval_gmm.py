@@ -131,7 +131,7 @@ def vis_inference(policy, conditional, N, learned_contour=True, x_range=(-8, 8),
         #plot
         zz = energies[i].reshape(200,200)
         if conditional:
-            title = "Energy landscape conditioned on cluster observation {i}"
+            title = f"Energy landscape conditioned on cluster observation {i}"
         else:
             title = "Energy landscape (unconditional)"
 
@@ -160,7 +160,7 @@ def vis_energy_landscape(policy, conditional, x_range=(-8, 8), y_range=(-8,8)):
     for i in range(len(energies)):
         zz = energies[i].reshape(200,200)
         if conditional:
-            title = "Energy landscape conditioned on cluster observation {i}"
+            title = f"Energy landscape conditioned on cluster observation {i}"
         else:
             title = "Energy landscape (unconditional)"
 
@@ -211,7 +211,8 @@ def main(
     # device = get_device_from_parameters(policy)
     set_global_seed(seed)
     #vis_energy_landscape(policy, conditional)
-    vis_inference(policy, conditional, N=50, learned_contour=False)
+    vis_inference(policy, conditional=conditional, N=100, learned_contour=True)
+    vis_inference(policy, conditional=conditional, N=100, learned_contour=False)
 
 
 if __name__ == "__main__":
@@ -249,6 +250,20 @@ if __name__ == "__main__":
         nargs="*",
         help="Any key=value arguments to override config values (use dots for.nested=overrides)",
     )
+
+    parser.add_argument(
+        "--conditional",
+        action="store_true",
+        help="Conditional GMM",
+    )
+
+    parser.add_argument(
+        "seed",
+        help="Inference seed",
+        nargs="*",
+        default=0
+    )
+
     args = parser.parse_args()
 
     if args.pretrained_policy_name_or_path is None:
@@ -260,4 +275,6 @@ if __name__ == "__main__":
             pretrained_policy_path=pretrained_policy_path,
             out_dir=args.out_dir,
             config_overrides=args.overrides,
+            conditional=args.conditional,
+            seed=args.seed
         )
