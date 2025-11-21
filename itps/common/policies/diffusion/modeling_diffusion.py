@@ -121,15 +121,26 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
         
         return actions
 
-    def forward(self, batch: dict[str, Tensor]) -> dict[str, Tensor]:
+    def forward(self, batch: dict[str, Tensor], tune_batch: dict[str, Tensor]= None) -> dict[str, Tensor]:
         """Run the batch through the model and compute the loss for training or validation."""
         batch = self.normalize_inputs(batch)
         if len(self.expected_image_keys) > 0: #TODO: Need to make shallow copy here? (Done in Irene's code)
             batch["observation.images"] = torch.stack([batch[k] for k in self.expected_image_keys], dim=-4)
         batch = self.normalize_targets(batch)
-        loss, (loss_denoise, loss_energy) = self.diffusion.compute_loss(batch)
-        return {"loss": loss, "loss_breakdown": {"MSE": loss_denoise, "energy_landscape": loss_energy}}
+        loss, (loss_denoise, loss_energy, loss_finetune) = self.diffusion.compute_loss(batch, tune_batch)
+        return {"loss": loss, "loss_breakdown": {"MSE": loss_denoise, "energy_landscape": loss_energy, "pref_tuning": loss_finetune}}
+    
+    def freeze_nonFiLM(self):
 
+        # Freeze all parameters
+        for p in self.parameters():
+            p.requires_grad = False
+
+        # Unfreeze FiLM layers
+        for module in self.modules:
+            if isinstance(module, DiffusionConditionalResidualBlock1d):
+                for p in module.cond_encoder.parameters():
+                    p.requires_grad = True
 
 def _make_noise_scheduler(name: str, **kwargs: dict) -> DDPMScheduler | DDIMScheduler:
     """
@@ -162,7 +173,7 @@ class EBMWrapper(nn.Module):
             # Check differentiability
             assert out.requires_grad, "model output is not differentiable — autograd graph broken!"
 
-            energy_per_state = out.pow(2)  #TODO: Why is energy squared? Keep positive? Other ways to do this?
+            energy_per_state = out.pow(2)  #TODO: Why is energy squared? Keep positive? 
 
             # Don't use padding actions in energy calculation
             if mask is not None:
@@ -376,8 +387,10 @@ class EBMDiffusionModel(nn.Module):
 
         energy_sum = torch.zeros((trajectories.shape[0],1), device=trajectories.device)
 
+        #t_range = torch.linspace(timestep_min, timestep_max, steps=n)
+
         # average over energy calculated at varying noise levels
-        for _ in range(n):
+        for i in range(n):
 
             #add the same noise to all trajectories in batch 
             eps=torch.randn(trajectories.shape[1:], device=trajectories.device)
@@ -388,7 +401,11 @@ class EBMDiffusionModel(nn.Module):
                 size=(1,),
                 device=trajectories.device,
             ).long()
+            #t = t_range[i]
+
+            #timesteps = torch.full((trajectories.shape[0],), 0, device=trajectories.device).long()
             timesteps = t.repeat(trajectories.shape[0])
+
             noisy_trajectories = self.noise_scheduler.add_noise(trajectories, eps, timesteps)
 
             e = self.model(noisy_trajectories, timesteps, global_cond=global_cond, return_energy=True, mask=mask)
@@ -434,7 +451,7 @@ class EBMDiffusionModel(nn.Module):
 
         return action_dict
 
-    def compute_loss(self, batch: dict[str, Tensor]) -> Tensor:
+    def compute_loss(self, batch: dict[str, Tensor], tune_batch: dict[str, Tensor] = None) -> Tensor:
         """
         This function expects `batch` to have (at least):
         {
@@ -508,6 +525,7 @@ class EBMDiffusionModel(nn.Module):
         loss_mse = loss
 
         # Compute contrastive loss 
+        loss_energy=torch.tensor(-1, dtype=torch.float32)
         if self.config.supervise_energy_landscape:
 
             # resample noise trajectory 
@@ -516,7 +534,7 @@ class EBMDiffusionModel(nn.Module):
 
             #TODO: Test different ways of getting corrupted sample. Below is starting point in IRED and used in itps (3x noise)
             xmin_noise = self.noise_scheduler.add_noise(trajectory, 3.0*eps, timesteps)
-            loss_scale = 0.5 # TODO: test values. This is from itps, one found in IRED.
+            loss_energy_scale = 0.5 # TODO: test values. This is from itps, one found in IRED.
 
             # Compute energy of both samples (positive and negative)
             global_cond_concat = torch.cat([global_cond, global_cond], dim=0)
@@ -534,13 +552,65 @@ class EBMDiffusionModel(nn.Module):
             target = torch.zeros(energy_positive.size(0)).to(energy_stack.device)
             loss_energy = F.cross_entropy(-1 * energy_stack, target.long(), reduction='none')[:, None]
 
-            loss = loss_mse + loss_scale * loss_energy 
-            return loss.mean(), (loss_mse.mean(), loss_energy.mean())
+            loss += loss_energy_scale*loss_energy
+            # loss = loss_mse + loss_scale * loss_energy 
+            # return loss.mean(), (loss_mse.mean(), loss_energy.mean())
 
-        else: 
-            loss = loss_mse
-            return loss.mean(), (loss_mse.mean(), -1) #TODO: Does -1 need to be a tensor? Set as such in Irene's code
-        #return loss.mean()
+        loss_energy_finetune=torch.tensor(-1, dtype=torch.float32)
+        if tune_batch is not None:
+
+            # extract from finetune batch: 
+            pos_batch, neg_batch = tune_batch
+            global_cond_pos = self._prepare_global_conditioning(pos_batch)
+            global_cond_neg = self._prepare_global_conditioning(neg_batch)
+            assert np.all(global_cond_pos==global_cond_neg), "Global conditions of pref comparisons must match"
+
+            # Get batch mask for energy calculation (don't use repeated actions)
+            if self.config.do_mask_loss_for_padding:
+                if ("action_is_pad" not in pos_batch)("action_is_pad" not in neg_batch):
+                    raise ValueError(
+                        "You need to provide 'action_is_pad' in the batch when "
+                        f"{self.config.do_mask_loss_for_padding=}."
+                    )
+                pos_batch_mask = ~pos_batch["action_is_pad"]
+                neg_batch_mask = ~neg_batch["action_is_pad"]
+            else:
+                pos_batch_mask = None
+                neg_batch_mask = None
+
+            # resample noise trajectory (apply same noise to positive and negative trajectory)
+            positive_trajs = pos_batch["action"]
+            negative_trajs = neg_batch["action"]
+
+            # add same amount of noise to both positive and negative comparisons
+            eps = torch.randn(positive_trajs.shape, device=trajectory.device)
+            positive_sample = self.noise_scheduler.add_noise(positive_trajs, eps, timesteps)
+            negative_sample = self.noise_scheduler.add_noise(negative_trajs, eps, timesteps)
+
+            loss_finetune_energy_scale=0.5 #TODO: Test different values
+
+            # Compute energy of both samples (positive and negative)
+            global_cond_concat = torch.cat([global_cond_pos, global_cond_neg], dim=0) #comparisons must have same global cond
+            traj_concat = torch.cat([positive_sample, negative_sample], dim=0)
+            t_concat = torch.cat([timesteps, timesteps], dim=0)
+            if pos_batch_mask is not None:
+                mask_concat = torch.cat([pos_batch_mask, neg_batch_mask], dim=0)
+            else: 
+                mask_concat = None
+            energy = self.model(traj_concat, t_concat, global_cond=global_cond_concat, return_energy=True, mask=mask_concat)
+
+            # Compute contrastive loss
+            energy_positive, energy_negative = torch.chunk(energy, 2, 0)
+            energy_stack = torch.cat([energy_positive, energy_negative], dim=-1)
+            target = torch.zeros(energy_positive.size(0)).to(energy_stack.device)
+            loss_energy_finetune = F.cross_entropy(-1 * energy_stack, target.long(), reduction='none')[:, None]
+
+            loss+=loss_finetune_energy_scale*loss_energy_finetune
+
+        # else: 
+        #     loss = loss_mse
+        return loss.mean(), (loss_mse.mean(), loss_energy.mean(), loss_energy_finetune.mean())
+        # return loss.mean()
 
 
 class SpatialSoftmax(nn.Module):
