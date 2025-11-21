@@ -1,21 +1,21 @@
 
-import copy 
 import argparse
 from gaussian_mm import * 
 
 def generate_preference_data(dataset, pref_mode):
 
-    pref_dict = copy.deepcopy(dataset)
-    pref_dict['pref_mode']=pref_mode
+    pref_dict={'pref_mode': pref_mode}
 
-    pos_idxs = np.where(dataset["comps"]==pref_mode)[0]
+    pos_idxs = np.where(dataset[:,0]==pref_mode)[0]
+    print(dataset[:,0])
+    print(pos_idxs)
 
     # Get subset of negative indices to match
-    neg_idxs = np.where(dataset["comps"]!=pref_mode)[0] 
+    neg_idxs = np.where(dataset[:,0]!=pref_mode)[0] 
     neg_idxs_sub = np.random.choice(neg_idxs, size=len(pos_idxs), replace=False)
 
-    pref_dict['positive_observation'] = np.hstack(np.zeros((len(pos_idxs),1)), [pref_dict['X'][pos_idxs]])
-    pref_dict['negative_observation'] = np.hstack(np.zeros((len(pos_idxs),1)), [pref_dict['X'][neg_idxs_sub]])
+    pref_dict['positive_observation'] = np.hstack(np.zeros((len(pos_idxs),1)), [pref_dict[:,1:][pos_idxs]])
+    pref_dict['negative_observation'] = np.hstack(np.zeros((len(pos_idxs),1)), [pref_dict[:,1:][neg_idxs_sub]])
 
     return pref_dict 
    
