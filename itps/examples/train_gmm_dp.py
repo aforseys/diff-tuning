@@ -15,7 +15,7 @@ from itps.common.policies.diffusion.configuration_diffusion import DiffusionConf
 from itps.common.policies.diffusion.modeling_diffusion import DiffusionPolicy
 
 # Create a directory to store the training checkpoint.
-cond_type = 'conditional'
+cond_type = 'unconditional'
 run_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 output_directory = Path(f"outputs/train/gmm/run_{cond_type}_{run_timestamp}")
 output_directory.mkdir(parents=True, exist_ok=True)

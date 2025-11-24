@@ -50,6 +50,8 @@ print(f"\n{dataset[0]['observation.environment_state'].shape=}")  # (4,c,h,w)
 print(f"{dataset[0]['observation.state'].shape=}")  # (8,c)
 print(f"{dataset[0]['action'].shape=}\n")  # (64,c)
 
+#TODO: PRINT AND TEST EPISODE INDICES
+
 dataloader = torch.utils.data.DataLoader(
     dataset,
     num_workers=0,
