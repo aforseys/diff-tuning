@@ -137,7 +137,7 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
             p.requires_grad = False
 
         # Unfreeze FiLM layers
-        for module in self.modules:
+        for module in self.modules():
             if isinstance(module, DiffusionConditionalResidualBlock1d):
                 for p in module.cond_encoder.parameters():
                     p.requires_grad = True
@@ -371,49 +371,62 @@ class EBMDiffusionModel(nn.Module):
         # Concatenate features then flatten to (B, global_cond_dim).
         return torch.cat(global_cond_feats, dim=-1).flatten(start_dim=1)
 
-    def get_traj_energies(self, trajectories: Tensor, global_cond: Tensor | None = None, mask: Tensor | None = None):
+    def get_traj_energies(self, trajectories: Tensor, t: int, global_cond: Tensor | None = None, mask: Tensor | None = None):
         """
             trajectory: (B, horizon, action_dim)
             mask gives trajectory padding mask.
+            t: energy landscape timestep
         }
         """
+
+        #timesteps = torch.full((trajectories.shape[0],), 0, device=trajectories.device).long()
+
+        # Transform trajectories to correct timestep (don't add noise for exact energy calc)
+        timesteps = t.repeat(trajectories.shape[0])
+        eps = torch.zeros(trajectories.shape)
+        noisy_trajectories = self.noise_scheduler.add_noise(trajectories, eps, timesteps)
+
+        energies = self.model(noisy_trajectories, timesteps, global_cond=global_cond, return_energy=True, mask=mask)
+        #sigma_t_sqr = 1 - self.noise_scheduler.alphas_cumprod[t]
+
+        return energies 
 
         #TODO: Check shape of trajectories (?) and pad as necessary 
         
         #TODO: Test different values of these settings
-        n = 20 #number of energies averaging over
-        timestep_min = 10 #min possible value 0
-        timestep_max = 30 #self.noise_scheduler.config.num_train_timesteps #max possible value self.noise_scheduler.config.num_train_timesteps
+        # n = 20 #number of energies averaging over
+        # timestep_min = 10 #min possible value 0
+        # timestep_max = 30 #self.noise_scheduler.config.num_train_timesteps #max possible value self.noise_scheduler.config.num_train_timesteps
 
-        energy_sum = torch.zeros((trajectories.shape[0],1), device=trajectories.device)
+        # energy_sum = torch.zeros((trajectories.shape[0],1), device=trajectories.device)
 
-        #t_range = torch.linspace(timestep_min, timestep_max, steps=n)
+        # #t_range = torch.linspace(timestep_min, timestep_max, steps=n)
 
-        # average over energy calculated at varying noise levels
-        for i in range(n):
+        # # average over energy calculated at varying noise levels
+        # for i in range(n):
 
-            #add the same noise to all trajectories in batch 
-            eps=torch.randn(trajectories.shape[1:], device=trajectories.device)
-            eps = einops.repeat(eps, 'l t -> b l t', b=trajectories.shape[0])
-            t = torch.randint(
-                low=timestep_min,
-                high=timestep_max,
-                size=(1,),
-                device=trajectories.device,
-            ).long()
-            #t = t_range[i]
+        #     #add the same noise to all trajectories in batch 
+        #     eps=torch.randn(trajectories.shape[1:], device=trajectories.device) 
+        #     eps = einops.repeat(eps, 'l t -> b l t', b=trajectories.shape[0])
+        #     t = torch.randint(
+        #         low=timestep_min,
+        #         high=timestep_max,
+        #         size=(1,),
+        #         device=trajectories.device,
+        #     ).long()
+        #     #t = t_range[i]
 
-            #timesteps = torch.full((trajectories.shape[0],), 0, device=trajectories.device).long()
-            timesteps = t.repeat(trajectories.shape[0])
+        #     #timesteps = torch.full((trajectories.shape[0],), 0, device=trajectories.device).long()
+        #     timesteps = t.repeat(trajectories.shape[0])
 
-            noisy_trajectories = self.noise_scheduler.add_noise(trajectories, eps, timesteps)
+        #     noisy_trajectories = self.noise_scheduler.add_noise(trajectories, eps, timesteps)
 
-            e = self.model(noisy_trajectories, timesteps, global_cond=global_cond, return_energy=True, mask=mask)
-            #sigma_t_sqr = 1 - self.noise_scheduler.alphas_cumprod[t]
+        #     e = self.model(noisy_trajectories, timesteps, global_cond=global_cond, return_energy=True, mask=mask)
+        #     #sigma_t_sqr = 1 - self.noise_scheduler.alphas_cumprod[t]
 
-            energy_sum += e #/sigma_t_sqr
+        #     energy_sum += e #/sigma_t_sqr
 
-        return energy_sum/ n
+        # return energy_sum/ n
 
 
     def generate_actions(self, batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, normalizer=None, return_energy=False, return_full=False) -> Tensor:
@@ -563,7 +576,7 @@ class EBMDiffusionModel(nn.Module):
             pos_batch, neg_batch = tune_batch
             global_cond_pos = self._prepare_global_conditioning(pos_batch)
             global_cond_neg = self._prepare_global_conditioning(neg_batch)
-            assert np.all(global_cond_pos==global_cond_neg), "Global conditions of pref comparisons must match"
+            assert torch.equal(global_cond_pos, global_cond_neg), "Global conditions of pref comparisons must match"
 
             # Get batch mask for energy calculation (don't use repeated actions)
             if self.config.do_mask_loss_for_padding:

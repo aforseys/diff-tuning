@@ -82,7 +82,7 @@ def run_inference(policy, N=100, conditional=False, return_energy=False):
 
     return inference_output
 
-def eval_energy(policy, trajs, conditional=False, batch_size=256):
+def eval_energy(policy, trajs, t, conditional=False, batch_size=256):
 
     obs = gen_obs(conditional=conditional, N=len(trajs))
     global_conds = [policy.diffusion._prepare_global_conditioning(o) for o in obs]
@@ -92,18 +92,18 @@ def eval_energy(policy, trajs, conditional=False, batch_size=256):
         #print(trajs.dtype)
         outputs=[]
         for i in range(0, trajs.size(0), batch_size):
-            out = policy.diffusion.get_traj_energies(trajectories=trajs[i:i+batch_size], global_cond=gc[i:i+batch_size])
+            out = policy.diffusion.get_traj_energies(trajectories=trajs[i:i+batch_size], global_cond=gc[i:i+batch_size], t=t)
             outputs.append(out.detach().cpu().numpy())
         energies.append(np.concatenate(outputs, axis=0))
     return energies
 
-def vis_inference(policy, conditional, N, learned_contour=True, x_range=(-8, 8), y_range=(-8,8)):
+def vis_inference(policy, conditional, N, learned_contour=True, t=0, x_range=(-8, 8), y_range=(-8,8)):
 
      #if plotting over learned energy contour
     if learned_contour:
         trajs = gen_xy_grid(x_range=x_range, y_range=y_range)
         print('Evaluating energy')
-        energies = eval_energy(policy, trajs, conditional=conditional)
+        energies = eval_energy(policy, trajs, t, conditional=conditional)
         xx = trajs[:, 0, 0].cpu().numpy().reshape(200,200)
         yy = trajs[:, 0, 1].cpu().numpy().reshape(200,200)
         print('Energy evaluated, generating samples')
@@ -144,10 +144,10 @@ def vis_inference(policy, conditional, N, learned_contour=True, x_range=(-8, 8),
         plt.title(title)
         plt.show()
 
-def vis_energy_landscape(policy, conditional, x_range=(-8, 8), y_range=(-8,8)):
+def vis_energy_landscape(policy, conditional, t=0, x_range=(-8, 8), y_range=(-8,8)):
 
     trajs = gen_xy_grid(x_range=x_range, y_range=y_range)
-    energies = eval_energy(policy, trajs, conditional=conditional)
+    energies = eval_energy(policy, trajs, t, conditional=conditional)
 
     print(trajs.shape)
     print(len(energies))
@@ -211,8 +211,9 @@ def main(
     # device = get_device_from_parameters(policy)
     set_global_seed(seed)
     #vis_energy_landscape(policy, conditional)
-    vis_inference(policy, conditional=conditional, N=100, learned_contour=True)
     vis_inference(policy, conditional=conditional, N=100, learned_contour=False)
+    for i in range(10):
+        vis_inference(policy, conditional=conditional, N=100, learned_contour=True, t=i*10)
 
 
 if __name__ == "__main__":
