@@ -142,6 +142,15 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
                 for p in module.cond_encoder.parameters():
                     p.requires_grad = True
 
+   def get_energy(self, trajectories: Tensor, t: int, observation_batch: dict[str, Tensor]):
+        observation_batch = self.normalize_inputs(observation_batch)
+        # if len(self.expected_image_keys) > 0: #TODO: Update if necessary 
+        #     observation_batch["observation.images"] = torch.stack(
+        #         [observation_batch[k] for k in self.expected_image_keys], dim=-4
+        #     )
+        # get_traj_energies(self, trajectories: Tensor, t: int, global_cond: Tensor | None = None, mask: Tensor | None = None):
+        return self.diffusion.get_traj_energies(trajectories, t, observation_batch)
+
 def _make_noise_scheduler(name: str, **kwargs: dict) -> DDPMScheduler | DDIMScheduler:
     """
     Factory for noise scheduler instances of the requested type. All kwargs are passed
@@ -371,7 +380,7 @@ class EBMDiffusionModel(nn.Module):
         # Concatenate features then flatten to (B, global_cond_dim).
         return torch.cat(global_cond_feats, dim=-1).flatten(start_dim=1)
 
-    def get_traj_energies(self, trajectories: Tensor, t: int, global_cond: Tensor | None = None, mask: Tensor | None = None):
+    def get_traj_energies(self, trajectories: Tensor, t: int, observation_batch: dict[str, Tensor], mask: Tensor | None = None):
         """
             trajectory: (B, horizon, action_dim)
             mask gives trajectory padding mask.
@@ -382,11 +391,12 @@ class EBMDiffusionModel(nn.Module):
         #timesteps = torch.full((trajectories.shape[0],), 0, device=trajectories.device).long()
 
         # Transform trajectories to correct timestep (don't add noise for exact energy calc)
-        timesteps = t.repeat(trajectories.shape[0])
-        eps = torch.zeros(trajectories.shape)
-        noisy_trajectories = self.noise_scheduler.add_noise(trajectories, eps, timesteps)
-
-        energies = self.model(noisy_trajectories, timesteps, global_cond=global_cond, return_energy=True, mask=mask)
+        # timesteps = t.repeat(trajectories.shape[0])
+        # eps = torch.zeros(trajectories.shape)
+        # noisy_trajectories = self.noise_scheduler.add_noise(trajectories, eps, timesteps)
+        global_cond = self._prepare_global_conditioning(observation_batch)
+        timesteps = torch.full((trajectories.shape[0],), t, device=trajectories.device).long()
+        energies = self.model(trajectories, timesteps, global_cond=global_cond, return_energy=True, mask=mask)
         #sigma_t_sqr = 1 - self.noise_scheduler.alphas_cumprod[t]
 
         return energies 
@@ -429,7 +439,7 @@ class EBMDiffusionModel(nn.Module):
         # return energy_sum/ n
 
 
-    def generate_actions(self, batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, normalizer=None, return_energy=False, return_full=False) -> Tensor:
+    def generate_actions(self, batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, normalizer=None,return_full=False) -> Tensor:
         """
         This function expects `batch` to have:
         {
@@ -453,8 +463,8 @@ class EBMDiffusionModel(nn.Module):
         if return_full:
             action_dict['full_traj'] = actions
 
-        if return_energy:
-            action_dict['energy'] = self.get_traj_energies(actions, global_cond=global_cond)
+        # if return_energy:
+        #     action_dict['energy'] = self.get_traj_energies(actions, ob=global_cond)
 
         # Extract `n_action_steps` steps worth of actions (from the current observation).
         start = n_obs_steps - 1

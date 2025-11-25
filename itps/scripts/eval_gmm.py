@@ -84,15 +84,17 @@ def run_inference(policy, N=100, conditional=False, return_energy=False):
 
 def eval_energy(policy, trajs, t, conditional=False, batch_size=256):
 
-    obs = gen_obs(conditional=conditional, N=len(trajs))
-    global_conds = [policy.diffusion._prepare_global_conditioning(o) for o in obs]
+    observations = gen_obs(conditional=conditional, N=len(trajs))
+    # global_conds = [policy.diffusion._prepare_global_conditioning(o) for o in obs]
     energies = []
-    for gc in global_conds:
+    for obs in observations:
         #print(gc.dtype)
         #print(trajs.dtype)
         outputs=[]
         for i in range(0, trajs.size(0), batch_size):
-            out = policy.diffusion.get_traj_energies(trajectories=trajs[i:i+batch_size], global_cond=gc[i:i+batch_size], t=t)
+            batch_traj = trajs[i:i+batch_size]
+            batch_obs = {k: v[i:i+batch_size] for k, v in obs.items()}
+            out = policy.get_energy(trajectories=batch_traj, t=t, observation_batch=batch_obs)
             outputs.append(out.detach().cpu().numpy())
         energies.append(np.concatenate(outputs, axis=0))
     return energies
@@ -121,10 +123,10 @@ def vis_inference(policy, conditional, N, learned_contour=True, t=0, x_range=(-8
 
     samples = run_inference(policy, N=N, conditional=conditional)
 
-    print('Samples collected')
-    print(trajs.shape)
-    print(energies[0].shape)
-    print(samples[0].shape)
+    # print('Samples collected')
+    # print(trajs.shape)
+    # print(energies[0].shape)
+    # print(samples[0].shape)
 
     #plot all energy landscapes in list given trajs
     for i in range(len(energies)):
@@ -136,7 +138,11 @@ def vis_inference(policy, conditional, N, learned_contour=True, t=0, x_range=(-8
             title = "Energy landscape (unconditional)"
 
         plt.figure(i)
-        plt.contourf(xx, yy, zz, levels=20)
+        plt.imshow(zz, origin="lower", 
+                    extent=[xx.min(), xx.max(), yy.min(), yymax],
+                    aspect="auto"
+                    )
+        #plt.heatmap(xx, yy, zz)
         # plot where sampled points are with x's 
         plt.scatter(samples[i][:,0], samples[i][:,1], marker='x')
         plt.xlabel("X")
@@ -259,7 +265,8 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "seed",
+        "--seed",
+        type = int,
         help="Inference seed",
         nargs="*",
         default=0
