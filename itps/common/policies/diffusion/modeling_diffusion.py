@@ -95,12 +95,12 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
     def n_obs_steps(self) -> int:
         return self.config.n_obs_steps
 
-    @property
+    @propertynano
     def input_keys(self) -> set[str]:
         return set(self.config.input_shapes)
 
     @torch.no_grad 
-    def run_inference(self, observation_batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, return_energy=False, return_full=False) -> Tensor:
+    def run_inference(self, observation_batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, return_full=False) -> Tensor:
         observation_batch = self.normalize_inputs(observation_batch)
         if guide is not None:
             guide = self.normalize_targets({"action": guide})["action"]
@@ -108,16 +108,16 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
             observation_batch["observation.images"] = torch.stack(
                 [observation_batch[k] for k in self.expected_image_keys], dim=-4
             )
-        gen_actions = self.diffusion.generate_actions(observation_batch, guide=guide, visualizer=visualizer, normalizer=self, return_energy=return_energy, return_full=return_full)
+        gen_actions = self.diffusion.generate_actions(observation_batch, guide=guide, visualizer=visualizer, normalizer=self,return_full=return_full)
         #print('gen actions output:', gen_actions['actions'].shape)
         actions = self.unnormalize_outputs({"action": gen_actions['actions']})["action"]
         #print('actions after unnormalization output:', actions.shape)
         if return_full: 
             full_traj = self.unnormalize_outputs({"action": gen_actions['full_traj']})["action"]
-            if return_energy:
-                return actions, gen_actions['energy'], full_traj
-        elif return_energy:
-            return actions, gen_actions['energy']
+        #     if return_energy:
+        #         return actions, gen_actions['energy'], full_traj
+        # elif return_energy:
+        #     return actions, gen_actions['energy']
         
         return actions
 
@@ -142,14 +142,15 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
                 for p in module.cond_encoder.parameters():
                     p.requires_grad = True
 
-   def get_energy(self, trajectories: Tensor, t: int, observation_batch: dict[str, Tensor]):
+    def get_energy(self, trajectories: Tensor, t: int, observation_batch: dict[str, Tensor]):
         observation_batch = self.normalize_inputs(observation_batch)
+        traj_batch = self.normalize_targets(trajectories)
         # if len(self.expected_image_keys) > 0: #TODO: Update if necessary 
-        #     observation_batch["observation.images"] = torch.stack(
+        #     observation_batch["obsnano ervation.images"] = torch.stack(
         #         [observation_batch[k] for k in self.expected_image_keys], dim=-4
         #     )
         # get_traj_energies(self, trajectories: Tensor, t: int, global_cond: Tensor | None = None, mask: Tensor | None = None):
-        return self.diffusion.get_traj_energies(trajectories, t, observation_batch)
+        return self.diffusion.get_traj_energies(traj_batch, t, observation_batch)
 
 def _make_noise_scheduler(name: str, **kwargs: dict) -> DDPMScheduler | DDIMScheduler:
     """

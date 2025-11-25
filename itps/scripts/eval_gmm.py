@@ -65,19 +65,19 @@ def gen_xy_grid(x_range, y_range, torchify=True):
     return trajs
 
 
-def run_inference(policy, N=100, conditional=False, return_energy=False):
+def run_inference(policy, N=100, conditional=False): #, return_energy=False):
 
     obs = gen_obs(conditional=conditional, N=N)
 
     inference_output = []
     for o in obs:
         #print('obs shape:', o.shape) 
-        if return_energy: 
-            actions, energy = policy.run_inference(o, return_energy=return_energy)
-            inference_output.append((actions.detach().cpu().squeeze(1).numpy(), energy.detach().cpu().numpy())) 
-        else:
-            actions = policy.run_inference(o, return_energy=return_energy)
-            inference_output.append(actions.detach().cpu().squeeze(1).numpy())
+        # if return_energy: 
+        #     actions, energy = policy.run_inference(o, return_energy=return_energy)
+        #     inference_output.append((actions.detach().cpu().squeeze(1).numpy(), energy.detach().cpu().numpy())) 
+        # else:
+        actions = policy.run_inference(o) #, return_energy=return_energy)
+        inference_output.append(actions.detach().cpu().squeeze(1).numpy())
     #print('actions output shape:', actions.shape)
 
     return inference_output
@@ -92,7 +92,7 @@ def eval_energy(policy, trajs, t, conditional=False, batch_size=256):
         #print(trajs.dtype)
         outputs=[]
         for i in range(0, trajs.size(0), batch_size):
-            batch_traj = trajs[i:i+batch_size]
+            batch_traj = {'action': trajs[i:i+batch_size]}
             batch_obs = {k: v[i:i+batch_size] for k, v in obs.items()}
             out = policy.get_energy(trajectories=batch_traj, t=t, observation_batch=batch_obs)
             outputs.append(out.detach().cpu().numpy())
@@ -139,7 +139,7 @@ def vis_inference(policy, conditional, N, learned_contour=True, t=0, x_range=(-8
 
         plt.figure(i)
         plt.imshow(zz, origin="lower", 
-                    extent=[xx.min(), xx.max(), yy.min(), yymax],
+                    extent=[xx.min(), xx.max(), yy.min(), yy.max()],
                     aspect="auto"
                     )
         #plt.heatmap(xx, yy, zz)
