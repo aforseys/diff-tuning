@@ -95,7 +95,7 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
     def n_obs_steps(self) -> int:
         return self.config.n_obs_steps
 
-    @propertynano
+    @property
     def input_keys(self) -> set[str]:
         return set(self.config.input_shapes)
 
@@ -114,6 +114,7 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
         #print('actions after unnormalization output:', actions.shape)
         if return_full: 
             full_traj = self.unnormalize_outputs({"action": gen_actions['full_traj']})["action"]
+            return actions, full_traj
         #     if return_energy:
         #         return actions, gen_actions['energy'], full_traj
         # elif return_energy:
@@ -142,15 +143,16 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
                 for p in module.cond_encoder.parameters():
                     p.requires_grad = True
 
-    def get_energy(self, trajectories: Tensor, t: int, observation_batch: dict[str, Tensor]):
+    def get_energy(self, action_batch: dict[str, Tensor], t: int, observation_batch: dict[str, Tensor]):
         observation_batch = self.normalize_inputs(observation_batch)
-        traj_batch = self.normalize_targets(trajectories)
+        action_batch = self.normalize_targets(action_batch)
         # if len(self.expected_image_keys) > 0: #TODO: Update if necessary 
-        #     observation_batch["obsnano ervation.images"] = torch.stack(
+        #     observation_batch["observation.images"] = torch.stack(
         #         [observation_batch[k] for k in self.expected_image_keys], dim=-4
         #     )
         # get_traj_energies(self, trajectories: Tensor, t: int, global_cond: Tensor | None = None, mask: Tensor | None = None):
-        return self.diffusion.get_traj_energies(traj_batch, t, observation_batch)
+        trajectory = action_batch["action"]
+        return self.diffusion.get_traj_energies(trajectory, t, observation_batch)
 
 def _make_noise_scheduler(name: str, **kwargs: dict) -> DDPMScheduler | DDIMScheduler:
     """
@@ -393,11 +395,13 @@ class EBMDiffusionModel(nn.Module):
 
         # Transform trajectories to correct timestep (don't add noise for exact energy calc)
         # timesteps = t.repeat(trajectories.shape[0])
-        # eps = torch.zeros(trajectories.shape)
-        # noisy_trajectories = self.noise_scheduler.add_noise(trajectories, eps, timesteps)
-        global_cond = self._prepare_global_conditioning(observation_batch)
+        eps = torch.zeros(trajectories.shape, device=trajectories.device)
         timesteps = torch.full((trajectories.shape[0],), t, device=trajectories.device).long()
-        energies = self.model(trajectories, timesteps, global_cond=global_cond, return_energy=True, mask=mask)
+        noisy_trajectories = self.noise_scheduler.add_noise(trajectories, eps, timesteps)
+
+        global_cond = self._prepare_global_conditioning(observation_batch)
+        #timesteps = torch.full((trajectories.shape[0],), t, device=trajectories.device).long()
+        energies = self.model(noisy_trajectories, timesteps, global_cond=global_cond, return_energy=True, mask=mask)
         #sigma_t_sqr = 1 - self.noise_scheduler.alphas_cumprod[t]
 
         return energies 
@@ -611,7 +615,7 @@ class EBMDiffusionModel(nn.Module):
             positive_sample = self.noise_scheduler.add_noise(positive_trajs, eps, timesteps)
             negative_sample = self.noise_scheduler.add_noise(negative_trajs, eps, timesteps)
 
-            loss_finetune_energy_scale=0.5 #TODO: Test different values
+            loss_finetune_energy_scale=1 #TODO: Test different values
 
             # Compute energy of both samples (positive and negative)
             global_cond_concat = torch.cat([global_cond_pos, global_cond_neg], dim=0) #comparisons must have same global cond
