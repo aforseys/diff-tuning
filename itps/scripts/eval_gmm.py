@@ -94,12 +94,12 @@ def eval_energy(policy, trajs, t, conditional=False, batch_size=256):
         for i in range(0, trajs.size(0), batch_size):
             batch_traj = {'action': trajs[i:i+batch_size]}
             batch_obs = {k: v[i:i+batch_size] for k, v in obs.items()}
-            out = policy.get_energy(trajectories=batch_traj, t=t, observation_batch=batch_obs)
+            out = policy.get_energy(action_batch=batch_traj, t=t, observation_batch=batch_obs)
             outputs.append(out.detach().cpu().numpy())
         energies.append(np.concatenate(outputs, axis=0))
     return energies
 
-def vis_inference(policy, conditional, N, learned_contour=True, t=0, x_range=(-8, 8), y_range=(-8,8)):
+def vis_inference(policy, conditional, N, learned_contour=True, t=0, x_range=(-10, 10), y_range=(-10,10)):
 
      #if plotting over learned energy contour
     if learned_contour:
@@ -138,7 +138,9 @@ def vis_inference(policy, conditional, N, learned_contour=True, t=0, x_range=(-8
             title = "Energy landscape (unconditional)"
 
         plt.figure(i)
-        plt.imshow(zz, origin="lower", 
+        if learned_contour:
+            zz=-zz
+        plt.imshow(zz, origin="lower",
                     extent=[xx.min(), xx.max(), yy.min(), yy.max()],
                     aspect="auto"
                     )
@@ -266,10 +268,10 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--seed",
-        type = int,
+        type=int,
+        nargs="?",
         help="Inference seed",
-        nargs="*",
-        default=0
+        const=0
     )
 
     args = parser.parse_args()
