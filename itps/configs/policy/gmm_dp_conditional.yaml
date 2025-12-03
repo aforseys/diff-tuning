@@ -2,7 +2,7 @@
 
 seed: 100000
 dataset_repo_id: gmm
-dataset_root: 'data/gmm_conditional_1000_42_20251105_161707.npy'
+dataset_root: 'data/gmm_conditional_1000_42_20251203_145506.npy'
 
 wandb:
   enable: true
