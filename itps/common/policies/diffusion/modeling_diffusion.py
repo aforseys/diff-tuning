@@ -138,10 +138,14 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
             p.requires_grad = False
 
         # Unfreeze FiLM layers
+        trainable_params=[]
         for module in self.modules():
             if isinstance(module, DiffusionConditionalResidualBlock1d):
                 for p in module.cond_encoder.parameters():
                     p.requires_grad = True
+                    trainable_params.append(p)
+
+        return trainable_params
 
     def get_energy(self, action_batch: dict[str, Tensor], t: int, observation_batch: dict[str, Tensor]):
         observation_batch = self.normalize_inputs(observation_batch)

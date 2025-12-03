@@ -54,7 +54,9 @@ def main():
     assert isinstance(policy, nn.Module)
     policy.train()
     policy.to(device)
-    optimizer = torch.optim.Adam(policy.parameters(), lr=1e-5)
+    # Freeze all non-FiLM layers
+    trainable_params = policy.freeze_nonFiLM()
+    optimizer = torch.optim.Adam(trainable_params, lr=1e-4)
 
     # Emulate CLI arguments like:
     # python train.py env=sim policy=diffusion training.lr=1e-4
@@ -76,9 +78,6 @@ def main():
     dataset_pos = make_dataset(cfg_pos)
     dataset_neg = make_dataset(cfg_neg)
     pref_dataset = PreferencePairDataset(dataset_pos, dataset_neg)
-
-    # Freeze all non-FiLM layers
-    policy.freeze_nonFiLM()
 
     # Create dataloaders for offline training.
     dataloader = torch.utils.data.DataLoader(
