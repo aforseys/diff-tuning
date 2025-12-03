@@ -151,8 +151,12 @@ class DiffusionConfig:
 
     # Loss computation
     do_mask_loss_for_padding: bool = False
-
+    gradient_loss_weight: float = 1
     supervise_energy_landscape: bool = False
+    energy_landscape_loss_weight: float = 0.5
+    finetune_energy_lanscape: bool = False
+    finetune_loss_weight: float = 0 
+
     
     def __post_init__(self):
         """Input validation (not exhaustive)."""

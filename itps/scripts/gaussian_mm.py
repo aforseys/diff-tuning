@@ -66,12 +66,14 @@ def get_means():
 
 def get_covs():
     return [
-        np.array([[1.0, 0.6],
-                [0.6, 1.2]]),
-        np.array([[0.8, -0.3],
-                [-0.3, 0.5]]),
-        np.array([[0.6, 0.0],
-                [0.0, 0.9]]),
+        np.array([[0.5, 0.30],
+                  [0.30, 0.60]]),   # tighter version of [[1.0, 0.6],[0.6,1.2]]
+
+        np.array([[0.40, -0.15],
+                  [-0.15, 0.25]]),  # tighter version of [[0.8,-0.3],[-0.3,0.5]]
+
+        np.array([[0.30, 0.0],
+                  [0.0, 0.45]]),    # tighter version of [[0.6,0],[0,0.9]]
     ]
 
 
@@ -157,10 +159,10 @@ if __name__ == "__main__":
     # -- Comment out to generate visualizations -- 
     visualize_samples_and_pdf(dataset)
 
-    #save_dir = "data/"
-    #timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    #unconditional_file = f"gmm_unconditional_{N}_{seed}_{timestamp}.npy"
-    #conditional_file = f"gmm_conditional_{N}_{seed}_{timestamp}.npy"
+    # save_dir = "data/"
+    # timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    # unconditional_file = f"gmm_unconditional_{N}_{seed}_{timestamp}.npy"
+    # conditional_file = f"gmm_conditional_{N}_{seed}_{timestamp}.npy"
 
-    #np.save(save_dir+unconditional_file, dataset['unconditional_observation'])
-    #np.save(save_dir+conditional_file, dataset['conditional_observation'])
+    # np.save(save_dir+unconditional_file, dataset['unconditional_observation'])
+    # np.save(save_dir+conditional_file, dataset['conditional_observation'])

@@ -2,7 +2,7 @@
 
 seed: 100000
 dataset_repo_id: gmm
-dataset_root: 'data/gmm_conditional_1000_42_20251105_161707.npy'
+dataset_root: 'data/gmm_unconditional_1000_42_20251105_161707.npy'
 
 wandb:
   enable: true
@@ -99,10 +99,10 @@ policy:
   # Loss computation
   do_mask_loss_for_padding: false
 
-  gradient_loss_weight: 1
+  gradient_loss_weight: 0.5
 
-  supervise_energy_landscape: True
-  energy_landscape_loss_weight: 0.5
+  supervise_energy_landscape: false
+  energy_landscape_loss_weight: 0
 
-  finetune_energy_lanscape: false
-  finetune_loss_weight: 0
+  finetune_energy_lanscape: true
+  finetune_loss_weight: 1

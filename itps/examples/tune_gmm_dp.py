@@ -35,109 +35,114 @@ class PreferencePairDataset(torch.utils.data.Dataset):
         }
 
 
-# Create a directory to store the training checkpoint.
-cond_type = 'unconditional_tuning'
-run_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-output_directory = Path(f"outputs/tune/gmm/run_{cond_type}_{run_timestamp}")
-output_directory.mkdir(parents=True, exist_ok=True)
+def main():
+    # Create a directory to store the training checkpoint.
+    cond_type = 'unconditional_tuning'
+    run_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    output_directory = Path(f"outputs/tune/gmm/run_{cond_type}_{run_timestamp}")
+    output_directory.mkdir(parents=True, exist_ok=True)
 
-# Number of offline training steps (we'll only do offline training for this example.)
-# Adjust as you prefer. 5000 steps are needed to get something worth evaluating.
-training_steps = 1000
-device = torch.device("cuda")
-log_freq = 250
+    # Number of offline training steps (we'll only do offline training for this example.)
+    # Adjust as you prefer. 5000 steps are needed to get something worth evaluating.
+    training_steps = 1000
+    device = torch.device("cuda")
+    log_freq = 250
 
-# Make policy
-pretrained_policy_path = "outputs/train/gmm/run_unconditional_2025-11-21_13-40-06/"
-policy = DiffusionPolicy.from_pretrained(pretrained_policy_path)
-assert isinstance(policy, nn.Module)
-policy.train()
-policy.to(device)
-optimizer = torch.optim.Adam(policy.parameters(), lr=1e-5)
+    # Make policy
+    pretrained_policy_path = "outputs/train/gmm/run_unconditional_2025-11-21_13-40-06/"
+    policy = DiffusionPolicy.from_pretrained(pretrained_policy_path)
+    assert isinstance(policy, nn.Module)
+    policy.train()
+    policy.to(device)
+    optimizer = torch.optim.Adam(policy.parameters(), lr=1e-5)
 
-# Emulate CLI arguments like:
-# python train.py env=sim policy=diffusion training.lr=1e-4
-initialize(config_path="../configs")
-cfg_main = compose(
-    config_name="default",
-    overrides=[ "env=gmm", "policy=gmm_dp"]
-)
-dataset=make_dataset(cfg_main)
+    # Emulate CLI arguments like:
+    # python train.py env=sim policy=diffusion training.lr=1e-4
+    initialize(config_path="../configs")
+    cfg_main = compose(
+        config_name="default",
+        overrides=[ "env=gmm", "policy=gmm_dp_tune_base"]
+    )
+    dataset=make_dataset(cfg_main)
 
-cfg_pos = compose(
-    config_name="default",
-    overrides=[ "env=gmm", "policy=gmm_dp_tune_pos"],
-)
-cfg_neg = compose(
-    config_name="default",
-    overrides=[ "env=gmm", "policy=gmm_dp_tune_neg"]
-)
-dataset_pos = make_dataset(cfg_pos)
-dataset_neg = make_dataset(cfg_neg)
-pref_dataset = PreferencePairDataset(dataset_pos, dataset_neg)
+    cfg_pos = compose(
+        config_name="default",
+        overrides=[ "env=gmm", "policy=gmm_dp_tune_pos"],
+    )
+    cfg_neg = compose(
+        config_name="default",
+        overrides=[ "env=gmm", "policy=gmm_dp_tune_neg"]
+    )
+    dataset_pos = make_dataset(cfg_pos)
+    dataset_neg = make_dataset(cfg_neg)
+    pref_dataset = PreferencePairDataset(dataset_pos, dataset_neg)
 
-# Freeze all non-FiLM layers
-policy.freeze_nonFiLM()
+    # Freeze all non-FiLM layers
+    policy.freeze_nonFiLM()
 
-# Create dataloaders for offline training.
-dataloader = torch.utils.data.DataLoader(
-    dataset,
-    num_workers=4,
-    batch_size=64,
-    shuffle=True,
-    pin_memory=device != torch.device("cpu"),
-    drop_last=True,
-)
+    # Create dataloaders for offline training.
+    dataloader = torch.utils.data.DataLoader(
+        dataset,
+        num_workers=4,
+        batch_size=64,
+        shuffle=True,
+        pin_memory=device != torch.device("cpu"),
+        drop_last=True,
+    )
 
-pref_dataloader = torch.utils.data.DataLoader(
-    pref_dataset,
-    num_workers=4,
-    batch_size=64,
-    shuffle=True,
-    pin_memory=device != torch.device("cpu"),
-    drop_last=True,
-)
+    pref_dataloader = torch.utils.data.DataLoader(
+        pref_dataset,
+        num_workers=4,
+        batch_size=64,
+        shuffle=True,
+        pin_memory=device != torch.device("cpu"),
+        drop_last=True,
+    )
 
-# Run training loop.
-# step = 0
-# done = False
-# while not done:
-#     for batch in dataloader:
+    # Run training loop.
+    # step = 0
+    # done = False
+    # while not done:
+    #     for batch in dataloader:
 
-main_iter = iter(dataloader)
-pref_iter = iter(pref_dataloader)
+    main_iter = iter(dataloader)
+    pref_iter = iter(pref_dataloader)
 
-for step in range(training_steps):
+    for step in range(training_steps):
 
-    # --- Main dataset batch ---
-    try:
-        main_batch = next(main_iter)
-    except StopIteration:
-        main_iter = iter(dataloader)
-        main_batch = next(main_iter)
+        # --- Main dataset batch ---
+        try:
+            main_batch = next(main_iter)
+        except StopIteration:
+            main_iter = iter(dataloader)
+            main_batch = next(main_iter)
 
-    # --- Preference dataset batch ---
-    try:
-        pref_batch = next(pref_iter)
-    except StopIteration:
-        pref_iter = iter(pref_dataloader)
-        pref_batch = next(pref_iter)
+        # --- Preference dataset batch ---
+        try:
+            pref_batch = next(pref_iter)
+        except StopIteration:
+            pref_iter = iter(pref_dataloader)
+            pref_batch = next(pref_iter)
 
-    main_batch = {k: v.to(device, non_blocking=True) for k, v in main_batch.items()}
-    pos_batch = {k: v.to(device, non_blocking=True) for k, v in pref_batch["pos"].items()}
-    neg_batch = {k: v.to(device, non_blocking=True) for k, v in pref_batch["neg"].items()}
-    output_dict = policy.forward(main_batch, tune_batch=(pos_batch, neg_batch))
-    loss = output_dict["loss"]
-    loss.backward()
-    optimizer.step()
-    optimizer.zero_grad()
+        main_batch = {k: v.to(device, non_blocking=True) for k, v in main_batch.items()}
+        pos_batch = {k: v.to(device, non_blocking=True) for k, v in pref_batch["pos"].items()}
+        neg_batch = {k: v.to(device, non_blocking=True) for k, v in pref_batch["neg"].items()}
+        output_dict = policy.forward(main_batch, tune_batch=(pos_batch, neg_batch))
+        loss = output_dict["loss"]
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
 
-    if step % log_freq == 0:
-        print(f"step: {step} loss: {loss.item():.3f}")
-    step += 1
-    if step >= training_steps:
-        done = True
-        break
+        if step % log_freq == 0:
+            print(f"step: {step} loss: {loss.item():.3f}")
+        step += 1
+        if step >= training_steps:
+            done = True
+            break
 
-# Save a policy checkpoint.
-policy.save_pretrained(output_directory)
+    # Save a policy checkpoint.
+    policy.save_pretrained(output_directory)
+
+
+if __name__ == "__main__":
+    main()

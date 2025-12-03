@@ -12,8 +12,8 @@ def generate_preference_data(dataset, pref_mode):
     neg_idxs = np.where(dataset[:,0]!=pref_mode)[0] 
     neg_idxs_sub = np.random.choice(neg_idxs, size=len(pos_idxs), replace=False)
 
-    pref_dict['positive_observation'] = np.hstack(np.zeros((len(pos_idxs),1)), [dataset[:,1:][pos_idxs]])
-    pref_dict['negative_observation'] = np.hstack(np.zeros((len(pos_idxs),1)), [dataset[:,1:][neg_idxs_sub]])
+    pref_dict['positive_observation'] = np.hstack([np.zeros((len(pos_idxs),1)), dataset[:,1:][pos_idxs]])
+    pref_dict['negative_observation'] = np.hstack([np.zeros((len(pos_idxs),1)), dataset[:,1:][neg_idxs_sub]])
 
     return pref_dict 
    
@@ -49,9 +49,10 @@ if __name__ == "__main__":
 
     # IF FILE NOT PASSED IN: 
     if args.ref_dir is None:
+        print("Generating new dataset for pref data")
         N=1000
         seed=42
-        dataset = gen_dataset(N, seed)
+        dataset = gen_dataset(N, seed)['conditional_observation']
 
     else:
         dataset = np.load(args.ref_dir)
@@ -60,9 +61,9 @@ if __name__ == "__main__":
     pref_dataset = generate_preference_data(dataset, args.pref_cluster)
     plot_pref_dataset(pref_dataset)
 
-    save_dir = "data/"
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    pref_pos_file = f"gmm_unconditional_pref_cluster_{args.pref_cluster}_positive_dataset_{timestamp}.npy"
-    pref_neg_file = f"gmm_unconditional_pref_cluster_{args.pref_cluster}_negative_dataset_{timestamp}.npy"
-    np.save(save_dir+pref_pos_file, pref_dataset['positive_observation'])
-    np.save(save_dir+pref_neg_file, pref_dataset['negative_observation'])
+    # save_dir = "data/"
+    # timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    # pref_pos_file = f"gmm_unconditional_pref_cluster_{args.pref_cluster}_positive_dataset_{timestamp}.npy"
+    # pref_neg_file = f"gmm_unconditional_pref_cluster_{args.pref_cluster}_negative_dataset_{timestamp}.npy"
+    # np.save(save_dir+pref_pos_file, pref_dataset['positive_observation'])
+    # np.save(save_dir+pref_neg_file, pref_dataset['negative_observation'])

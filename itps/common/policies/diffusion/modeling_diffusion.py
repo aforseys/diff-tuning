@@ -549,7 +549,7 @@ class EBMDiffusionModel(nn.Module):
             loss = loss * mask.unsqueeze(-1)
 
         loss = einops.reduce(loss, 'b ... -> b (...)', 'mean')
-        loss = loss * extract(self.loss_weight, timesteps, loss.shape)
+        loss = loss * extract(self.loss_weight, timesteps, loss.shape) * self.config.gradient_loss_weight
         loss_mse = loss
 
         # Compute contrastive loss 
@@ -562,7 +562,6 @@ class EBMDiffusionModel(nn.Module):
 
             #TODO: Test different ways of getting corrupted sample. Below is starting point in IRED and used in itps (3x noise)
             xmin_noise = self.noise_scheduler.add_noise(trajectory, 3.0*eps, timesteps)
-            loss_energy_scale = 0.5 # TODO: test values. This is from itps, one found in IRED.
 
             # Compute energy of both samples (positive and negative)
             global_cond_concat = torch.cat([global_cond, global_cond], dim=0)
@@ -580,12 +579,13 @@ class EBMDiffusionModel(nn.Module):
             target = torch.zeros(energy_positive.size(0)).to(energy_stack.device)
             loss_energy = F.cross_entropy(-1 * energy_stack, target.long(), reduction='none')[:, None]
 
-            loss += loss_energy_scale*loss_energy
+            loss += self.config.energy_landscape_loss_weight*loss_energy
             # loss = loss_mse + loss_scale * loss_energy 
             # return loss.mean(), (loss_mse.mean(), loss_energy.mean())
 
         loss_energy_finetune=torch.tensor(-1, dtype=torch.float32)
-        if tune_batch is not None:
+        if self.config.finetune_energy_lanscape:
+            assert tune_batch is not None, "Batch for tuning must be passed in"
 
             # extract from finetune batch: 
             pos_batch, neg_batch = tune_batch
@@ -615,8 +615,6 @@ class EBMDiffusionModel(nn.Module):
             positive_sample = self.noise_scheduler.add_noise(positive_trajs, eps, timesteps)
             negative_sample = self.noise_scheduler.add_noise(negative_trajs, eps, timesteps)
 
-            loss_finetune_energy_scale=1 #TODO: Test different values
-
             # Compute energy of both samples (positive and negative)
             global_cond_concat = torch.cat([global_cond_pos, global_cond_neg], dim=0) #comparisons must have same global cond
             traj_concat = torch.cat([positive_sample, negative_sample], dim=0)
@@ -633,7 +631,7 @@ class EBMDiffusionModel(nn.Module):
             target = torch.zeros(energy_positive.size(0)).to(energy_stack.device)
             loss_energy_finetune = F.cross_entropy(-1 * energy_stack, target.long(), reduction='none')[:, None]
 
-            loss+=loss_finetune_energy_scale*loss_energy_finetune
+            loss+=self.config.finetune_loss_weight*loss_energy_finetune
 
         # else: 
         #     loss = loss_mse
