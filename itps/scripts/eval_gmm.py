@@ -99,7 +99,7 @@ def eval_energy(policy, trajs, t, conditional=False, batch_size=256):
         energies.append(np.concatenate(outputs, axis=0))
     return energies
 
-def vis_inference(policy, conditional, N, learned_contour=True, t=0, x_range=(-10, 10), y_range=(-10,10)):
+def vis_inference(policy, samples, conditional, learned_contour=True, t=0, x_range=(-10, 10), y_range=(-10,10)):
 
      #if plotting over learned energy contour
     if learned_contour:
@@ -121,7 +121,7 @@ def vis_inference(policy, conditional, N, learned_contour=True, t=0, x_range=(-1
         xx = trajs[:,0].reshape(200,200)
         yy = trajs[:,1].reshape(200,200)
 
-    samples = run_inference(policy, N=N, conditional=conditional)
+    #samples = run_inference(policy, N=N, conditional=conditional)
 
     # print('Samples collected')
     # print(trajs.shape)
@@ -146,7 +146,7 @@ def vis_inference(policy, conditional, N, learned_contour=True, t=0, x_range=(-1
                     )
         #plt.heatmap(xx, yy, zz)
         # plot where sampled points are with x's 
-        plt.scatter(samples[i][:,0], samples[i][:,1], marker='x')
+        plt.scatter(samples[i][:,0], samples[i][:,1], s=8, alpha=0.6, edgecolor='none')
         plt.xlabel("X")
         plt.ylabel("Y")
         plt.title(title)
@@ -166,18 +166,39 @@ def vis_energy_landscape(policy, conditional, t=0, x_range=(-8, 8), y_range=(-8,
 
     #plot all energy landscapes in list given trajs
     for i in range(len(energies)):
-        zz = energies[i].reshape(200,200)
+        zz = np.exp(-energies[i].reshape(200,200))
         if conditional:
             title = f"Energy landscape conditioned on cluster observation {i}"
         else:
             title = "Energy landscape (unconditional)"
 
         plt.figure(i)
-        plt.axes(projection="3d").plot_surface(xx, yy, zz, cmap="viridis", edgecolor="none")
+        ax = plt.axes(projection="3d")
+        ax.plot_surface(xx, yy, zz, cmap="viridis", edgecolor="none")
+        ax.view_init(elev=35, azim=-70)
         plt.xlabel("X")
         plt.ylabel("Y")
         plt.title(title)
         plt.show()
+
+
+def vis_sample_comparison(samples, train_data):
+
+    #train_data = np.load(training_samples_path)[:, 1:] #remove conditional obs
+    #N = np.shape(train_data)[0]
+    #samples = run_inference(policy, N=N, conditional=conditional)
+
+    for i in range(len(samples)):
+        plt.figure(i)
+        plt.scatter(train_data[:,0], train_data[:,1], s=8, alpha=0.6, edgecolor='none')
+        plt.scatter(samples[i][:,0], samples[i][:,1], s=8, alpha=0.6, edgecolor='none')
+        plt.xlabel("X")
+        plt.ylabel("Y")
+        plt.xlim(-8,8)
+        plt.ylim(-8,8)
+        plt.title(f"Samples against training data (Obs:{i})")
+        plt.show()
+
 
 def main(
     pretrained_policy_path: Path | None = None,
@@ -185,7 +206,8 @@ def main(
     out_dir: str | None = None,
     config_overrides: list[str] | None = None,
     conditional: bool | None = False,
-    seed: int | None = 0
+    seed: int | None = 0,
+    training_samples = None,
 ):
     assert (pretrained_policy_path is None) ^ (hydra_cfg_path is None)
     if hydra_cfg_path is not None:
@@ -218,11 +240,21 @@ def main(
     #print('MY CONFIG HORIZON SIZE', policy.config.horizon)
     # device = get_device_from_parameters(policy)
     set_global_seed(seed)
-    #vis_energy_landscape(policy, conditional)
-    vis_inference(policy, conditional=conditional, N=100, learned_contour=False)
-    for i in range(10):
-        vis_inference(policy, conditional=conditional, N=100, learned_contour=True, t=i*10)
+    
+    if training_samples is not None:
+        train_data = np.load(training_samples)[:, 1:] #remove conditional obs
+        N = np.shape(train_data)[0]
+        samples = run_inference(policy, N=N, conditional=conditional)
+        vis_sample_comparison(samples, train_data)
 
+    else:
+        samples=run_inference(policy, N=100, conditional=conditional)
+
+    vis_inference(policy, samples=samples, conditional=conditional, learned_contour=False)
+    
+    for i in range(10):
+         #vis_inference(policy, samples=samples, conditional=conditional, learned_contour=True, t=i*10)
+         vis_energy_landscape(policy, conditional, t=i*10)
 
 if __name__ == "__main__":
     init_logging()
@@ -254,6 +286,11 @@ if __name__ == "__main__":
             "outputs/eval/{timestamp}_{env_name}_{policy_name}"
         ),
     )
+
+
+    parser.add_argument("--training-samples", help = "Optionally provide path to original samples for visualiztion.")
+
+
     parser.add_argument(
         "overrides",
         nargs="*",
@@ -286,5 +323,6 @@ if __name__ == "__main__":
             out_dir=args.out_dir,
             config_overrides=args.overrides,
             conditional=args.conditional,
-            seed=args.seed
+            seed=args.seed,
+            training_samples=args.training_samples
         )
