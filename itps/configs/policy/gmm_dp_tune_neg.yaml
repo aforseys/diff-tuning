@@ -2,7 +2,7 @@
 
 # seed: 100000
 dataset_repo_id: gmm
-dataset_root: 'data/gmm_unconditional_pref_cluster_0_negative_dataset_20251121_133628.npy'
+dataset_root: 'data/gmm_unconditional_pref_cluster_0_negative_dataset_20251204_192929.npy'
 
 wandb:
   enable: true
