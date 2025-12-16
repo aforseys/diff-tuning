@@ -8,7 +8,7 @@ from torch import nn
 from omegaconf import OmegaConf
 from pathlib import Path
 import torch
-import datetime
+from datetime import datetime
 from itps.common.datasets.lerobot_dataset import LeRobotDataset
 from itps.common.policies.factory import make_policy
 from itps.common.datasets.factory import make_dataset
@@ -44,12 +44,13 @@ def main():
 
     # Number of offline training steps (we'll only do offline training for this example.)
     # Adjust as you prefer. 5000 steps are needed to get something worth evaluating.
-    training_steps = 1000
-    device = torch.device("cuda")
+    training_steps = 500
+    device = torch.device("cuda:1")
     log_freq = 250
 
     # Make policy
-    pretrained_policy_path = "outputs/train/gmm/run_unconditional_2025-11-21_13-40-06/"
+    #pretrained_policy_path = "outputs/train/gmm/run_unconditional_2025-12-03_15-41-36/"
+    pretrained_policy_path = "outputs/train/gmm/run_unconditional_2025-12-04_18-29-47/"
     policy = DiffusionPolicy.from_pretrained(pretrained_policy_path)
     assert isinstance(policy, nn.Module)
     policy.train()
@@ -107,6 +108,18 @@ def main():
     main_iter = iter(dataloader)
     pref_iter = iter(pref_dataloader)
 
+
+    #reset loss parameters
+    # Loss computation
+    policy.config.do_mask_loss_for_padding = cfg_main['policy']['do_mask_loss_for_padding']
+    policy.config.gradient_loss_weight = cfg_main['policy']['gradient_loss_weight']
+    policy.config.supervise_energy_landscape = cfg_main['policy']['supervise_energy_landscape']
+    policy.config.energy_landscape_loss_weight = cfg_main['policy']['energy_landscape_loss_weight']
+    policy.config.finetune_energy_landscape = cfg_main['policy']['finetune_energy_landscape']
+    policy.config.finetune_loss_weight = cfg_main['policy']['finetune_loss_weight']
+    #print(policy.diffusion.loss_weight)
+    #policy.diffusion.loss_weight = torch.ones_like(policy.diffusion.loss_weight)
+    #print(policy.diffusion.loss_weight)
     for step in range(training_steps):
 
         # --- Main dataset batch ---
