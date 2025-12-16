@@ -13,17 +13,20 @@ def sample_gmm(n_samples, weights, means, covs, seed=None):
     - seed: seed of rng
     """
     rng = np.random.default_rng(seed)
-    weights = np.asarray(weights, dtype=float)
-    weights = weights / weights.sum()  # ensure normalization
-    K = len(weights)
-
+    #weights = np.asarray(weights, dtype=float)
+    #weights = weights / weights.sum()  # ensure normalization
+    K = len(means)
+    n_samples_per_mean = [n_samples//K + (n_samples%K)*int(k==K-1) for k in range(K)] #hard coding even samples here
+    comps = np.concatenate([[k]*n_samples_per_mean[k] for k in range(K)])
     # choose components for each sample
-    comps = rng.choice(K, size=n_samples, p=weights)
+    #comps = rng.choice(K, size=n_samples, p=weights)
 
     # sample from each chosen component
     X = np.zeros((n_samples, 2))
     for k in range(K):
         idx = np.where(comps == k)[0]
+        print('idx:', k)
+        print('idx size:', idx.size)
         if idx.size:
             X[idx] = rng.multivariate_normal(mean=means[k], cov=covs[k], size=idx.size)
     return X, comps
@@ -55,7 +58,8 @@ def gen_samples(weights, means, covs, N, seed):
     return X, comps
 
 def get_weights():
-    return  np.array([0.45, 0.35, 0.20])
+     return np.array([1.0, 1.0, 1.0])
+#    return  np.array([0.45, 0.35, 0.20])
 
 def get_means():
     return [
@@ -66,15 +70,25 @@ def get_means():
 
 def get_covs():
     return [
-        np.array([[0.5, 0.30],
-                  [0.30, 0.60]]),   # tighter version of [[1.0, 0.6],[0.6,1.2]]
+        np.array([[0.10, 0.0],
+                  [0.0, 0.10]]),   # tighter version of [[1.0, 0.6],[0.6,1.2]]
 
-        np.array([[0.40, -0.15],
-                  [-0.15, 0.25]]),  # tighter version of [[0.8,-0.3],[-0.3,0.5]]
+        np.array([[0.10, 0.0],
+                  [0.0, 0.10]]),  # tighter version of [[0.8,-0.3],[-0.3,0.5]]
 
-        np.array([[0.30, 0.0],
-                  [0.0, 0.45]]),    # tighter version of [[0.6,0],[0,0.9]]
+        np.array([[0.10, 0.0],
+                  [0.0, 0.10]]),    # tighter version of [[0.6,0],[0,0.9]]
     ]
+    #return [
+      #  np.array([[0.5, 0.30],
+      #            [0.30, 0.60]]),   # tighter version of [[1.0, 0.6],[0.6,1.2]]
+
+     #   np.array([[0.40, -0.15],
+     #             [-0.15, 0.25]]),  # tighter version of [[0.8,-0.3],[-0.3,0.5]]
+
+    #    np.array([[0.30, 0.0],
+    #              [0.0, 0.45]]),    # tighter version of [[0.6,0],[0,0.9]]
+    #]
 
 
 def gen_dataset(N, seed):
@@ -159,10 +173,10 @@ if __name__ == "__main__":
     # -- Comment out to generate visualizations -- 
     visualize_samples_and_pdf(dataset)
 
-    # save_dir = "data/"
-    # timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    # unconditional_file = f"gmm_unconditional_{N}_{seed}_{timestamp}.npy"
-    # conditional_file = f"gmm_conditional_{N}_{seed}_{timestamp}.npy"
+    save_dir = "data/"
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    unconditional_file = f"gmm_unconditional_{N}_{seed}_{timestamp}.npy"
+    conditional_file = f"gmm_conditional_{N}_{seed}_{timestamp}.npy"
 
-    # np.save(save_dir+unconditional_file, dataset['unconditional_observation'])
-    # np.save(save_dir+conditional_file, dataset['conditional_observation'])
+#    np.save(save_dir+unconditional_file, dataset['unconditional_observation'])
+#    np.save(save_dir+conditional_file, dataset['conditional_observation'])
