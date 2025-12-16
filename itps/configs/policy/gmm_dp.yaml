@@ -2,7 +2,7 @@
 
 seed: 100000
 dataset_repo_id: gmm
-dataset_root: 'data/gmm_unconditional_1000_42_20251203_145506.npy'
+dataset_root: 'data/gmm_unconditional_1000_42_20251204_174604.npy'
 
 wandb:
   enable: true
@@ -34,7 +34,7 @@ training:
   adam_weight_decay: 1.0e-6
   online_steps_between_rollouts: 1
 
-  delta_timestamps: 
+  delta_timestamps:
     observation.environment_state: "[0]"
     observation.state: "[0]"
     action: "[0]"
@@ -104,5 +104,5 @@ policy:
   supervise_energy_landscape: True
   energy_landscape_loss_weight: 0.5
 
-  finetune_energy_lanscape: false
+  finetune_energy_landscape: false
   finetune_loss_weight: 0
