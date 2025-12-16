@@ -154,10 +154,10 @@ class DiffusionConfig:
     gradient_loss_weight: float = 1
     supervise_energy_landscape: bool = False
     energy_landscape_loss_weight: float = 0.5
-    finetune_energy_lanscape: bool = False
-    finetune_loss_weight: float = 0 
+    finetune_energy_landscape: bool = False
+    finetune_loss_weight: float = 0
 
-    
+
     def __post_init__(self):
         """Input validation (not exhaustive)."""
         if not self.vision_backbone.startswith("resnet"):
