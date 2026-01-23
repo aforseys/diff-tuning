@@ -99,7 +99,7 @@ policy:
   # Loss computation
   do_mask_loss_for_padding: false
 
-  gradient_loss_weight: 1
+  gradient_loss_weight: 0.001
 
   supervise_energy_landscape: false
   energy_landscape_loss_weight: 0.0

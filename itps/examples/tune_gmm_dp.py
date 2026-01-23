@@ -44,7 +44,7 @@ def main():
 
     # Number of offline training steps (we'll only do offline training for this example.)
     # Adjust as you prefer. 5000 steps are needed to get something worth evaluating.
-    training_steps = 500
+    training_steps = 1
     device = torch.device("cuda:1")
     log_freq = 250
 
@@ -57,7 +57,7 @@ def main():
     policy.to(device)
     # Freeze all non-FiLM layers
     trainable_params = policy.freeze_nonFiLM()
-    optimizer = torch.optim.Adam(trainable_params, lr=1e-4)
+    optimizer = torch.optim.Adam(trainable_params, lr=1e-3)
 
     # Emulate CLI arguments like:
     # python train.py env=sim policy=diffusion training.lr=1e-4

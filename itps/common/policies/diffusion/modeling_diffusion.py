@@ -110,6 +110,11 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
             )
         gen_actions = self.diffusion.generate_actions(observation_batch, guide=guide, visualizer=visualizer, normalizer=self,return_full=return_full)
         #print('gen actions output:', gen_actions['actions'].shape)
+        energies = self.diffusion.get_traj_energies(gen_actions['actions'], t=0, observation_batch=observation_batch).detach().cpu().numpy()
+        #print(energies)
+        #print(np.min(energies))
+        #print(np.max(energies))
+        #print(np.mean(energies))
         actions = self.unnormalize_outputs({"action": gen_actions['actions']})["action"]
         #print('actions after unnormalization output:', actions.shape)
         if return_full: 
@@ -125,12 +130,19 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
     def forward(self, batch: dict[str, Tensor], tune_batch: dict[str, Tensor]= None) -> dict[str, Tensor]:
         """Run the batch through the model and compute the loss for training or validation."""
         batch = self.normalize_inputs(batch)
+        if tune_batch is not None:
+            pos_batch, neg_batch = tune_batch
+            pos_batch = self.normalize_inputs(pos_batch)
+            pos_batch = self.normalize_targets(pos_batch)
+            neg_batch = self.normalize_inputs(neg_batch)
+            neg_batch = self.normalize_targets(neg_batch)
+            tune_batch = (pos_batch, neg_batch) 
         if len(self.expected_image_keys) > 0: #TODO: Need to make shallow copy here? (Done in Irene's code)
             batch["observation.images"] = torch.stack([batch[k] for k in self.expected_image_keys], dim=-4)
         batch = self.normalize_targets(batch)
         loss, (loss_denoise, loss_energy, loss_finetune) = self.diffusion.compute_loss(batch, tune_batch)
         return {"loss": loss, "loss_breakdown": {"MSE": loss_denoise, "energy_landscape": loss_energy, "pref_tuning": loss_finetune}}
-    
+   
     def freeze_nonFiLM(self):
 
         # Freeze all parameters
@@ -246,9 +258,10 @@ class EBMDiffusionModel(nn.Module):
         alphas_cumprod=self.noise_scheduler.alphas_cumprod
         snr = alphas_cumprod / (1-alphas_cumprod)
         if self.config.prediction_type == "epsilon":
-            loss_weight = torch.ones_like(snr)
+            #loss_weight = torch.ones_like(snr)
+            loss_weight= snr/(snr+1) # = alphas_cumprod / (1 - alphas_cumprod)
         elif self.config.prediction_type == "sample":
-            loss_weight = snr 
+            loss_weight = snr
         else:
             raise NotImplementedError("Prediction type not recognized")
         register_buffer('loss_weight', loss_weight)
@@ -555,8 +568,10 @@ class EBMDiffusionModel(nn.Module):
         loss = einops.reduce(loss, 'b ... -> b (...)', 'mean')
         loss = loss * extract(self.loss_weight, timesteps, loss.shape) * self.config.gradient_loss_weight
         loss_mse = loss
-
-        # Compute contrastive loss 
+        #mse_grad = torch.autograd.grad([loss_mse.sum()], [noisy_trajectory], create_graph=True)[0]
+        #print("mean mse_grad:", [mse_grad.min(), mse_grad.max(), mse_grad.mean()])
+        #print('loss mse:', loss_mse)
+        # Compute contrastive loss
         loss_energy=torch.tensor(-1, dtype=torch.float32)
         if self.config.supervise_energy_landscape:
 
@@ -565,7 +580,7 @@ class EBMDiffusionModel(nn.Module):
             data_sample = self.noise_scheduler.add_noise(trajectory, eps, timesteps)
 
             #TODO: Test different ways of getting corrupted sample. Below is starting point in IRED and used in itps (3x noise)
-            xmin_noise = self.noise_scheduler.add_noise(trajectory, 3.0*eps, timesteps)
+            xmin_noise = self.noise_scheduler.add_noise(trajectory, 2.0*eps, timesteps)
 
             # Compute energy of both samples (positive and negative)
             global_cond_concat = torch.cat([global_cond, global_cond], dim=0)
@@ -582,16 +597,18 @@ class EBMDiffusionModel(nn.Module):
             energy_stack = torch.cat([energy_positive, energy_negative], dim=-1)
             target = torch.zeros(energy_positive.size(0)).to(energy_stack.device)
             loss_energy = F.cross_entropy(-1 * energy_stack, target.long(), reduction='none')[:, None]
-
+            #energy_grad = torch.autograd.grad([loss_energy.sum()], [traj_concat], create_graph=True)[0]
+            #print('Grad of contrastive loss:', [energy_grad.min(), energy_grad.max(), energy_grad.mean()])
             loss += self.config.energy_landscape_loss_weight*loss_energy
             # loss = loss_mse + loss_scale * loss_energy 
             # return loss.mean(), (loss_mse.mean(), loss_energy.mean())
-
+        #print('energy landscape loss:', loss_energy)
+        #print('loss:', loss)
         loss_energy_finetune=torch.tensor(-1, dtype=torch.float32)
-        if self.config.finetune_energy_lanscape:
+        if self.config.finetune_energy_landscape:
             assert tune_batch is not None, "Batch for tuning must be passed in"
 
-            # extract from finetune batch: 
+            # extract from finetune batch:
             pos_batch, neg_batch = tune_batch
             global_cond_pos = self._prepare_global_conditioning(pos_batch)
             global_cond_neg = self._prepare_global_conditioning(neg_batch)
@@ -625,7 +642,7 @@ class EBMDiffusionModel(nn.Module):
             t_concat = torch.cat([timesteps, timesteps], dim=0)
             if pos_batch_mask is not None:
                 mask_concat = torch.cat([pos_batch_mask, neg_batch_mask], dim=0)
-            else: 
+            else:
                 mask_concat = None
             energy = self.model(traj_concat, t_concat, global_cond=global_cond_concat, return_energy=True, mask=mask_concat)
 
@@ -634,9 +651,11 @@ class EBMDiffusionModel(nn.Module):
             energy_stack = torch.cat([energy_positive, energy_negative], dim=-1)
             target = torch.zeros(energy_positive.size(0)).to(energy_stack.device)
             loss_energy_finetune = F.cross_entropy(-1 * energy_stack, target.long(), reduction='none')[:, None]
-
+            #grad_energy_finetune = torch.autograd.grad([loss_energy_finetune.sum()], [traj_concat], create_graph=True)[0]
+            #print('mean loss energy finetune grad:', [grad_energy_finetune.min(), grad_energy_finetune.max(), grad_energy_finetune.mean()])
             loss+=self.config.finetune_loss_weight*loss_energy_finetune
-
+            #print('mean of loss finetune:', loss_energy_finetune.mean())
+            #print('weighted mean of loss finetune:', self.config.finetune_loss_weight*loss_energy_finetune.mean())
         # else: 
         #     loss = loss_mse
         return loss.mean(), (loss_mse.mean(), loss_energy.mean(), loss_energy_finetune.mean())
