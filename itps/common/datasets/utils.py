@@ -124,20 +124,25 @@ def load_hf_dataset(repo_id: str, version: str, root: Path, split: str) -> datas
                 observations = np.array(hdf5_file['observations'])[:1000004][::4]
                 timeouts = np.array(hdf5_file['timeouts'])[:1000000][::4]
 
-            def create_episode_and_frame_indices(timeouts):
+            def create_episode_and_frame_indices(timeouts, observations):
                 episode_endings = np.where(timeouts)[0]  # Indices where episodes end
                 episode_lengths = np.diff(np.concatenate(([0], episode_endings + 1)))  # Lengths of episodes
+                print("Total episode endings", len(episode_endings))
                 # Add the length of the last episode (from the last timeout to the end)
                 last_episode_length = len(timeouts) - episode_endings[-1] - 1
                 episode_lengths = np.append(episode_lengths, last_episode_length)
+                # Get final episode states
+                episode_endings = np.cumsum(episode_lengths) - 1
+                final_observations = observations[episode_endings, :2]
+                episode_goal = np.repeat(final_observations, episode_lengths, axis=0)
                 # Generate episode indices by repeating the episode number for each episode length
                 episode_index = np.repeat(np.arange(len(episode_lengths)), episode_lengths)
                 # Generate frame indices by concatenating ranges for each episode, restarting from 0
                 frame_index = np.concatenate([np.arange(length) for length in episode_lengths])
                 index = np.arange(len(timeouts))
-                return episode_index, frame_index, index
+                return episode_index, frame_index, index, episode_goal
             
-            episode_index, frame_index, index = create_episode_and_frame_indices(timeouts)
+            episode_index, frame_index, index, episode_goal = create_episode_and_frame_indices(timeouts)
             data_dict = {
                 'observation.state': observations[:-1, :2],
                 'observation.environment_state': observations[:-1, :2],
@@ -145,7 +150,8 @@ def load_hf_dataset(repo_id: str, version: str, root: Path, split: str) -> datas
                 'episode_index': episode_index,
                 'frame_index': frame_index,
                 'timestamp': np.copy(frame_index)/10.0,
-                'index': index
+                'index': index,
+                'episode_goal': episode_goal,
             }
             hf_dataset = datasets.Dataset.from_dict(data_dict)
 

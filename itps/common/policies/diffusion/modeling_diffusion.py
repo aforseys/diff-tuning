@@ -74,8 +74,12 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
             config = DiffusionConfig()
         self.config = config
         self.normalize_inputs = Normalize(
-            config.input_shapes, config.input_normalization_modes, dataset_stats
+            config.input_shapes, 
+            config.input_normalization_modes, 
+            dataset_stats, 
+            stats_mapping={"episode_goal": "observation.state"}  # Goal uses state's normalization stats
         )
+        
         self.normalize_targets = Normalize(
             config.output_shapes, config.output_normalization_modes, dataset_stats
         )
@@ -90,6 +94,7 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
 
         self.expected_image_keys = [k for k in config.input_shapes if k.startswith("observation.image")]
         self.use_env_state = "observation.environment_state" in config.input_shapes
+        self.use_goal_cond = "episode_goal" in config.input_shapes
 
     @property
     def n_obs_steps(self) -> int:
@@ -230,6 +235,7 @@ class EBMDiffusionModel(nn.Module):
         num_images = len([k for k in config.input_shapes if k.startswith("observation.image")])
         self._use_images = False
         self._use_env_state = False
+        self._use_goal_cond = False
         if num_images > 0:
             self._use_images = True
             self.rgb_encoder = DiffusionRgbEncoder(config)
@@ -237,6 +243,9 @@ class EBMDiffusionModel(nn.Module):
         if "observation.environment_state" in config.input_shapes:
             self._use_env_state = True
             global_cond_dim += config.input_shapes["observation.environment_state"][0]
+        if "episode_goal" in config.input_shapes:
+            self._use_goal_cond = True
+            global_cond_dim += config.input_shapes["episode_goal"][0]
 
         self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps) 
         self.model = EBMWrapper(self.unet)
@@ -396,6 +405,9 @@ class EBMDiffusionModel(nn.Module):
 
         if self._use_env_state:
             global_cond_feats.append(batch["observation.environment_state"])
+
+        if self._use_goal_cond:
+            global_cond_feats.append(batch["episode_goal"])
 
         # Concatenate features then flatten to (B, global_cond_dim).
         return torch.cat(global_cond_feats, dim=-1).flatten(start_dim=1)

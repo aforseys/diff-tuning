@@ -21,6 +21,7 @@ def create_stats_buffers(
     shapes: dict[str, list[int]],
     modes: dict[str, str],
     stats: dict[str, dict[str, Tensor]] | None = None,
+    stats_mapping: dict[str, str] | None = None, 
 ) -> dict[str, dict[str, nn.ParameterDict]]:
     """
     Create buffers per modality (e.g. "observation.image", "action") containing their mean, std, min, max
@@ -35,55 +36,58 @@ def create_stats_buffers(
     stats_buffers = {}
 
     for key, mode in modes.items():
-        assert mode in ["mean_std", "min_max"]
 
-        shape = tuple(shapes[key])
+        if key not in stats_mapping: # Skip attributes that will reuse statistics of others
 
-        if "image" in key:
-            # sanity checks
-            assert len(shape) == 3, f"number of dimensions of {key} != 3 ({shape=}"
-            c, h, w = shape
-            assert c < h and c < w, f"{key} is not channel first ({shape=})"
-            # override image shape to be invariant to height and width
-            shape = (c, 1, 1)
+            assert mode in ["mean_std", "min_max"]
 
-        # Note: we initialize mean, std, min, max to infinity. They should be overwritten
-        # downstream by `stats` or `policy.load_state_dict`, as expected. During forward,
-        # we assert they are not infinity anymore.
+            shape = tuple(shapes[key])
 
-        buffer = {}
-        if mode == "mean_std":
-            mean = torch.ones(shape, dtype=torch.float32) * torch.inf
-            std = torch.ones(shape, dtype=torch.float32) * torch.inf
-            buffer = nn.ParameterDict(
-                {
-                    "mean": nn.Parameter(mean, requires_grad=False),
-                    "std": nn.Parameter(std, requires_grad=False),
-                }
-            )
-        elif mode == "min_max":
-            min = torch.ones(shape, dtype=torch.float32) * torch.inf
-            max = torch.ones(shape, dtype=torch.float32) * torch.inf
-            buffer = nn.ParameterDict(
-                {
-                    "min": nn.Parameter(min, requires_grad=False),
-                    "max": nn.Parameter(max, requires_grad=False),
-                }
-            )
+            if "image" in key:
+                # sanity checks
+                assert len(shape) == 3, f"number of dimensions of {key} != 3 ({shape=}"
+                c, h, w = shape
+                assert c < h and c < w, f"{key} is not channel first ({shape=})"
+                # override image shape to be invariant to height and width
+                shape = (c, 1, 1)
 
-        if stats is not None:
-            # Note: The clone is needed to make sure that the logic in save_pretrained doesn't see duplicated
-            # tensors anywhere (for example, when we use the same stats for normalization and
-            # unnormalization). See the logic here
-            # https://github.com/huggingface/safetensors/blob/079781fd0dc455ba0fe851e2b4507c33d0c0d407/bindings/python/py_src/safetensors/torch.py#L97.
+            # Note: we initialize mean, std, min, max to infinity. They should be overwritten
+            # downstream by `stats` or `policy.load_state_dict`, as expected. During forward,
+            # we assert they are not infinity anymore.
+
+            buffer = {}
             if mode == "mean_std":
-                buffer["mean"].data = stats[key]["mean"].clone()
-                buffer["std"].data = stats[key]["std"].clone()
+                mean = torch.ones(shape, dtype=torch.float32) * torch.inf
+                std = torch.ones(shape, dtype=torch.float32) * torch.inf
+                buffer = nn.ParameterDict(
+                    {
+                        "mean": nn.Parameter(mean, requires_grad=False),
+                        "std": nn.Parameter(std, requires_grad=False),
+                    }
+                )
             elif mode == "min_max":
-                buffer["min"].data = stats[key]["min"].clone()
-                buffer["max"].data = stats[key]["max"].clone()
+                min = torch.ones(shape, dtype=torch.float32) * torch.inf
+                max = torch.ones(shape, dtype=torch.float32) * torch.inf
+                buffer = nn.ParameterDict(
+                    {
+                        "min": nn.Parameter(min, requires_grad=False),
+                        "max": nn.Parameter(max, requires_grad=False),
+                    }
+                )
 
-        stats_buffers[key] = buffer
+            if stats is not None:
+                # Note: The clone is needed to make sure that the logic in save_pretrained doesn't see duplicated
+                # tensors anywhere (for example, when we use the same stats for normalization and
+                # unnormalization). See the logic here
+                # https://github.com/huggingface/safetensors/blob/079781fd0dc455ba0fe851e2b4507c33d0c0d407/bindings/python/py_src/safetensors/torch.py#L97.
+                if mode == "mean_std":
+                    buffer["mean"].data = stats[key]["mean"].clone()
+                    buffer["std"].data = stats[key]["std"].clone()
+                elif mode == "min_max":
+                    buffer["min"].data = stats[key]["min"].clone()
+                    buffer["max"].data = stats[key]["max"].clone()
+
+            stats_buffers[key] = buffer
     return stats_buffers
 
 
@@ -102,6 +106,7 @@ class Normalize(nn.Module):
         shapes: dict[str, list[int]],
         modes: dict[str, str],
         stats: dict[str, dict[str, Tensor]] | None = None,
+        stats_mapping: dict [str, str] | None = None,
     ):
         """
         Args:
@@ -125,9 +130,17 @@ class Normalize(nn.Module):
         self.shapes = shapes
         self.modes = modes
         self.stats = stats
-        stats_buffers = create_stats_buffers(shapes, modes, stats)
+        self.stats_mapping = stats_mapping or {}
+        stats_buffers = create_stats_buffers(shapes, modes, stats, stats_mapping)
         for key, buffer in stats_buffers.items():
             setattr(self, "buffer_" + key.replace(".", "_"), buffer)
+
+        # Create aliased buffers for keys that should use stats from other keys (goals) #TODO: CHECK APPROPRIATE DIM SIZE (NO MISMATCH)
+        for target_key, source_key in self.stats_mapping.items():
+            if target_key in self.modes:  # Only create alias if target_key is actually normalized
+                # Point to the same buffer object
+                source_buffer = getattr(self, "buffer_" + source_key.replace(".", "_"))
+                setattr(self, "buffer_" + target_key.replace(".", "_"), source_buffer)
 
     # TODO(rcadene): should we remove torch.no_grad?
     @torch.no_grad
