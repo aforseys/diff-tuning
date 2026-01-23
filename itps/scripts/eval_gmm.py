@@ -249,11 +249,13 @@ def main(
 
     else:
         samples=run_inference(policy, N=100, conditional=conditional)
+        for obs_samples in samples:
+             print(np.mean(np.array(obs_samples),axis=0))
 
     vis_inference(policy, samples=samples, conditional=conditional, learned_contour=False)
     
     for i in range(10):
-         #vis_inference(policy, samples=samples, conditional=conditional, learned_contour=True, t=i*10)
+         vis_inference(policy, samples=samples, conditional=conditional, learned_contour=True, t=i*10)
          vis_energy_landscape(policy, conditional, t=i*10)
 
 if __name__ == "__main__":
