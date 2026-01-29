@@ -163,16 +163,16 @@ class MazeEnv:
             for idx, pred in enumerate(xy_pred):
                 for step_idx in range(len(pred) - 1):
                     color = (time_colors[step_idx, :3] * 255).astype(int)
-                    
+
                     # visualize constraint violations (collisions) by tinting trajectories white
-                    whiteness_factor = 0.8 if collisions[idx] else 0.0 
+                    whiteness_factor = 0.8 if collisions[idx] else 0.0
                     color = self.blend_with_white(color, whiteness_factor)
-                    if scores is None: 
+                    if scores is None:
                         circle_size = 5 if collisions[idx] else 5
                     else: # when similarity scores are provided, visualizing them by changing the trajectory size
                         print('Scores:', scores)
                         #circle_size = int(3 + 20 * scores[idx])
-                        circle_size = int(1+ scores)
+                        circle_size = int(150- scores[idx])
                         print('circle size:', circle_size)
                     if traj_in_gui_space:
                         start_pos = pred[step_idx]
@@ -245,7 +245,7 @@ class UnconditionalMaze(MazeEnv):
                 actions = self.policy.run_inference(obs_batch).cpu().numpy()
             elif return_energy:
                 actions, energy = self.policy.run_inference(obs_batch, guide=guide, visualizer=visualizer, return_energy=True) # directly call the policy in order to visualize the intermediate steps
-                return actions.detach().cpu().numpy(), energy.detach().cpu().numpy()
+                return actions.detach().cpu().numpy(), energy.detach().cpu().numpy().squeeze()
             else:
                 actions = self.policy.run_inference(obs_batch, guide=guide, visualizer=visualizer).cpu().numpy() # directly call the policy in order to visualize the intermediate steps
         return actions
@@ -472,7 +472,7 @@ class MazeExp(ConditionalMaze):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('-c', "--checkpoint", type=str, help="Path to the checkpoint")
+    parser.add_argument('-c', "--checkpoint", type=str, default=None,  help="Path to the checkpoint")
     parser.add_argument('-p', '--policy', required=True, type=str, help="Policy name")
     parser.add_argument('-u', '--unconditional', action='store_true', help="Unconditional Maze")
     parser.add_argument('-op', '--output-perturb', action='store_true', help="Output perturbation")
@@ -503,8 +503,11 @@ if __name__ == "__main__":
         alignment_strategy = 'stochastic-sampling'
 
     if args.policy in ["diffusion", "dp"]:
-        # checkpoint_path = 'weights_dp'
-        checkpoint_path = 'weights_maze2d_energy_dp_100k'
+        if args.checkpoint is not None:
+             checkpoint_path = args.checkpoint
+        else:
+             checkpoint_path = 'weights_dp_energy'
+        # checkpoint_path = 'weights_maze2d_energy_dp_100k'
     elif args.policy in ["act"]:
         checkpoint_path = 'weights_act'
     else:
