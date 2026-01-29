@@ -55,7 +55,8 @@ for batch in dataloader:
     print(f"{batch['observation.environment_state'].shape=}")  # (32,4,c,h,w)
     print(f"{batch['observation.state'].shape=}")  # (32,8,c)
     print(f"{batch['action'].shape=}")  # (32,64,c)
-    if 'action_is_pad' in batch: 
+    print(f"{batch['episode_goal'].shape=}")
+    if 'action_is_pad' in batch:
         print('Includes padded actions')
         print('Pads:', batch['action_is_pad'])
         print('Pad counts:', batch['action_is_pad'].sum(dim=1))
@@ -85,6 +86,7 @@ delta_timestamps = {
     "observation.state": [-1.5, -1, -0.5, -0.20, -0.10, -0.02, -0.01, 0],
     # loads 64 action vectors: current frame, 1 frame in the future, 2 frames, ... 63 frames in the future
     "action": [t / dataset.fps for t in range(64)],
+    "episode_goal": [0],
 }
 dataset = LeRobotDataset(repo_id, 'data/maze2d-large-sparse-v1.hdf5', split=None, delta_timestamps=delta_timestamps)
 print(f"\n{dataset[0]['observation.environment_state'].shape=}")  # (4,c,h,w)
@@ -103,6 +105,7 @@ for batch in dataloader:
     print(f"{batch['observation.environment_state'].shape=}")  # (32,4,c,h,w)
     print(f"{batch['observation.state'].shape=}")  # (32,8,c)
     print(f"{batch['action'].shape=}")  # (32,64,c)
+    print(f"{batch['episode_goal'].shape=}")
     if 'action_is_pad' in batch: 
         print('Includes padded actions')
         print('Pads:', batch['action_is_pad'])
