@@ -121,13 +121,19 @@ def load_hf_dataset(repo_id: str, version: str, root: Path, split: str) -> datas
             import numpy as np
             with h5py.File(root, 'r') as hdf5_file:
                 # skip every 4th frame to match the original dataset
-                observations = np.array(hdf5_file['observations'])[:1000004][::4]
-                timeouts = np.array(hdf5_file['timeouts'])[:1000000][::4]
+                observations = np.array(hdf5_file['observations'])
+                timeouts = np.array(hdf5_file['timeouts'])
+                if len(observations)>1000000:
+                    state_index = 1000000
+                else:
+                    state_index = len(observations)
+
+                observations = observations[:state_index][::4]
+                timeouts = timeouts[:state_index-4][::4]
 
             def create_episode_and_frame_indices(timeouts, observations):
                 episode_endings = np.where(timeouts)[0]  # Indices where episodes end
                 episode_lengths = np.diff(np.concatenate(([0], episode_endings + 1)))  # Lengths of episodes
-                print("Total episode endings", len(episode_endings))
                 # Add the length of the last episode (from the last timeout to the end)
                 last_episode_length = len(timeouts) - episode_endings[-1] - 1
                 episode_lengths = np.append(episode_lengths, last_episode_length)
@@ -141,8 +147,8 @@ def load_hf_dataset(repo_id: str, version: str, root: Path, split: str) -> datas
                 frame_index = np.concatenate([np.arange(length) for length in episode_lengths])
                 index = np.arange(len(timeouts))
                 return episode_index, frame_index, index, episode_goal
-            
-            episode_index, frame_index, index, episode_goal = create_episode_and_frame_indices(timeouts)
+
+            episode_index, frame_index, index, episode_goal = create_episode_and_frame_indices(timeouts, observations)
             data_dict = {
                 'observation.state': observations[:-1, :2],
                 'observation.environment_state': observations[:-1, :2],

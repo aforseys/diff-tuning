@@ -20,8 +20,8 @@ from torch import Tensor, nn
 def create_stats_buffers(
     shapes: dict[str, list[int]],
     modes: dict[str, str],
+    stats_mapping: dict[str, str],
     stats: dict[str, dict[str, Tensor]] | None = None,
-    stats_mapping: dict[str, str] | None = None, 
 ) -> dict[str, dict[str, nn.ParameterDict]]:
     """
     Create buffers per modality (e.g. "observation.image", "action") containing their mean, std, min, max
@@ -131,7 +131,7 @@ class Normalize(nn.Module):
         self.modes = modes
         self.stats = stats
         self.stats_mapping = stats_mapping or {}
-        stats_buffers = create_stats_buffers(shapes, modes, stats, stats_mapping)
+        stats_buffers = create_stats_buffers(shapes, modes, self.stats_mapping, stats)
         for key, buffer in stats_buffers.items():
             setattr(self, "buffer_" + key.replace(".", "_"), buffer)
 
@@ -179,6 +179,7 @@ class Unnormalize(nn.Module):
         shapes: dict[str, list[int]],
         modes: dict[str, str],
         stats: dict[str, dict[str, Tensor]] | None = None,
+        stats_mapping: dict[str,str] | None = None
     ):
         """
         Args:
@@ -202,8 +203,9 @@ class Unnormalize(nn.Module):
         self.shapes = shapes
         self.modes = modes
         self.stats = stats
+        self.stats_mapping = stats_mapping or {}
         # `self.buffer_observation_state["mean"]` contains `torch.tensor(state_dim)`
-        stats_buffers = create_stats_buffers(shapes, modes, stats)
+        stats_buffers = create_stats_buffers(shapes, modes, self.stats_mapping, stats)
         for key, buffer in stats_buffers.items():
             setattr(self, "buffer_" + key.replace(".", "_"), buffer)
 

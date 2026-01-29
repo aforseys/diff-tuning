@@ -105,7 +105,7 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
         return set(self.config.input_shapes)
 
     @torch.no_grad 
-    def run_inference(self, observation_batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, return_full=False) -> Tensor:
+    def run_inference(self, observation_batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, return_full=False, return_energy=False) -> Tensor:
         observation_batch = self.normalize_inputs(observation_batch)
         if guide is not None:
             guide = self.normalize_targets({"action": guide})["action"]
@@ -115,21 +115,21 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
             )
         gen_actions = self.diffusion.generate_actions(observation_batch, guide=guide, visualizer=visualizer, normalizer=self,return_full=return_full)
         #print('gen actions output:', gen_actions['actions'].shape)
-        energies = self.diffusion.get_traj_energies(gen_actions['actions'], t=0, observation_batch=observation_batch).detach().cpu().numpy()
+        energies = self.diffusion.get_traj_energies(gen_actions['actions'], t=0, observation_batch=observation_batch)
         #print(energies)
         #print(np.min(energies))
         #print(np.max(energies))
         #print(np.mean(energies))
         actions = self.unnormalize_outputs({"action": gen_actions['actions']})["action"]
         #print('actions after unnormalization output:', actions.shape)
-        if return_full: 
+        if return_full:
             full_traj = self.unnormalize_outputs({"action": gen_actions['full_traj']})["action"]
             return actions, full_traj
-        #     if return_energy:
-        #         return actions, gen_actions['energy'], full_traj
-        # elif return_energy:
-        #     return actions, gen_actions['energy']
-        
+        #elif return_energy:
+        #    return actions, gen_actions['energy'], full_traj
+        elif return_energy:
+            return actions, energies
+
         return actions
 
     def forward(self, batch: dict[str, Tensor], tune_batch: dict[str, Tensor]= None) -> dict[str, Tensor]:
@@ -231,7 +231,7 @@ class EBMDiffusionModel(nn.Module):
         self.config = config
 
         # Build observation encoders (depending on which observations are provided).
-        global_cond_dim = config.input_shapes["observation.state"][0]
+        global_cond_dim = config.input_shapes["observation.state"][0] * config.n_obs_steps
         num_images = len([k for k in config.input_shapes if k.startswith("observation.image")])
         self._use_images = False
         self._use_env_state = False
@@ -239,15 +239,15 @@ class EBMDiffusionModel(nn.Module):
         if num_images > 0:
             self._use_images = True
             self.rgb_encoder = DiffusionRgbEncoder(config)
-            global_cond_dim += self.rgb_encoder.feature_dim * num_images
+            global_cond_dim += self.rgb_encoder.feature_dim * num_images *config.n_obs_steps
         if "observation.environment_state" in config.input_shapes:
             self._use_env_state = True
-            global_cond_dim += config.input_shapes["observation.environment_state"][0]
+            global_cond_dim += config.input_shapes["observation.environment_state"][0] * config.n_obs_steps
         if "episode_goal" in config.input_shapes:
             self._use_goal_cond = True
             global_cond_dim += config.input_shapes["episode_goal"][0]
-
-        self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps) 
+        #print('GLOBAL COND DIM', global_cond_dim)
+        self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim) 
         self.model = EBMWrapper(self.unet)
 
         self.noise_scheduler = _make_noise_scheduler(
@@ -406,11 +406,17 @@ class EBMDiffusionModel(nn.Module):
         if self._use_env_state:
             global_cond_feats.append(batch["observation.environment_state"])
 
-        if self._use_goal_cond:
-            global_cond_feats.append(batch["episode_goal"])
-
         # Concatenate features then flatten to (B, global_cond_dim).
-        return torch.cat(global_cond_feats, dim=-1).flatten(start_dim=1)
+        global_cond = torch.cat(global_cond_feats, dim=-1).flatten(start_dim=1)
+
+        # If goal conditioned, flatten goal separately and add
+        if self._use_goal_cond:
+             flat_goal = batch["episode_goal"].flatten(start_dim=1)
+             #print('REAL DIM', torch.cat([global_cond, flat_goal], dim=-1).size())
+             return torch.cat([global_cond, flat_goal], dim=-1)
+
+        return global_cond
+
 
     def get_traj_energies(self, trajectories: Tensor, t: int, observation_batch: dict[str, Tensor], mask: Tensor | None = None):
         """
