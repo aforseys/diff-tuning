@@ -2,7 +2,7 @@
 
 seed: 100000
 dataset_repo_id: maze2d
-dataset_root: 'data/maze2d-large-sparse-v1.hdf5'
+dataset_root: 'data/maze2d-open-sparse.hdf5'
 
 wandb:
   enable: true
@@ -14,7 +14,7 @@ hydra:
   job:
     name: ${now:%H.%M.%S}_${env.name}_${policy.name}
 
-device: "cuda:0"  # cpu
+device: "cuda"  # cpu
 
 training:
   offline_steps: 100000

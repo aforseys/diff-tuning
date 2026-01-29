@@ -10,7 +10,7 @@ hydra:
   run:
     # Set `dir` to where you would like to save all of the run outputs. If you run another training session
     # with the same value for `dir` its contents will be overwritten unless you set `resume` to true.
-    dir: /mnt/data/maze2d_dp/outputs/${now:%Y.%m.%d}/${hydra.job.name}
+    dir: data/maze2d_dp/outputs/${now:%Y.%m.%d}/${hydra.job.name}
   job:
     name: ${now:%H.%M.%S}_${env.name}_${policy.name}
 
@@ -35,7 +35,7 @@ training:
   online_steps_between_rollouts: 1
 
   delta_timestamps:
-    #observation.environment_state: "[i / ${fps} for i in range(1 - ${policy.n_obs_steps}, 1)]"
+    observation.environment_state: "[i / ${fps} for i in range(1 - ${policy.n_obs_steps}, 1)]"
     observation.state: "[i / ${fps} for i in range(1 - ${policy.n_obs_steps}, 1)]"
     action: "[i / ${fps} for i in range(1 - ${policy.n_obs_steps}, 1 - ${policy.n_obs_steps} + ${policy.horizon})]"
 
@@ -57,7 +57,7 @@ policy:
 
   input_shapes:
     # TODO(rcadene, alexander-soare): add variables for height and width from the dataset/env?
-    # observation.environment_state: [2]
+    observation.environment_state: [2]
     observation.state: ["${env.state_dim}"]
   output_shapes:
     action: ["${env.action_dim}"]
@@ -99,4 +99,11 @@ policy:
   # Loss computation
   do_mask_loss_for_padding: True
 
+  gradient_loss_weight: 1
+
   supervise_energy_landscape: True
+  energy_landscape_loss_weight: 0.5
+
+  finetune_energy_landscape: false
+  finetune_loss_weight: 0
+
