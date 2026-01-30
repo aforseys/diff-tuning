@@ -58,7 +58,7 @@ import time
 import json
 
 class MazeEnv:
-    def __init__(self):
+    def __init__(self, open=False):
         # GUI x coord 0 -> gui_size[0] #1200
         # GUI y coord 0 
         #         |
@@ -70,8 +70,12 @@ class MazeEnv:
         #         |
         #         v
         #       maze_shape[0] #9
-        
-        self.maze = np.array([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        open_maze = np.array([[1, 1, 1, 1, 1, 1, 1],
+                                [1, 0, 0, 0, 0, 0, 1],
+                                [1, 0, 0, 0, 0, 0, 1],
+                                [1, 0, 0, 0, 0, 0, 1],
+                                [1, 1, 1, 1, 1, 1, 1]]).astype(bool)
+        large_maze = np.array([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
                             [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1],
                             [1, 0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1],
                             [1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1],
@@ -80,6 +84,12 @@ class MazeEnv:
                             [1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 1],
                             [1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
                             [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]]).astype(bool)
+        
+        if open: 
+            self.maze = open_maze
+        else: 
+            self.maze = large_maze
+
         self.gui_size = (1200, 900)
         self.fps = 10
         self.batch_size = 32        
@@ -88,7 +98,11 @@ class MazeEnv:
         self.WHITE = (255, 255, 255)
         self.RED = (255, 0, 0)
         self.GRAY = (128, 128, 128)
+        self.BLUE = (0, 0, 255)
+        self.GREEN = (0, 255, 0)
+
         self.agent_color = self.RED
+        self.goal_color = self.GREEN
 
         # Initialize Pygame
         pygame.init()
@@ -153,8 +167,12 @@ class MazeEnv:
         surface = pygame.transform.scale(surface, self.gui_size)
         self.screen.blit(surface, (0, 0))
 
-    def update_screen(self, xy_pred=None, collisions=None, scores=None, keep_drawing=False, traj_in_gui_space=False):
+    def update_screen(self, xy_pred=None, collisions=None, scores=None, keep_drawing=False, traj_in_gui_space=False, goal=None):
         self.draw_maze_background()
+
+        if goal is not None:
+            pygame.draw.circle(self.screen, self.goal_color, 
+                             (int(goal[0]), int(goal[1])), 15)
         if xy_pred is not None:
             time_colors = self.generate_time_color_map(xy_pred.shape[1])
             if collisions is None:
@@ -213,8 +231,8 @@ class MazeEnv:
 
 class UnconditionalMaze(MazeEnv):
     # for dragging the agent around to explore motion manifold
-    def __init__(self, policy, policy_tag=None, vis_energy=False):
-        super().__init__()
+    def __init__(self, policy, policy_tag=None, vis_energy=False, open=False):
+        super().__init__(open=open)
         self.mouse_pos = None
         self.agent_in_collision = False
         self.agent_history_xy = []
@@ -285,11 +303,112 @@ class UnconditionalMaze(MazeEnv):
 
         pygame.quit()
 
+class GoalConditionedMaze(MazeEnv):
+    def __init__(self, policy, policy_tag=None, vis_energy=False, open=False):
+        super().__init__(open=open)
+        self.mouse_pos = None
+        self.agent_in_collision = False
+        self.agent_history_xy = []
+        self.policy = policy
+        self.policy_tag = policy_tag
+        self.vis_energy = vis_energy
+        self.goal_gui_pos = None
+        self.goal_pos = None
+        self.goal_set_mode = True  # Two modes: "SET_GOAL" or "MOVE_AGENT"
+
+    def infer_target(self, visualizer=None, return_energy=False):
+        agent_hist_xy = self.agent_history_xy[-1] 
+        agent_hist_xy = np.array(agent_hist_xy).reshape(1, 2)
+        if self.policy_tag == 'dp':
+            agent_hist_xy = agent_hist_xy.repeat(2, axis=0)
+
+        obs_batch = {
+            "observation.state": einops.repeat(
+                torch.from_numpy(agent_hist_xy).float().cuda(), "t d -> b t d", b=self.batch_size
+            )
+        }
+        obs_batch["observation.environment_state"] = einops.repeat(
+            torch.from_numpy(agent_hist_xy).float().cuda(), "t d -> b t d", b=self.batch_size
+        )
+        
+        obs_batch["episode_goal"] = einops.repeat(
+            torch.from_numpy(self.goal).float().cuda(), "t d -> b t d", b=self.batch_size
+        )
+
+        if guide is not None:
+            guide = torch.from_numpy(guide).float().cuda()
+
+        with torch.autocast(device_type="cuda"), seeded_context(0):
+            if self.policy_tag == 'act':
+                actions = self.policy.run_inference(obs_batch).cpu().numpy()
+            elif return_energy:
+                actions, energy = self.policy.run_inference(obs_batch, guide=guide, visualizer=visualizer, return_energy=True) # directly call the policy in order to visualize the intermediate steps
+                return actions.detach().cpu().numpy(), energy.detach().cpu().numpy().squeeze()
+            else:
+                actions = self.policy.run_inference(obs_batch, guide=guide, visualizer=visualizer).cpu().numpy() # directly call the policy in order to visualize the intermediate steps
+        return actions
+    
+    def update_mouse_pos(self):
+        self.mouse_pos = np.array(pygame.mouse.get_pos())
+
+    def update_agent_pos(self, new_agent_pos, history_len=1):
+        self.agent_gui_pos = np.array(new_agent_pos)
+        agent_xy_pos = self.gui2xy(self.agent_gui_pos)
+        self.agent_in_collision = self.check_collision(agent_xy_pos.reshape(1, 1, 2))[0]
+        if self.agent_in_collision:
+            self.agent_color = self.blend_with_white(self.RED, 0.8)
+        else:
+            self.agent_color = self.RED        
+        self.agent_history_xy.append(agent_xy_pos)
+        self.agent_history_xy = self.agent_history_xy[-history_len:]
+
+    def update_screen_goal_set(self):
+
+        self.draw_maze_background()
+        # show where mouse is
+        pygame.draw.circle(self.screen, self.BLUE, (int(self.mouse_pos[0]), int(self.mouse_pos[1])), 20)
+        pygame.display.flip()
+
+    def run(self): 
+        self.goal_set_mode = True
+        while self.running:
+            self.update_mouse_pos()
+
+            # Handle events
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.running = False
+                    break
+
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if self.goal_set_mode:
+                        self.goal_gui_pos = self.mouse_pos.copy()
+                        self.goal_pos = self.gui2xy(self.goal_gui_pos)
+                        print(f"Goal set at GUI: {self.goal_gui_pos}, XY: {self.goal_pos}")
+                        self.goal_set_mode = False
+                        #TODO: CHECK APPROPRIATE DIMENSIONS OF GOAL POS
+
+                #TODO: BY PRESSING A BUTTON --> MOVE INTO GOAL SELECTION MODE
+
+            if self.goal_set_mode:
+                self.update_screen_goal_set()
+
+            else:
+                self.update_agent_pos(self.mouse_pos.copy())
+                if self.vis_energy: 
+                    xy_pred, energy = self.infer_target(return_energy=True)
+                    self.update_screen(xy_pred, scores=energy, goal=self.goal_gui_pos)
+                else: 
+                    xy_pred = self.infer_target()
+                    self.update_screen(xy_pred, goal=self.goal_gui_pos)
+                self.clock.tick(30)
+
+        pygame.quit()
 
 class ConditionalMaze(UnconditionalMaze):
     # for interactive guidance dataset collection
-    def __init__(self, policy, vis_dp_dynamics=False, savepath=None, alignment_strategy=None, policy_tag=None):
-        super().__init__(policy, policy_tag=policy_tag)
+    def __init__(self, policy, vis_dp_dynamics=False, savepath=None, alignment_strategy=None, policy_tag=None, open=False):
+        super().__init__(policy, policy_tag=policy_tag, open=open)
         self.drawing = False
         self.keep_drawing = False
         self.vis_dp_dynamics = vis_dp_dynamics
@@ -374,8 +493,8 @@ class ConditionalMaze(UnconditionalMaze):
 
 class MazeExp(ConditionalMaze):
     # for replaying the trials and benchmarking the alignment strategies
-    def __init__(self, policy, vis_dp_dynamics=False, savepath=None, alignment_strategy=None, policy_tag=None, loadpath=None):
-        super().__init__(policy, vis_dp_dynamics, savepath, policy_tag=policy_tag)
+    def __init__(self, policy, vis_dp_dynamics=False, savepath=None, alignment_strategy=None, policy_tag=None, loadpath=None, open=False):
+        super().__init__(policy, vis_dp_dynamics, savepath, policy_tag=policy_tag, open=open)
         # Load saved trails
         assert loadpath is not None
         with open(args.loadpath, "r", buffering=1) as file:
@@ -484,7 +603,7 @@ if __name__ == "__main__":
     parser.add_argument('-s', '--savepath', type=str, default=None, help="Filename to save the drawing")
     parser.add_argument('-l', '--loadpath', type=str, default=None, help="Filename to load the drawing")
     parser.add_argument('-e', '--vis_energy', action='store_true', help="Visualize energy")
-
+    parser.add_argument('-o',  '--open_maze', action='store_true', help="Open Maze")
     args = parser.parse_args()
 
     # Create and load the policy
@@ -535,7 +654,9 @@ if __name__ == "__main__":
         policy_tag = None
 
     if args.unconditional:
-        interactiveMaze = UnconditionalMaze(policy, policy_tag=policy_tag, vis_energy=args.vis_energy)
+        interactiveMaze = UnconditionalMaze(policy, policy_tag=policy_tag, vis_energy=args.vis_energy, open=args.open_maze)
+    if args.goal_conditioned:
+        interactiveMaze = GoalConditionedMaze(policy, policy_tag=policy_tag, vis_energy=args.vis_energy, open=args.open_maze)
     elif args.loadpath is not None:
         if args.savepath is None:
             savepath = None
@@ -550,7 +671,7 @@ if __name__ == "__main__":
             elif alignment_strategy == 'stochastic-sampling':
                 alignment_tag = 'ss'
             savepath = f"{args.loadpath[:-5]}_{policy_tag}_{alignment_tag}{args.savepath}"
-        interactiveMaze = MazeExp(policy, args.vis_dp_dynamics, savepath, alignment_strategy, policy_tag=policy_tag, loadpath=args.loadpath)
+        interactiveMaze = MazeExp(policy, args.vis_dp_dynamics, savepath, alignment_strategy, policy_tag=policy_tag, loadpath=args.loadpath, open=args.open_maze)
     else:
-        interactiveMaze = ConditionalMaze(policy, args.vis_dp_dynamics, args.savepath, alignment_strategy, policy_tag=policy_tag)
+        interactiveMaze = ConditionalMaze(policy, args.vis_dp_dynamics, args.savepath, alignment_strategy, policy_tag=policy_tag, open=args.open_maze)
     interactiveMaze.run()
