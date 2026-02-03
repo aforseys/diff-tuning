@@ -317,8 +317,9 @@ class GoalConditionedMaze(MazeEnv):
         self.goal_set_mode = True  # Two modes: "SET_GOAL" or "MOVE_AGENT"
 
     def infer_target(self, visualizer=None, return_energy=False):
-        agent_hist_xy = self.agent_history_xy[-1] 
+        agent_hist_xy = self.agent_history_xy[-1]
         agent_hist_xy = np.array(agent_hist_xy).reshape(1, 2)
+        goal = np.array(self.goal_pos).reshape(1,2)
         if self.policy_tag == 'dp':
             agent_hist_xy = agent_hist_xy.repeat(2, axis=0)
 
@@ -332,20 +333,20 @@ class GoalConditionedMaze(MazeEnv):
         )
         
         obs_batch["episode_goal"] = einops.repeat(
-            torch.from_numpy(self.goal).float().cuda(), "t d -> b t d", b=self.batch_size
+            torch.from_numpy(goal).float().cuda(), "t d -> b t d", b=self.batch_size
         )
 
-        if guide is not None:
-            guide = torch.from_numpy(guide).float().cuda()
+#        if guide is not None:
+#            guide = torch.from_numpy(guide).float().cuda()
 
         with torch.autocast(device_type="cuda"), seeded_context(0):
             if self.policy_tag == 'act':
                 actions = self.policy.run_inference(obs_batch).cpu().numpy()
             elif return_energy:
-                actions, energy = self.policy.run_inference(obs_batch, guide=guide, visualizer=visualizer, return_energy=True) # directly call the policy in order to visualize the intermediate steps
+                actions, energy = self.policy.run_inference(obs_batch, visualizer=visualizer, return_energy=True) # directly call the policy in order to visualize the intermediate steps
                 return actions.detach().cpu().numpy(), energy.detach().cpu().numpy().squeeze()
             else:
-                actions = self.policy.run_inference(obs_batch, guide=guide, visualizer=visualizer).cpu().numpy() # directly call the policy in order to visualize the intermediate steps
+                actions = self.policy.run_inference(obs_batch,visualizer=visualizer).cpu().numpy() # directly call the policy in order to visualize the intermediate steps
         return actions
     
     def update_mouse_pos(self):
@@ -604,6 +605,7 @@ if __name__ == "__main__":
     parser.add_argument('-l', '--loadpath', type=str, default=None, help="Filename to load the drawing")
     parser.add_argument('-e', '--vis_energy', action='store_true', help="Visualize energy")
     parser.add_argument('-o',  '--open_maze', action='store_true', help="Open Maze")
+    parser.add_argument('-gc', '--goal_conditioned', action='store_true', help="Condition on goal")
     args = parser.parse_args()
 
     # Create and load the policy
