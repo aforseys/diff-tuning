@@ -131,21 +131,28 @@ def load_hf_dataset(repo_id: str, version: str, root: Path, split: str) -> datas
                 observations = observations[:state_index][::4]
                 timeouts = timeouts[:state_index-4][::4]
 
-            def create_episode_and_frame_indices(timeouts, observations):
+            def create_episode_and_frame_indices(timeouts, observations, h=20):
                 episode_endings = np.where(timeouts)[0]  # Indices where episodes end
                 episode_lengths = np.diff(np.concatenate(([0], episode_endings + 1)))  # Lengths of episodes
+
                 # Add the length of the last episode (from the last timeout to the end)
                 last_episode_length = len(timeouts) - episode_endings[-1] - 1
                 episode_lengths = np.append(episode_lengths, last_episode_length)
-                # Get final episode states
-                episode_endings = np.cumsum(episode_lengths) - 1
-                final_observations = observations[episode_endings, :2]
-                episode_goal = np.repeat(final_observations, episode_lengths, axis=0)
+
+                #Recalculate episode endings from episode lengths (now including the last episode)
+                episode_endings = np.cumsum(episode_lengths) - 1 
                 # Generate episode indices by repeating the episode number for each episode length
                 episode_index = np.repeat(np.arange(len(episode_lengths)), episode_lengths)
                 # Generate frame indices by concatenating ranges for each episode, restarting from 0
                 frame_index = np.concatenate([np.arange(length) for length in episode_lengths])
                 index = np.arange(len(timeouts))
+
+                # Set observation goal using 20 step horizon
+                episode_end_per_step = episode_endings[episode_index]
+                steps_to_end = episode_end_per_step-index
+                goal_indices = np.where(steps_to_end <= h, episode_end_per_step, index+h)
+                episode_goal = observations[goal_indices, :2]
+
                 return episode_index, frame_index, index, episode_goal
 
             episode_index, frame_index, index, episode_goal = create_episode_and_frame_indices(timeouts, observations)
