@@ -58,7 +58,7 @@ import time
 import json
 
 class MazeEnv:
-    def __init__(self, open=False):
+    def __init__(self, maze_type):
         # GUI x coord 0 -> gui_size[0] #1200
         # GUI y coord 0 
         #         |
@@ -75,6 +75,15 @@ class MazeEnv:
                                 [1, 0, 0, 0, 0, 0, 1],
                                 [1, 0, 0, 0, 0, 0, 1],
                                 [1, 1, 1, 1, 1, 1, 1]]).astype(bool)
+        sparse_maze = np.array([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+                            [1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1],
+                            [1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1],
+                            [1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 1],
+                            [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1],
+                            [1, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 1],
+                            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+                            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]]).astype(bool)
         large_maze = np.array([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
                             [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1],
                             [1, 0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1],
@@ -85,10 +94,14 @@ class MazeEnv:
                             [1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
                             [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]]).astype(bool)
         
-        if open: 
+        if maze_type == "sparse":
+            self.maze = sparse_maze
+        elif maze_type=="open": 
             self.maze = open_maze
-        else: 
+        elif maze_type=="large": 
             self.maze = large_maze
+        else:
+            raise NotImplementedError("Maze type does not exist!")
 
         self.gui_size = (1200, 900)
         self.fps = 10
@@ -231,8 +244,8 @@ class MazeEnv:
 
 class UnconditionalMaze(MazeEnv):
     # for dragging the agent around to explore motion manifold
-    def __init__(self, policy, policy_tag=None, vis_energy=False, open=False):
-        super().__init__(open=open)
+    def __init__(self, policy, policy_tag=None, vis_energy=False, maze_type="large"):
+        super().__init__(maze_type=maze_type)
         self.mouse_pos = None
         self.agent_in_collision = False
         self.agent_history_xy = []
@@ -293,19 +306,22 @@ class UnconditionalMaze(MazeEnv):
                     break
 
             self.update_agent_pos(self.mouse_pos.copy())
-            if self.vis_energy: 
-                xy_pred, energy = self.infer_target(return_energy=True)
-                self.update_screen(xy_pred, scores=energy)
-            else: 
-                xy_pred = self.infer_target()
-                self.update_screen(xy_pred)
+            if self.policy is not None:
+                if self.vis_energy: 
+                    xy_pred, energy = self.infer_target(return_energy=True)
+                    self.update_screen(xy_pred, scores=energy)
+                else: 
+                    xy_pred = self.infer_target()
+                    self.update_screen(xy_pred)
+            else:
+                self.update_screen()
             self.clock.tick(30)
 
         pygame.quit()
 
 class GoalConditionedMaze(MazeEnv):
-    def __init__(self, policy, policy_tag=None, vis_energy=False, open=False):
-        super().__init__(open=open)
+    def __init__(self, policy, policy_tag=None, vis_energy=False, maze_type="large"):
+        super().__init__(maze_type=maze_type)
         self.mouse_pos = None
         self.agent_in_collision = False
         self.agent_history_xy = []
@@ -408,8 +424,8 @@ class GoalConditionedMaze(MazeEnv):
 
 class ConditionalMaze(UnconditionalMaze):
     # for interactive guidance dataset collection
-    def __init__(self, policy, vis_dp_dynamics=False, savepath=None, alignment_strategy=None, policy_tag=None, open=False):
-        super().__init__(policy, policy_tag=policy_tag, open=open)
+    def __init__(self, policy, vis_dp_dynamics=False, savepath=None, alignment_strategy=None, policy_tag=None,  maze_type='large'):
+        super().__init__(policy, policy_tag=policy_tag,  maze_type=maze_type)
         self.drawing = False
         self.keep_drawing = False
         self.vis_dp_dynamics = vis_dp_dynamics
@@ -494,8 +510,8 @@ class ConditionalMaze(UnconditionalMaze):
 
 class MazeExp(ConditionalMaze):
     # for replaying the trials and benchmarking the alignment strategies
-    def __init__(self, policy, vis_dp_dynamics=False, savepath=None, alignment_strategy=None, policy_tag=None, loadpath=None, open=False):
-        super().__init__(policy, vis_dp_dynamics, savepath, policy_tag=policy_tag, open=open)
+    def __init__(self, policy, vis_dp_dynamics=False, savepath=None, alignment_strategy=None, policy_tag=None, loadpath=None, maze_type='large'):
+        super().__init__(policy, vis_dp_dynamics, savepath, policy_tag=policy_tag, maze_type=maze_type)
         # Load saved trails
         assert loadpath is not None
         with open(args.loadpath, "r", buffering=1) as file:
@@ -593,7 +609,7 @@ class MazeExp(ConditionalMaze):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', "--checkpoint", type=str, default=None,  help="Path to the checkpoint")
-    parser.add_argument('-p', '--policy', required=True, type=str, help="Policy name")
+    parser.add_argument('-p', '--policy', default=None, type=str, help="Policy name")
     parser.add_argument('-u', '--unconditional', action='store_true', help="Unconditional Maze")
     parser.add_argument('-op', '--output-perturb', action='store_true', help="Output perturbation")
     parser.add_argument('-ph', '--post-hoc', action='store_true', help="Post-hoc ranking")
@@ -604,7 +620,7 @@ if __name__ == "__main__":
     parser.add_argument('-s', '--savepath', type=str, default=None, help="Filename to save the drawing")
     parser.add_argument('-l', '--loadpath', type=str, default=None, help="Filename to load the drawing")
     parser.add_argument('-e', '--vis_energy', action='store_true', help="Visualize energy")
-    parser.add_argument('-o',  '--open_maze', action='store_true', help="Open Maze")
+    parser.add_argument('-mt',  '--maze_type', default="large", type=str, help="Maze Type")
     parser.add_argument('-gc', '--goal_conditioned', action='store_true', help="Condition on goal")
     args = parser.parse_args()
 
@@ -632,7 +648,8 @@ if __name__ == "__main__":
     elif args.policy in ["act"]:
         checkpoint_path = 'weights_act'
     else:
-        raise NotImplementedError(f"Policy with name {args.policy} is not implemented.")
+        policy = None
+        #raise NotImplementedError(f"Policy with name {args.policy} is not implemented.")
 
     if args.policy is not None:
         # Load policy
@@ -654,11 +671,11 @@ if __name__ == "__main__":
     else:
         policy = None
         policy_tag = None
-
+    print('TEST', args.unconditional)
     if args.unconditional:
-        interactiveMaze = UnconditionalMaze(policy, policy_tag=policy_tag, vis_energy=args.vis_energy, open=args.open_maze)
-    if args.goal_conditioned:
-        interactiveMaze = GoalConditionedMaze(policy, policy_tag=policy_tag, vis_energy=args.vis_energy, open=args.open_maze)
+        interactiveMaze = UnconditionalMaze(policy, policy_tag=policy_tag, vis_energy=args.vis_energy, maze_type=args.maze_type)
+    elif args.goal_conditioned:
+        interactiveMaze = GoalConditionedMaze(policy, policy_tag=policy_tag, vis_energy=args.vis_energy, maze_type=args.maze_type)
     elif args.loadpath is not None:
         if args.savepath is None:
             savepath = None
@@ -673,7 +690,7 @@ if __name__ == "__main__":
             elif alignment_strategy == 'stochastic-sampling':
                 alignment_tag = 'ss'
             savepath = f"{args.loadpath[:-5]}_{policy_tag}_{alignment_tag}{args.savepath}"
-        interactiveMaze = MazeExp(policy, args.vis_dp_dynamics, savepath, alignment_strategy, policy_tag=policy_tag, loadpath=args.loadpath, open=args.open_maze)
+        interactiveMaze = MazeExp(policy, args.vis_dp_dynamics, savepath, alignment_strategy, policy_tag=policy_tag, loadpath=args.loadpath, maze_type=args.maze_type)
     else:
-        interactiveMaze = ConditionalMaze(policy, args.vis_dp_dynamics, args.savepath, alignment_strategy, policy_tag=policy_tag, open=args.open_maze)
+        interactiveMaze = ConditionalMaze(policy, args.vis_dp_dynamics, args.savepath, alignment_strategy, policy_tag=policy_tag, maze_type=args.maze_type)
     interactiveMaze.run()
