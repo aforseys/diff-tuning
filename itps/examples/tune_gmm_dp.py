@@ -68,21 +68,21 @@ def main():
     )
     dataset=make_dataset(cfg_main)
 
-    cfg_pos = compose(
-        config_name="default",
-        overrides=[ "env=gmm", "policy=gmm_dp_tune_pos"],
-    )
-    cfg_neg = compose(
-        config_name="default",
-        overrides=[ "env=gmm", "policy=gmm_dp_tune_neg"]
-    )
-    dataset_pos = make_dataset(cfg_pos)
-    dataset_neg = make_dataset(cfg_neg)
-    pref_dataset = PreferencePairDataset(dataset_pos, dataset_neg)
+    # cfg_pos = compose(
+    #     config_name="default",
+    #     overrides=[ "env=gmm", "policy=gmm_dp_tune_pos"],
+    # )
+    # cfg_neg = compose(
+    #     config_name="default",
+    #     overrides=[ "env=gmm", "policy=gmm_dp_tune_neg"]
+    # )
+    # dataset_pos = make_dataset(cfg_pos)
+    # dataset_neg = make_dataset(cfg_neg)
+    pref_dataset = PreferencePairDataset(dataset['pos'], dataset['neg'])
 
     # Create dataloaders for offline training.
     dataloader = torch.utils.data.DataLoader(
-        dataset,
+        dataset['base'],
         num_workers=4,
         batch_size=64,
         shuffle=True,
