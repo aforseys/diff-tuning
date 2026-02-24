@@ -113,7 +113,7 @@ def get_hf_dataset_safe_version(repo_id: str, version: str) -> str:
         return version
 
 
-def load_hf_dataset(repo_id: str, version: str, root: Path, split: str) -> datasets.Dataset:
+def load_hf_dataset(repo_id: str, version: str, root: Path, split: str, goal_horizon: int | 60) -> datasets.Dataset:
     """hf_dataset contains all the observations, states, actions, rewards, etc."""
     if root is not None:
         if 'hdf5' in root: # maze2d dataset
@@ -131,7 +131,7 @@ def load_hf_dataset(repo_id: str, version: str, root: Path, split: str) -> datas
                 observations = observations[:state_index][::4]
                 timeouts = timeouts[:state_index-4][::4]
 
-            def create_episode_and_frame_indices(timeouts, observations, h=20):
+            def create_episode_and_frame_indices(timeouts, observations, goal_horizon):
                 episode_endings = np.where(timeouts)[0]  # Indices where episodes end
                 episode_lengths = np.diff(np.concatenate(([0], episode_endings + 1)))  # Lengths of episodes
 
@@ -150,12 +150,12 @@ def load_hf_dataset(repo_id: str, version: str, root: Path, split: str) -> datas
                 # Set observation goal using 20 step horizon
                 episode_end_per_step = episode_endings[episode_index]
                 steps_to_end = episode_end_per_step-index
-                goal_indices = np.where(steps_to_end <= h, episode_end_per_step, index+h)
+                goal_indices = np.where(steps_to_end <= goal_horizon, episode_end_per_step, index+goal_horizon)
                 episode_goal = observations[goal_indices, :2]
 
                 return episode_index, frame_index, index, episode_goal
 
-            episode_index, frame_index, index, episode_goal = create_episode_and_frame_indices(timeouts, observations)
+            episode_index, frame_index, index, episode_goal = create_episode_and_frame_indices(timeouts, observations, goal_horizon)
             data_dict = {
                 'observation.state': observations[:-1, :2],
                 'observation.environment_state': observations[:-1, :2],
@@ -516,3 +516,35 @@ def create_lerobot_dataset_card(tags: list | None = None, text: str | None = Non
     if text is not None:
         card.text += text
     return card
+
+class PreferencePairDataset(torch.utils.data.Dataset):
+    def __init__(self, pos_ds, neg_ds):
+        assert len(pos_ds) == len(neg_ds), \
+            f"Positive ({len(pos_ds)}) and negative ({len(neg_ds)}) datasets must be same length."
+        self.pos_ds = pos_ds
+        self.neg_ds = pos_ds
+
+        # ensure datasets have identical episode boundaries
+        assert torch.equal(pos_ds.episode_data_index["from"], neg_ds.episode_data_index["from"])
+        assert torch.equal(pos_ds.episode_data_index["to"], neg_ds.episode_data_index["to"])
+
+        # given datasets are the same, set index to match one dataset (used for samplers)
+        self.episode_data_index = pos_ds.episode_data_index
+
+    def __len__(self):
+        # or `return min(len(self.pos_ds), len(self.neg_ds))`
+        return len(self.pos_ds)
+
+    def __getitem__(self, idx):
+        pos_sample = self.pos_ds[idx]
+        neg_sample = self.neg_ds[idx]
+
+        # ensure samples are aligned
+        if "episode_index" in pos_sample and "episode_index" in neg_sample:
+            assert pos_sample["episode_index"].item() == neg_sample["episode_index"].item()
+            assert pos_sample["frame_index"].item() == neg_sample["frame_index"].item()
+
+        return {
+            "pos": pos_sample,
+            "neg": neg_sample,
+        }

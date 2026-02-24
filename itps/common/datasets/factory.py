@@ -91,14 +91,44 @@ def make_dataset(cfg, split: str = "train") -> LeRobotDataset | MultiLeRobotData
         )
 
     if isinstance(cfg.dataset_repo_id, str):
-        dataset = LeRobotDataset(
-            cfg.dataset_repo_id,
+        # dataset = LeRobotDataset(
+        #     cfg.dataset_repo_id,
+        #     split=split,
+        #     root=cfg.dataset_root,
+        #     delta_timestamps=cfg.training.get("delta_timestamps"),
+        #     image_transforms=image_transforms,
+        #     video_backend=cfg.video_backend,
+        # )
+        dataset_kwargs = dict(
             split=split,
             root=cfg.dataset_root,
             delta_timestamps=cfg.training.get("delta_timestamps"),
             image_transforms=image_transforms,
             video_backend=cfg.video_backend,
         )
+
+        # Add goal horizon if necessary 
+        if cfg.input_type.lower() == "conditional":
+            if 'goal_horizon' in cfg.training:
+                dataset_kwargs['goal_horizon']=cfg.training.goal_horizon
+            else: 
+                raise UserWarning("No goal horizon passed in for conditional model")
+            
+        # If multiple datasets (used in tuning)
+        if isinstance(cfg.dataset_root, dict):
+            dataset = {}
+            for dataset_type, dataset_path in cfg.dataset_root.items():
+                dataset[dataset_type] = LeRobotDataset(cfg.dataset_repo_id,
+                        root = dataset_path
+                        **dataset_kwargs,
+            )
+
+        else:
+            dataset = LeRobotDataset(cfg.dataset_repo_id,
+                        root = cfg.dataset_root,
+                        **dataset_kwargs,
+            )
+
     else:
         dataset = MultiLeRobotDataset(
             cfg.dataset_repo_id,
