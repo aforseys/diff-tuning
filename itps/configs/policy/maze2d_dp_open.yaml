@@ -2,6 +2,9 @@
 
 seed: 100000
 dataset_repo_id: maze2d
+input_type: unconditional
+train_type: pretrain
+env_type: open
 dataset_root: 'data/maze2d-open-sparse.hdf5'
 
 wandb:
@@ -52,7 +55,7 @@ policy:
 
   # Input / output structure.
   n_obs_steps: 2
-  horizon: 64
+  horizon: 32
   n_action_steps: 8
 
   input_shapes:

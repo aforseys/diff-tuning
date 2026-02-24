@@ -2,7 +2,13 @@
 
 seed: 100000
 dataset_repo_id: gmm
-dataset_root: 'data/gmm_unconditional_1000_42_20251204_174604.npy'
+input_type: unconditional
+train_type: finetune
+dataset_root: 
+  base: 'data/gmm_unconditional_1000_42_20251204_174604.npy'
+  pos: 'data/gmm_unconditional_pref_cluster_0_positive_dataset_20251204_192929.npy'
+  neg: 'data/gmm_unconditional_pref_cluster_0_negative_dataset_20251204_192929.npy'
+pretrained_policy_path: "outputs/train/gmm/run_unconditional_2025-12-04_18-29-47/"
 
 wandb:
   enable: true
@@ -44,8 +50,7 @@ training:
   drop_n_last_frames: false #7  # ${policy.horizon} - ${policy.n_action_steps} - ${policy.n_obs_steps} + 1
 
 eval:
-  n_episodes: 50
-  batch_size: 50
+  n_samples: 200
 
 policy:
   name: diffusion

@@ -2,6 +2,9 @@
 
 seed: 100000
 dataset_repo_id: maze2d
+input_type: conditional
+train_type: pretrain
+env_type: open
 dataset_root: 'data/maze2d-open-sparse.hdf5'
 
 wandb:
@@ -40,6 +43,8 @@ training:
     action: "[i / ${fps} for i in range(1 - ${policy.n_obs_steps}, 1 - ${policy.n_obs_steps} + ${policy.horizon})]"
     episode_goal: "[0]"
 
+  goal_horizon: 30
+
   # The original implementation doesn't sample frames for the last 7 steps,
   # which avoids excessive padding and leads to improved training results.
   drop_n_last_frames: 7  # ${policy.horizon} - ${policy.n_action_steps} - ${policy.n_obs_steps} + 1
@@ -53,7 +58,7 @@ policy:
 
   # Input / output structure.
   n_obs_steps: 2
-  horizon: 64
+  horizon: 32
   n_action_steps: 8
 
   input_shapes:

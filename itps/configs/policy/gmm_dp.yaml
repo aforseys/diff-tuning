@@ -2,6 +2,8 @@
 
 seed: 100000
 dataset_repo_id: gmm
+input_type: unconditional
+train_type: pretrain
 dataset_root: 'data/gmm_unconditional_1000_42_20251204_174604.npy'
 
 wandb:
@@ -44,8 +46,7 @@ training:
   drop_n_last_frames: false #7  # ${policy.horizon} - ${policy.n_action_steps} - ${policy.n_obs_steps} + 1
 
 eval:
-  n_episodes: 50
-  batch_size: 50
+  n_samples: 200
 
 policy:
   name: diffusion
