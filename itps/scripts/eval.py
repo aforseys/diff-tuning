@@ -71,7 +71,7 @@ from itps.common.policies.policy_protocol import Policy
 from itps.common.policies.utils import get_device_from_parameters
 from itps.common.utils.io_utils import write_video
 from itps.common.utils.utils import get_safe_torch_device, init_hydra_config, init_logging, set_global_seed
-
+from itps.common.utils.eval_utils import eval_GMM
 
 def rollout(
     env: gym.vector.VectorEnv,
@@ -447,6 +447,7 @@ def main(
     hydra_cfg_path: str | None = None,
     out_dir: str | None = None,
     config_overrides: list[str] | None = None,
+    viz: bool | None = False
 ):
     assert (pretrained_policy_path is None) ^ (hydra_cfg_path is None)
     if pretrained_policy_path is not None:
@@ -466,8 +467,9 @@ def main(
 
     log_output_dir(out_dir)
 
-    logging.info("Making environment.")
-    env = make_env(hydra_cfg)
+    if hydra_cfg.env.name == 'maze2d':
+        logging.info("Making environment.")
+        env = make_env(hydra_cfg)
 
     logging.info("Making policy.")
     if hydra_cfg_path is None:
@@ -480,16 +482,28 @@ def main(
     policy.eval()
 
     with torch.no_grad(), torch.autocast(device_type=device.type) if hydra_cfg.use_amp else nullcontext():
-        info = eval_policy(
-            env,
-            policy,
-            hydra_cfg.eval.n_episodes,
-            max_episodes_rendered=10,
-            videos_dir=Path(out_dir) / "videos",
-            start_seed=hydra_cfg.seed,
-            enable_progbar=True,
-            enable_inner_progbar=True,
-        )
+
+        if hydra_cfg.env.name == 'gmm':
+            info = eval_GMM(
+                policy, 
+                hydra_cfg.policy.conditional, 
+                N = hydra_cfg.eval.n_samples,
+                viz = viz,
+                training_samples = hydra_cfg.training_samples #used for viz if viz True
+                )
+        
+        elif hydra_cfg.env.name == 'maze2d':
+            info = eval_policy(
+                env,
+                policy,
+                hydra_cfg.eval.n_episodes,
+                max_episodes_rendered=10,
+                videos_dir=Path(out_dir) / "videos",
+                start_seed=hydra_cfg.seed,
+                enable_progbar=True,
+                enable_inner_progbar=True,
+            )
+
     print(info["aggregated"])
 
     # Save info
@@ -556,6 +570,11 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--viz",
+        action="store_true",
+        help="Visualize Evaluation",
+    )
+    parser.add_argument(
         "overrides",
         nargs="*",
         help="Any key=value arguments to override config values (use dots for.nested=overrides)",
@@ -573,4 +592,5 @@ if __name__ == "__main__":
             pretrained_policy_path=pretrained_policy_path,
             out_dir=args.out_dir,
             config_overrides=args.overrides,
+            viz=args.viz
         )

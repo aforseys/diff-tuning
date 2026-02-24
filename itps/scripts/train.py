@@ -31,7 +31,7 @@ from termcolor import colored
 from torch import nn
 from torch.cuda.amp import GradScaler
 
-from itps.common.datasets.factory import make_dataset, resolve_delta_timestamps
+from itps.common.datasets.factory import make_dataset, resolve_delta_timestamps, PreferencePairDataset
 from itps.common.datasets.lerobot_dataset import MultiLeRobotDataset
 from itps.common.datasets.online_buffer import OnlineBuffer, compute_sampler_weights
 from itps.common.datasets.sampler import EpisodeAwareSampler
@@ -48,7 +48,7 @@ from itps.common.utils.utils import (
     init_logging,
     set_global_seed,
 )
-from itps.scripts.eval import eval_policy
+from itps.scripts.eval import eval_policy, eval_GMM
 
 
 def make_optimizer_and_scheduler(cfg, policy):
@@ -75,13 +75,26 @@ def make_optimizer_and_scheduler(cfg, policy):
         )
         lr_scheduler = None
     elif cfg.policy.name == "diffusion":
-        optimizer = torch.optim.Adam(
-            policy.diffusion.parameters(),
-            cfg.training.lr,
-            cfg.training.adam_betas,
-            cfg.training.adam_eps,
-            cfg.training.adam_weight_decay,
-        )
+        if cfg.train_type.lower() == "pretrain":
+            optimizer = torch.optim.Adam(
+                policy.diffusion.parameters(),
+                cfg.training.lr,
+                cfg.training.adam_betas,
+                cfg.training.adam_eps,
+                cfg.training.adam_weight_decay,
+            )
+        elif cfg.train_type.lower() == "finetune":
+                trainable_params = policy.freeze_nonFiLM()
+                optimizer = torch.optim.Adam(
+                trainable_params,
+                cfg.training.lr,
+                cfg.training.adam_betas,
+                cfg.training.adam_eps,
+                cfg.training.adam_weight_decay,
+            )
+        else: 
+            raise NotImplementedError("Only pretrain or finetune supported")
+
         from diffusers.optimization import get_scheduler
 
         lr_scheduler = get_scheduler(
@@ -113,13 +126,14 @@ def update_policy(
     lr_scheduler=None,
     use_amp: bool = False,
     lock=None,
+    tune_batch = None
 ):
     """Returns a dictionary of items for logging."""
     start_time = time.perf_counter()
     device = get_device_from_parameters(policy)
     policy.train()
     with torch.autocast(device_type=device.type) if use_amp else nullcontext():
-        output_dict = policy.forward(batch)
+        output_dict = policy.forward(batch, tune_batch=tune_batch)
         # TODO(rcadene): policy.unnormalize_outputs(out_dict)
         loss = output_dict["loss"]
     grad_scaler.scale(loss).backward()
@@ -298,8 +312,19 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     torch.backends.cudnn.benchmark = True
     torch.backends.cuda.matmul.allow_tf32 = True
 
+    # Checks to see if policy is conditioned and if finetuning
+    finetune=cfg.train_type.lower()=="finetune"
+    conditional=cfg.input_type.lower=="conditional"
+
     logging.info("make_dataset")
     offline_dataset = make_dataset(cfg)
+    pref_dataset = None
+
+    #if finetuning, multiple datasets will be returned
+    if finetune:
+        pref_dataset = PreferencePairDataset(offline_dataset['pos'], offline_dataset['neg'])
+        offline_dataset = offline_dataset['base']
+
     if isinstance(offline_dataset, MultiLeRobotDataset):
         logging.info(
             "Multiple datasets were provided. Applied the following index mapping to the provided datasets: "
@@ -311,15 +336,24 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     # using the eval.py instead, with gym_dora environment and dora-rs.
     eval_env = None
     if cfg.training.eval_freq > 0:
-        logging.info("make_env")
-        eval_env = make_env(cfg)
+        if cfg.dataset_repo_id != 'gmm':
+            logging.info("make_env")
+            eval_env = make_env(cfg)
 
     logging.info("make_policy")
+    pretrained_path = None
+    if cfg.resume:
+        pretrained_path = str(logger.last_pretrained_model_dir)
+    elif cfg.train_type == "finetune":
+        pretrained_path = str(cfg.pretrained_policy_path)
+
+    # init with original dataset statistics unless loading pretrained policy (to resume or finetune)
     policy = make_policy(
         hydra_cfg=cfg,
-        dataset_stats=offline_dataset.stats if not cfg.resume else None,
-        pretrained_policy_name_or_path=str(logger.last_pretrained_model_dir) if cfg.resume else None,
+        dataset_stats=offline_dataset.stats if not (cfg.resume or finetune) else None,
+        pretrained_policy_name_or_path=pretrained_path,
     )
+
     assert isinstance(policy, nn.Module)
     # Create optimizer and scheduler
     # Temporary hack to move optimizer out of policy
@@ -347,19 +381,28 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     def evaluate_and_checkpoint_if_needed(step, is_online):
         _num_digits = max(6, len(str(cfg.training.offline_steps + cfg.training.online_steps)))
         step_identifier = f"{step:0{_num_digits}d}"
-
         if cfg.training.eval_freq > 0 and step % cfg.training.eval_freq == 0:
             logging.info(f"Eval policy at step {step}")
             with torch.no_grad(), torch.autocast(device_type=device.type) if cfg.use_amp else nullcontext():
-                assert eval_env is not None
-                eval_info = eval_policy(
-                    eval_env,
-                    policy,
-                    cfg.eval.n_episodes,
-                    videos_dir=Path(out_dir) / "eval" / f"videos_step_{step_identifier}",
-                    max_episodes_rendered=4,
-                    start_seed=cfg.seed,
-                )
+                if cfg.dataset_repo_id == 'gmm':
+                    eval_info = eval_GMM(
+                        policy, 
+                        conditional=conditional, 
+                        N = cfg.eval.n_samples,
+                        viz = False,
+                        finetune=finetune
+                        )
+
+                else:
+                    assert eval_env is not None
+                    eval_info = eval_policy(
+                        eval_env,
+                        policy,
+                        cfg.eval.n_episodes,
+                        videos_dir=Path(out_dir) / "eval" / f"videos_step_{step_identifier}",
+                        max_episodes_rendered=4,
+                        start_seed=cfg.seed,
+                    )
             log_eval_info(logger, eval_info["aggregated"], step, cfg, offline_dataset, is_online=is_online)
             if cfg.wandb.enable:
                 logger.log_video(eval_info["video_paths"][0], step, mode="eval")
@@ -403,6 +446,29 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     )
     dl_iter = cycle(dataloader)
 
+    # create same dataloader for offline pref training
+    if pref_dataset is not None:
+        if cfg.training.get("drop_n_last_frames"):
+            shuffle = False
+            sampler = EpisodeAwareSampler(
+                offline_dataset.episode_data_index,
+                drop_n_last_frames=cfg.training.drop_n_last_frames,
+                shuffle=True,
+            )
+        else:
+            shuffle = True
+            sampler = None
+            pref_dataloader = torch.utils.data.DataLoader(
+                pref_dataset,
+                num_workers=cfg.training.num_workers,
+                batch_size=cfg.training.batch_size,
+                shuffle=shuffle,
+                sampler=sampler,
+                pin_memory=device.type != "cpu",
+                drop_last=False,
+            )
+        pref_dl_iter = cycle(pref_dataloader)        
+
     policy.train()
     offline_step = 0
     for _ in range(step, cfg.training.offline_steps):
@@ -416,6 +482,14 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
         for key in batch:
             batch[key] = batch[key].to(device, non_blocking=True)
 
+        # handle possibility of finetuning
+        tune_batch = None
+        if pref_dataset is not None:
+            pref_batch = next(pref_dl_iter)
+            pos_batch = {k: v.to(device, non_blocking=True) for k, v in pref_batch["pos"].items()}
+            neg_batch = {k: v.to(device, non_blocking=True) for k, v in pref_batch["neg"].items()}
+            tune_batch=(pos_batch, neg_batch)
+
         train_info = update_policy(
             policy,
             batch,
@@ -424,6 +498,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
             grad_scaler=grad_scaler,
             lr_scheduler=lr_scheduler,
             use_amp=cfg.use_amp,
+            tune_batch = tune_batch
         )
 
         train_info["dataloading_s"] = dataloading_s

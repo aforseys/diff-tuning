@@ -78,18 +78,14 @@ def run_inference(policy, N=100, conditional=False): #, return_energy=False):
         # else:
         actions = policy.run_inference(o) #, return_energy=return_energy)
         inference_output.append(actions.detach().cpu().squeeze(1).numpy())
-    #print('actions output shape:', actions.shape)
 
     return inference_output
 
 def eval_energy(policy, trajs, t, conditional=False, batch_size=256):
 
     observations = gen_obs(conditional=conditional, N=len(trajs))
-    # global_conds = [policy.diffusion._prepare_global_conditioning(o) for o in obs]
     energies = []
     for obs in observations:
-        #print(gc.dtype)
-        #print(trajs.dtype)
         outputs=[]
         for i in range(0, trajs.size(0), batch_size):
             batch_traj = {'action': trajs[i:i+batch_size]}
@@ -121,13 +117,6 @@ def vis_inference(policy, samples, conditional, learned_contour=True, t=0, x_ran
         xx = trajs[:,0].reshape(200,200)
         yy = trajs[:,1].reshape(200,200)
 
-    #samples = run_inference(policy, N=N, conditional=conditional)
-
-    # print('Samples collected')
-    # print(trajs.shape)
-    # print(energies[0].shape)
-    # print(samples[0].shape)
-
     #plot all energy landscapes in list given trajs
     for i in range(len(energies)):
         #plot
@@ -139,7 +128,7 @@ def vis_inference(policy, samples, conditional, learned_contour=True, t=0, x_ran
 
         plt.figure(i)
         if learned_contour:
-            zz=-zz
+            zz=np.exp(-zz)
         plt.imshow(zz, origin="lower",
                     extent=[xx.min(), xx.max(), yy.min(), yy.max()],
                     aspect="auto"
@@ -184,10 +173,6 @@ def vis_energy_landscape(policy, conditional, t=0, x_range=(-8, 8), y_range=(-8,
 
 def vis_sample_comparison(samples, train_data):
 
-    #train_data = np.load(training_samples_path)[:, 1:] #remove conditional obs
-    #N = np.shape(train_data)[0]
-    #samples = run_inference(policy, N=N, conditional=conditional)
-
     for i in range(len(samples)):
         plt.figure(i)
         plt.scatter(train_data[:,0], train_data[:,1], s=8, alpha=0.6, edgecolor='none')
@@ -208,6 +193,7 @@ def main(
     conditional: bool | None = False,
     seed: int | None = 0,
     training_samples = None,
+    viz: bool | None = False
 ):
     assert (pretrained_policy_path is None) ^ (hydra_cfg_path is None)
     if hydra_cfg_path is not None:
@@ -236,9 +222,8 @@ def main(
     assert isinstance(policy, nn.Module)
     policy.cuda()
     policy.eval()
-    #print('MY OUTPUT ACTION SPACE', policy.config.output_shapes["action"])
-    #print('MY CONFIG HORIZON SIZE', policy.config.horizon)
-    # device = get_device_from_parameters(policy)
+
+    device = get_device_from_parameters(policy)
     set_global_seed(seed)
     
     if training_samples is not None:
@@ -252,11 +237,13 @@ def main(
         for obs_samples in samples:
              print(np.mean(np.array(obs_samples),axis=0))
 
+    # visualize inferred samples over gt distribution 
     vis_inference(policy, samples=samples, conditional=conditional, learned_contour=False)
-    
+
+    # visualize learned distribution at different time steps
     for i in range(10):
-         vis_inference(policy, samples=samples, conditional=conditional, learned_contour=True, t=i*10)
-         vis_energy_landscape(policy, conditional, t=i*10)
+        vis_inference(policy, samples=samples, conditional=conditional, learned_contour=True, t=i*10)
+        vis_energy_landscape(policy, conditional, t=i*10)
 
 if __name__ == "__main__":
     init_logging()
@@ -289,8 +276,9 @@ if __name__ == "__main__":
         ),
     )
 
-
-    parser.add_argument("--training-samples", help = "Optionally provide path to original samples for visualiztion.")
+    parser.add_argument("--training-samples", 
+                        type=str,
+                        help = "Optionally provide path to original samples for visualiztion.")
 
 
     parser.add_argument(
@@ -313,6 +301,12 @@ if __name__ == "__main__":
         const=0
     )
 
+    parser.add_argument(
+        "--viz",
+        action="store_true",
+        help="Visualize Evaluation",
+    )
+
     args = parser.parse_args()
 
     if args.pretrained_policy_name_or_path is None:
@@ -326,5 +320,6 @@ if __name__ == "__main__":
             config_overrides=args.overrides,
             conditional=args.conditional,
             seed=args.seed,
-            training_samples=args.training_samples
+            training_samples=args.training_samples, 
+            viz=args.viz
         )
