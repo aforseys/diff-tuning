@@ -113,7 +113,7 @@ def get_hf_dataset_safe_version(repo_id: str, version: str) -> str:
         return version
 
 
-def load_hf_dataset(repo_id: str, version: str, root: Path, split: str, goal_horizon: int | 60) -> datasets.Dataset:
+def load_hf_dataset(repo_id: str, version: str, root: Path, split: str, goal_horizon: int=60) -> datasets.Dataset:
     """hf_dataset contains all the observations, states, actions, rewards, etc."""
     if root is not None:
         if 'hdf5' in root: # maze2d dataset
