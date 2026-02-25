@@ -2,8 +2,7 @@
 
 seed: 100000
 dataset_repo_id: gmm
-input_type: unconditional
-train_type: pretrain
+condition_type: unconditional
 dataset_root: 'data/gmm_unconditional_1000_42_20251204_174604.npy'
 
 wandb:

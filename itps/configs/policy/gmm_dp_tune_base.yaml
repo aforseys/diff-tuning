@@ -2,8 +2,7 @@
 
 seed: 100000
 dataset_repo_id: gmm
-input_type: unconditional
-train_type: finetune
+condition_type: unconditional
 dataset_root: 
   base: 'data/gmm_unconditional_1000_42_20251204_174604.npy'
   pos: 'data/gmm_unconditional_pref_cluster_0_positive_dataset_20251204_192929.npy'

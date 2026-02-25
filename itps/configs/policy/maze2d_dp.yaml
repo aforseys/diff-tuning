@@ -2,8 +2,7 @@
 
 seed: 100000
 dataset_repo_id: maze2d
-input_type: unconditional
-train_type: pretrain
+condition_type: unconditional
 env_type: dense
 dataset_root: 'data/maze2d-large-sparse-v1.hdf5'
 

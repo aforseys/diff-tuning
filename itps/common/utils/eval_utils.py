@@ -215,7 +215,14 @@ def vis_sample_comparison(samples, train_data):
         plt.show()
 
 
-def eval_GMM(policy, conditional, finetune, N, viz=False, training_samples=None):
+def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=None):
+
+    if condition_type == "conditional":
+        conditional=True
+    elif condition_type == "unconditional":
+        conditional=False
+    else: 
+        raise NotImplementedError("Only 'unconditional' or 'conditional' condition_types supported for GMM")
 
     #Calculate KL divergence between distributions 
     kl_div = kl_div(policy, conditional, finetune)

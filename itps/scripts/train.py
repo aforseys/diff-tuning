@@ -31,11 +31,11 @@ from termcolor import colored
 from torch import nn
 from torch.cuda.amp import GradScaler
 
-from itps.common.datasets.factory import make_dataset, resolve_delta_timestamps, PreferencePairDataset
+from itps.common.datasets.factory import make_dataset, resolve_delta_timestamps
 from itps.common.datasets.lerobot_dataset import MultiLeRobotDataset
 from itps.common.datasets.online_buffer import OnlineBuffer, compute_sampler_weights
 from itps.common.datasets.sampler import EpisodeAwareSampler
-from itps.common.datasets.utils import cycle
+from itps.common.datasets.utils import cycle, PreferencePairDataset
 from itps.common.envs.factory import make_env
 from itps.common.logger import Logger, log_output_dir
 from itps.common.policies.factory import make_policy
@@ -313,8 +313,8 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     torch.backends.cuda.matmul.allow_tf32 = True
 
     # Checks to see if policy is conditioned and if finetuning
-    finetune=cfg.train_type.lower()=="finetune"
-    conditional=cfg.input_type.lower=="conditional"
+    finetune=isinstance(cfg.dataset_root, dict)
+    condition_type=cfg.condition_type.lower()
 
     logging.info("make_dataset")
     offline_dataset = make_dataset(cfg)
@@ -387,7 +387,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
                 if cfg.dataset_repo_id == 'gmm':
                     eval_info = eval_GMM(
                         policy, 
-                        conditional=conditional, 
+                        condition_type=condition_type, 
                         N = cfg.eval.n_samples,
                         viz = False,
                         finetune=finetune

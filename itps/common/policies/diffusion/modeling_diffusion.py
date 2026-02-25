@@ -95,9 +95,6 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
         self.expected_image_keys = [k for k in config.input_shapes if k.startswith("observation.image")]
         self.use_env_state = "observation.environment_state" in config.input_shapes
         self.use_goal_cond = "episode_goal" in config.input_shapes
-
-        # Ensure config type matches state input
-        assert ((self.use_goal_cond and config.input_type.lower()=='conditional') or ((not self.use_goal_cond) and (not (config.input_type.lower() == 'conditional')))), "Condition type doesn't match episode goal inclusion"
     
     @property
     def n_obs_steps(self) -> int:
