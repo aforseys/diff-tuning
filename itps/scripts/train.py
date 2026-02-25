@@ -51,7 +51,7 @@ from itps.common.utils.utils import (
 from itps.scripts.eval import eval_policy, eval_GMM
 
 
-def make_optimizer_and_scheduler(cfg, policy):
+def make_optimizer_and_scheduler(cfg, policy, finetune=False):
     if cfg.policy.name == "act":
         optimizer_params_dicts = [
             {
@@ -75,7 +75,7 @@ def make_optimizer_and_scheduler(cfg, policy):
         )
         lr_scheduler = None
     elif cfg.policy.name == "diffusion":
-        if cfg.train_type.lower() == "pretrain":
+        if not finetune:
             optimizer = torch.optim.Adam(
                 policy.diffusion.parameters(),
                 cfg.training.lr,
@@ -83,7 +83,7 @@ def make_optimizer_and_scheduler(cfg, policy):
                 cfg.training.adam_eps,
                 cfg.training.adam_weight_decay,
             )
-        elif cfg.train_type.lower() == "finetune":
+        else:
                 trainable_params = policy.freeze_nonFiLM()
                 optimizer = torch.optim.Adam(
                 trainable_params,
@@ -92,8 +92,6 @@ def make_optimizer_and_scheduler(cfg, policy):
                 cfg.training.adam_eps,
                 cfg.training.adam_weight_decay,
             )
-        else: 
-            raise NotImplementedError("Only pretrain or finetune supported")
 
         from diffusers.optimization import get_scheduler
 
@@ -357,7 +355,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     assert isinstance(policy, nn.Module)
     # Create optimizer and scheduler
     # Temporary hack to move optimizer out of policy
-    optimizer, lr_scheduler = make_optimizer_and_scheduler(cfg, policy)
+    optimizer, lr_scheduler = make_optimizer_and_scheduler(cfg, policy, finetune)
     grad_scaler = GradScaler(enabled=cfg.use_amp)
 
     step = 0  # number of policy updates (forward + backward + optim)

@@ -107,7 +107,7 @@ def make_dataset(cfg, split: str = "train") -> LeRobotDataset | MultiLeRobotData
         )
 
         # Add goal horizon if necessary 
-        if cfg.input_type.lower() == "conditional":
+        if cfg.condition_type.lower() != "unconditional":
             if 'goal_horizon' in cfg.training:
                 dataset_kwargs['goal_horizon']=cfg.training.goal_horizon
             else: 
