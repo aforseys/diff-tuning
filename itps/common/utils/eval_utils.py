@@ -104,10 +104,16 @@ def kl_divergence(policy, conditional, finetune, t=0, eps=1e-8):
 
     # transform energy to pdf 
     q_x = [np.exp(-energy_dist) for energy_dist in q_x]
-    # normalize within each distribution, clip to prevent division by zero 
+    # flatten, clip, and normalize within each distribution 
     eps = 1e-8  # good for float32
-    p_x = [np.clip(dist/dist.sum(), eps, None) for dist in p_x]
-    q_x = [np.clip(dist/dist.sum(), eps, None) for dist in q_x] 
+
+    p_x = [dist.flatten() for dist in p_x]
+    q_x = [dist.flatten() for dist in q_x]
+    p_x = [np.clip(dist, eps, None) for dist in p_x]
+    q_x = [np.clip(dist, eps, None) for dist in q_x]
+    p_x = [dist/dist.sum() for dist in p_x]
+    q_x = [dist/dist.sum() for dist in q_x]
+
     # get average kl divergence across distributions
     kl_div = np.mean([np.sum(p_x[i]*np.log(p_x[i]/q_x[i])) for i in range(len(p_x))])
 
