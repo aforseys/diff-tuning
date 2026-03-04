@@ -8,11 +8,11 @@ from matplotlib import pyplot as plt
 from itps.scripts.gaussian_mm import get_weights, get_means, get_covs, mixture_pdf
 
 ## -- RUN INFERENCE --
-def gen_obs(conditional, N):
+def gen_obs(conditional, N, device):
     "Generates a batch object that matches same type as passed through model, only contains obs."
     observations=[]
     for i in range(1 if not conditional else 3):
-        obs_tensor = torch.full((N, 1, 1), i, dtype=torch.float32, device=torch.device("cuda"))
+        obs_tensor = torch.full((N, 1, 1), i, dtype=torch.float32, device=torch.device(device))
         obs_dict= {
             'observation.state':obs_tensor, 
             'observation.environment_state':obs_tensor
@@ -21,7 +21,8 @@ def gen_obs(conditional, N):
     return observations
 
 def run_inference(policy, N=100, conditional=False):
-    obs = gen_obs(conditional=conditional, N=N)
+    device = next(policy.parameters()).device
+    obs = gen_obs(conditional=conditional, N=N, device=device)
 
     inference_output = []
     for o in obs:
@@ -31,7 +32,11 @@ def run_inference(policy, N=100, conditional=False):
     return inference_output
 
 ## -- CALCULATE ENERGY  -- 
-def gen_xy_grid(x_range, y_range, torchify=True):
+def torchify(t, device):
+    return torch.tensor(t, dtype=torch.float32, device=torch.device(device)).unsqueeze(dim=1)
+
+
+def gen_xy_grid(x_range, y_range, device, return_tensor=True):
     xmin,xmax=x_range
     ymin,ymax=y_range
     
@@ -42,13 +47,14 @@ def gen_xy_grid(x_range, y_range, torchify=True):
 
     trajs = np.column_stack([xx.ravel(), yy.ravel()]) 
 
-    if torchify: 
-        trajs = torch.tensor(trajs, dtype=torch.float32, device=torch.device("cuda")).unsqueeze(dim=1) 
+    if return_tensor:
+        trajs = torchify(trajs, device)
 
     return trajs
 
 def eval_energy(policy, trajs, t, conditional=False, batch_size=256):
-    observations = gen_obs(conditional=conditional, N=len(trajs))
+    device = next(policy.parameters()).device
+    observations = gen_obs(conditional=conditional, N=len(trajs), device=device)
     energies = []
     for obs in observations:
         outputs=[]
@@ -72,35 +78,36 @@ def eval_gt_pdf(trajs, conditional, centers=None):
 
 
 ## -- METRICS -- 
-def kl_div(policy, conditional, finetune, t=0, eps=1e-8):
+def kl_divergence(policy, conditional, finetune, t=0, eps=1e-8):
     """
     Assumes only conditional or finetune is true. 
-    """
-
+    """ 
     assert not (conditional and finetune), "Simultaneous conditional and finetune not supported"
+    device = next(policy.parameters()).device
 
-    # Generate grid over GT distribution support 
-    traj_grid = gen_xy_grid(x_range=(-10, 10), y_range=(-10,10))
+    # Generate grid over GT distribution support
+    traj_grid = gen_xy_grid(x_range=(-10, 10), y_range=(-10,10), device=device, return_tensor=False)
 
     if conditional: # get gt and learned pdf for 3 separate observations
         p_x = eval_gt_pdf(traj_grid, conditional=True)
-        q_x = eval_energy(policy, traj_grid, t=t, conditional=True)
+        q_x = eval_energy(policy, torchify(traj_grid, device=device), t=t, conditional=True)
 
     elif finetune: # get gt pdf for target distribution and general learned distribution 
         p_x = eval_gt_pdf(traj_grid, conditional=True, centers=[0]) 
-        q_x = eval_energy(policy, traj_grid, t=t, conditional=False)
+        q_x = eval_energy(policy, torchify(traj_grid, device=device), t=t, conditional=False)
 
     else: # get gt pdf for mixture model and general learned distribution 
         p_x = eval_gt_pdf(traj_grid, conditional=False)
-        q_x = eval_energy(policy, traj_grid, t=t, conditional=False)
+        q_x = eval_energy(policy, torchify(traj_grid, device=device), t=t, conditional=False)
 
     assert ((conditional or finetune) and (len(p_x)==len(q_x)==3)) or (len(p_x)==len(q_x)==1), "Incorrect number of distributions"
 
     # transform energy to pdf 
     q_x = [np.exp(-energy_dist) for energy_dist in q_x]
-    # normalize within each distribution 
-    p_x = [dist/dist.sum() for dist in p_x]
-    q_x = [dist/dist.sum() for dist in q_x]    
+    # normalize within each distribution, clip to prevent division by zero 
+    eps = 1e-8  # good for float32
+    p_x = [np.clip(dist/dist.sum(), eps, None) for dist in p_x]
+    q_x = [np.clip(dist/dist.sum(), eps, None) for dist in q_x] 
     # get average kl divergence across distributions
     kl_div = np.mean([np.sum(p_x[i]*np.log(p_x[i]/q_x[i])) for i in range(len(p_x))])
 
@@ -124,17 +131,19 @@ def log_likelihood(policy, conditional, finetune, N=100):
         p_x = eval_gt_pdf(samples[0], conditional=False)     
 
     #get average log likelihood across all samples and distributions
-    log_likelihood = np.mean(np.log(np.concatenate(p_x, axis=0)))
+    eps =1e-8
+    ll = np.mean(np.log(np.clip(np.concatenate(p_x, axis=0),eps, None)))
 
-    return samples, log_likelihood
+    return samples, ll
 
 
 ## -- VISUALIZATION FUNCTIONS -- 
 def vis_inference(policy, samples, conditional, learned_contour=True, t=0, x_range=(-10, 10), y_range=(-10,10)):
 
-     #if plotting over learned energy contour
+    device = next(policy.parameters()).device
+    #if plotting over learned energy contour
     if learned_contour:
-        trajs = gen_xy_grid(x_range=x_range, y_range=y_range)
+        trajs = gen_xy_grid(x_range=x_range, y_range=y_range, device=device)
         print('Evaluating energy')
         energies = eval_energy(policy, trajs, t, conditional=conditional)
         xx = trajs[:, 0, 0].cpu().numpy().reshape(200,200)
@@ -143,7 +152,7 @@ def vis_inference(policy, samples, conditional, learned_contour=True, t=0, x_ran
 
     #otherwise plot over gt pdf 
     else: 
-        trajs = gen_xy_grid(x_range=x_range, y_range=y_range, torchify=False)
+        trajs = gen_xy_grid(x_range=x_range, y_range=y_range, device=device, return_tensor=False)
         energies = eval_gt_pdf(trajs, conditional=conditional)
         xx = trajs[:,0].reshape(200,200)
         yy = trajs[:,1].reshape(200,200)
@@ -174,7 +183,8 @@ def vis_inference(policy, samples, conditional, learned_contour=True, t=0, x_ran
 
 def vis_energy_landscape(policy, conditional, t=0, x_range=(-8, 8), y_range=(-8,8)):
 
-    trajs = gen_xy_grid(x_range=x_range, y_range=y_range)
+    device = next(policy.parameters()).device
+    trajs = gen_xy_grid(x_range=x_range, y_range=y_range, device=device)
     energies = eval_energy(policy, trajs, t, conditional=conditional)
 
     print(trajs.shape)
@@ -225,15 +235,15 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
         raise NotImplementedError("Only 'unconditional' or 'conditional' condition_types supported for GMM")
 
     #Calculate KL divergence between distributions 
-    kl_div = kl_div(policy, conditional, finetune)
+    kl_div = kl_divergence(policy, conditional, finetune)
 
     # Generate samples and calculate log likelihood
-    samples, log_likelihood = log_likelihood(policy, conditional, finetune, N)
+    samples, ll = log_likelihood(policy, conditional, finetune, N)
 
     info ={
         "aggregated":{
             "kl_div": kl_div,
-            "log_likelihood": log_likelihood
+            "log_likelihood": ll
         }
     }
 
