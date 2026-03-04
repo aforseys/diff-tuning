@@ -3,7 +3,7 @@
 seed: 100000
 dataset_repo_id: gmm
 condition_type: unconditional
-dataset_root: 
+dataset_root:
   base: 'data/gmm_unconditional_1000_42_20251204_174604.npy'
   pos: 'data/gmm_unconditional_pref_cluster_0_positive_dataset_20251204_192929.npy'
   neg: 'data/gmm_unconditional_pref_cluster_0_negative_dataset_20251204_192929.npy'
@@ -15,14 +15,14 @@ hydra:
   run:
     # Set `dir` to where you would like to save all of the run outputs. If you run another training session
     # with the same value for `dir` its contents will be overwritten unless you set `resume` to true.
-    dir: data/maze2d_dp/outputs/${now:%Y.%m.%d}/${hydra.job.name}
+    dir: data/gmm/unconditioned/tune/outputs/${now:%Y.%m.%d}/${hydra.job.name}
   job:
     name: ${now:%H.%M.%S}_${env.name}_${policy.name}
 
 device: "cuda:1"  # cpu
 
 training:
-  offline_steps: 100000
+  offline_steps: 5
   online_steps: 0
   eval_freq: 0
   save_freq: 5000
@@ -31,7 +31,7 @@ training:
 
   batch_size: 256
   grad_clip_norm: 10
-  lr: 1.0e-4
+  lr: 1.0e-3
   lr_scheduler: cosine
   lr_warmup_steps: 500
   adam_betas: [0.95, 0.999]
@@ -39,7 +39,7 @@ training:
   adam_weight_decay: 1.0e-6
   online_steps_between_rollouts: 1
 
-  delta_timestamps: 
+  delta_timestamps:
     observation.environment_state: "[0]"
     observation.state: "[0]"
     action: "[0]"
