@@ -166,9 +166,9 @@ def update_policy(
         "grad_norm": float(grad_norm),
         "lr": optimizer.param_groups[0]["lr"],
         "update_s": time.perf_counter() - start_time,
-        **{k: v for k, v in output_dict.items() if k != "loss"},
+        **{k: v.item() for k, v in output_dict.items() if k != "loss"},
     }
-    info.update({k: v for k, v in output_dict.items() if k not in info})
+    #info.update({k: v for k, v in output_dict.items() if k not in info}) (redundant?)
 
     return info
 
@@ -407,7 +407,8 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
                     )
             log_eval_info(logger, eval_info["aggregated"], step, cfg, offline_dataset, is_online=is_online)
             if cfg.wandb.enable:
-                logger.log_video(eval_info["video_paths"][0], step, mode="eval")
+                if cfg.dataset_repo_id != 'gmm':
+                    logger.log_video(eval_info["video_paths"][0], step, mode="eval")
             logging.info("Resume training")
 
         if cfg.training.save_checkpoint and (
