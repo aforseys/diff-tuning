@@ -146,7 +146,7 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
             batch["observation.images"] = torch.stack([batch[k] for k in self.expected_image_keys], dim=-4)
         batch = self.normalize_targets(batch)
         loss, (loss_denoise, loss_energy, loss_finetune) = self.diffusion.compute_loss(batch, tune_batch)
-        return {"loss": loss, "loss_breakdown": {"MSE": loss_denoise, "energy_landscape": loss_energy, "pref_tuning": loss_finetune}}
+        return {"loss": loss, "MSE_loss": loss_denoise, "contrastive_loss": loss_energy, "pref_tuning_loss": loss_finetune}
    
     def freeze_nonFiLM(self):
 
