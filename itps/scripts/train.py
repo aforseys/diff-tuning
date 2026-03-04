@@ -213,9 +213,6 @@ def log_train_info(logger: Logger, info, step, cfg, dataset, is_online):
 
 
 def log_eval_info(logger, info, step, cfg, dataset, is_online):
-    eval_s = info["eval_s"]
-    avg_sum_reward = info["avg_sum_reward"]
-    pc_success = info["pc_success"]
 
     # A sample is an (observation,action) pair, where observation and action
     # can be on multiple timestamps. In a batch, we have `batch_size`` number of samples.
@@ -230,11 +227,18 @@ def log_eval_info(logger, info, step, cfg, dataset, is_online):
         # number of episodes seen during training
         f"ep:{format_big_number(num_episodes)}",
         # number of time all unique samples are seen
-        f"epch:{num_epochs:.2f}",
-        f"∑rwrd:{avg_sum_reward:.3f}",
-        f"success:{pc_success:.1f}%",
-        f"eval_s:{eval_s:.3f}",
-    ]
+        f"epch:{num_epochs:.2f}"]
+    
+    # Log environment-specific evaluation information 
+    if cfg.dataset_repo_id != 'gmm':
+        eval_s = info["eval_s"]
+        avg_sum_reward = info["avg_sum_reward"]
+        pc_success = info["pc_success"]
+        log_items = log_items + [f"∑rwrd:{avg_sum_reward:.3f}",
+                            f"success:{pc_success:.1f}%",
+                            f"eval_s:{eval_s:.3f}",
+                            ]
+
     logging.info(" ".join(log_items))
 
     info["step"] = step
