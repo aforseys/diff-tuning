@@ -342,7 +342,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     pretrained_path = None
     if cfg.resume:
         pretrained_path = str(logger.last_pretrained_model_dir)
-    elif cfg.train_type == "finetune":
+    elif finetune:
         pretrained_path = str(cfg.pretrained_policy_path)
 
     # init with original dataset statistics unless loading pretrained policy (to resume or finetune)

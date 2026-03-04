@@ -447,7 +447,8 @@ def main(
     hydra_cfg_path: str | None = None,
     out_dir: str | None = None,
     config_overrides: list[str] | None = None,
-    viz: bool | None = False
+    viz: bool | None = False,
+    training_samples: Path | None = None
 ):
     assert (pretrained_policy_path is None) ^ (hydra_cfg_path is None)
     if pretrained_policy_path is not None:
@@ -457,6 +458,8 @@ def main(
 
     if out_dir is None:
         out_dir = f"outputs/eval/{dt.now().strftime('%Y-%m-%d/%H-%M-%S')}_{hydra_cfg.env.name}_{hydra_cfg.policy.name}"
+        out_dir_path = Path(out_dir)
+        out_dir_path.mkdir(parents=True, exist_ok=False)
 
     # Check device is available
     device = get_safe_torch_device(hydra_cfg.device, log=True)
@@ -481,15 +484,18 @@ def main(
     assert isinstance(policy, nn.Module)
     policy.eval()
 
+    finetune = isinstance(hydra_cfg.dataset_root, dict)
+
     with torch.no_grad(), torch.autocast(device_type=device.type) if hydra_cfg.use_amp else nullcontext():
 
         if hydra_cfg.env.name == 'gmm':
             info = eval_GMM(
                 policy, 
-                hydra_cfg.policy.conditional, 
+                hydra_cfg.condition_type,
+                finetune=finetune, 
                 N = hydra_cfg.eval.n_samples,
                 viz = viz,
-                training_samples = hydra_cfg.training_samples #used for viz if viz True
+                training_samples = training_samples #used for viz if viz True
                 )
         
         elif hydra_cfg.env.name == 'maze2d':
@@ -510,7 +516,8 @@ def main(
     with open(Path(out_dir) / "eval_info.json", "w") as f:
         json.dump(info, f, indent=2)
 
-    env.close()
+    if not hydra_cfg.env.name == 'gmm':
+         env.close()
 
     logging.info("End of eval")
 
