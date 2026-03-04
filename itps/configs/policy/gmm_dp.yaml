@@ -11,18 +11,18 @@ hydra:
   run:
     # Set `dir` to where you would like to save all of the run outputs. If you run another training session
     # with the same value for `dir` its contents will be overwritten unless you set `resume` to true.
-    dir: data/maze2d_dp/outputs/${now:%Y.%m.%d}/${hydra.job.name}
+    dir: data/gmm/outputs/${now:%Y.%m.%d}/${hydra.job.name}
   job:
     name: ${now:%H.%M.%S}_${env.name}_${policy.name}
 
 device: "cuda:1"  # cpu
 
 training:
-  offline_steps: 100000
+  offline_steps: 5000
   online_steps: 0
   eval_freq: 0
-  save_freq: 5000
-  log_freq: 250
+  save_freq: 500
+  log_freq: 500
   save_checkpoint: true
 
   batch_size: 256
