@@ -584,11 +584,13 @@ class EBMDiffusionModel(nn.Module):
             loss = loss * mask.unsqueeze(-1)
 
         loss = einops.reduce(loss, 'b ... -> b (...)', 'mean')
-        loss = loss * extract(self.loss_weight, timesteps, loss.shape) * self.config.gradient_loss_weight
-        loss_mse = loss
+        loss = loss * extract(self.loss_weight, timesteps, loss.shape)
+        loss_mse = loss.clone()  # SNR-weighted MSE, before gradient_loss_weight scaling
+        loss = loss * self.config.gradient_loss_weight
         #mse_grad = torch.autograd.grad([loss_mse.sum()], [noisy_trajectory], create_graph=True)[0]
         #print("mean mse_grad:", [mse_grad.min(), mse_grad.max(), mse_grad.mean()])
         #print('loss mse:', loss_mse)
+
         # Compute contrastive loss
         loss_energy=torch.tensor(-1, dtype=torch.float32)
         if self.config.supervise_energy_landscape:
