@@ -44,7 +44,7 @@ def main():
 
     # Number of offline training steps (we'll only do offline training for this example.)
     # Adjust as you prefer. 5000 steps are needed to get something worth evaluating.
-    training_steps = 1
+    training_steps = 5
     device = torch.device("cuda:1")
     log_freq = 250
 
