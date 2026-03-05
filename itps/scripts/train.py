@@ -315,7 +315,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     torch.backends.cuda.matmul.allow_tf32 = True
 
     # Checks to see if policy is conditioned and if finetuning
-    finetune=isinstance(cfg.dataset_root, dict)
+    finetune=isinstance(cfg.dataset_root, DictConfig)
     condition_type=cfg.condition_type.lower()
 
     logging.info("make_dataset")
@@ -445,7 +445,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
         shuffle=shuffle,
         sampler=sampler,
         pin_memory=device.type != "cpu",
-        drop_last=False,
+        drop_last=True,
     )
     dl_iter = cycle(dataloader)
 
@@ -454,7 +454,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
         if cfg.training.get("drop_n_last_frames"):
             shuffle = False
             sampler = EpisodeAwareSampler(
-                offline_dataset.episode_data_index,
+                pref_dataset.episode_data_index,
                 drop_n_last_frames=cfg.training.drop_n_last_frames,
                 shuffle=True,
             )
@@ -468,9 +468,9 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
                 shuffle=shuffle,
                 sampler=sampler,
                 pin_memory=device.type != "cpu",
-                drop_last=False,
+                drop_last=True,
             )
-        pref_dl_iter = cycle(pref_dataloader)        
+        pref_dl_iter = cycle(pref_dataloader)
 
     policy.train()
     offline_step = 0

@@ -522,7 +522,7 @@ class PreferencePairDataset(torch.utils.data.Dataset):
         assert len(pos_ds) == len(neg_ds), \
             f"Positive ({len(pos_ds)}) and negative ({len(neg_ds)}) datasets must be same length."
         self.pos_ds = pos_ds
-        self.neg_ds = pos_ds
+        self.neg_ds = neg_ds
 
         # ensure datasets have identical episode boundaries
         assert torch.equal(pos_ds.episode_data_index["from"], neg_ds.episode_data_index["from"])

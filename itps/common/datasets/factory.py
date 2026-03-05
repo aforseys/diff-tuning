@@ -16,7 +16,7 @@
 import logging
 
 import torch
-from omegaconf import ListConfig, OmegaConf
+from omegaconf import ListConfig, DictConfig, OmegaConf
 
 from itps.common.datasets.lerobot_dataset import LeRobotDataset, MultiLeRobotDataset
 from itps.common.datasets.transforms import get_image_transforms
@@ -114,13 +114,14 @@ def make_dataset(cfg, split: str = "train") -> LeRobotDataset | MultiLeRobotData
                 logging.warning(
                     "No goal horizon passed in for conditional model"
                 )
-            
+
+
         # If multiple datasets (used in tuning)
-        if isinstance(cfg.dataset_root, dict):
+        if isinstance(cfg.dataset_root, DictConfig):
             dataset = {}
             for dataset_type, dataset_path in cfg.dataset_root.items():
                 dataset[dataset_type] = LeRobotDataset(cfg.dataset_repo_id,
-                        root = dataset_path
+                        root = dataset_path,
                         **dataset_kwargs,
             )
 
