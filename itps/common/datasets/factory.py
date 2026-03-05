@@ -111,7 +111,9 @@ def make_dataset(cfg, split: str = "train") -> LeRobotDataset | MultiLeRobotData
             if 'goal_horizon' in cfg.training:
                 dataset_kwargs['goal_horizon']=cfg.training.goal_horizon
             else: 
-                raise UserWarning("No goal horizon passed in for conditional model")
+                logging.warning(
+                    "No goal horizon passed in for conditional model"
+                )
             
         # If multiple datasets (used in tuning)
         if isinstance(cfg.dataset_root, dict):
