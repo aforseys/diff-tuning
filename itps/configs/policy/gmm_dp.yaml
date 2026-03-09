@@ -13,7 +13,7 @@ hydra:
     # with the same value for `dir` its contents will be overwritten unless you set `resume` to true.
     dir: data/gmm/unconditioned/train/outputs/${now:%Y.%m.%d}/${hydra.job.name}
   job:
-    name: ${now:%H.%M.%S}_${env.name}_${policy.name}
+    name: $gmm_{now:%Y.%m.%d.%H.%M.%S}_${env.name}_${policy.name}
 
 device: "cuda:1"  # cpu
 
@@ -23,7 +23,7 @@ training:
   eval_freq: 500
   save_freq: 500
   log_freq: 500
-  save_checkpoint: true
+  save_checkpoint: false
 
   batch_size: 256
   grad_clip_norm: 10

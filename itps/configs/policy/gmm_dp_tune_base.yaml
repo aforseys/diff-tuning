@@ -17,23 +17,23 @@ hydra:
     # with the same value for `dir` its contents will be overwritten unless you set `resume` to true.
     dir: data/gmm/unconditioned/tune/outputs/${now:%Y.%m.%d}/${hydra.job.name}
   job:
-    name: ${now:%H.%M.%S}_${env.name}_${policy.name}
+    name: $gmm_unconditional_tune_{now:%Y.%m.%d.%H.%M.%S}_${env.name}_${policy.name}
 
 device: "cuda:1"  # cpu
 
 training:
-  offline_steps: 5
+  offline_steps: 1000
   online_steps: 0
-  eval_freq: 1
-  save_freq: 1
-  log_freq: 1
-  save_checkpoint: true
+  eval_freq: 100
+  save_freq: 100
+  log_freq: 100
+  save_checkpoint: false
 
-  batch_size: 64
+  batch_size: 256
   grad_clip_norm: 10
-  lr: 1.0e-3
+  lr: 1.0e-4
   lr_scheduler: cosine
-  lr_warmup_steps: 500
+  lr_warmup_steps: 50
   adam_betas: [0.95, 0.999]
   adam_eps: 1.0e-8
   adam_weight_decay: 1.0e-6
@@ -103,10 +103,10 @@ policy:
   # Loss computation
   do_mask_loss_for_padding: false
 
-  gradient_loss_weight: 0.01
+  gradient_loss_weight: 1.0
 
   supervise_energy_landscape: false
   energy_landscape_loss_weight: 0.0
 
   finetune_energy_landscape: True
-  finetune_loss_weight: 1
+  finetune_loss_weight: 5.0
