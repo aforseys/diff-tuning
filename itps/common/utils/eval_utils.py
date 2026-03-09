@@ -26,7 +26,8 @@ def run_inference(policy, N=100, conditional=False):
 
     inference_output = []
     for o in obs:
-        actions = policy.run_inference(o) 
+        with torch.inference_mode():
+            actions = policy.run_inference(o) 
         inference_output.append(actions.detach().cpu().squeeze(1).numpy())
 
     return inference_output
@@ -119,14 +120,14 @@ def kl_divergence(policy, conditional, finetune, t=0, eps=1e-8):
 
     return kl_div
 
-def log_likelihood(policy, conditional, finetune, N=100):
+def log_likelihood(policy, conditional, finetune, N=100, samples=None):
     """
     Assumes only conditional or finetune is true. 
     """
 
     assert not (conditional and finetune), "Simultaneous conditional and finetune not supported"
-
-    samples=run_inference(policy, N=N, conditional=conditional)
+    if samples is None:
+        samples=run_inference(policy, N=N, conditional=conditional)
     assert (conditional and (len(samples)==3)) or (len(samples)==1), "Incorrect number of sample sets"
 
     if conditional: # evaluate each sample set under corresponding gt pdf
@@ -230,6 +231,16 @@ def vis_sample_comparison(samples, train_data):
         plt.title(f"Samples against training data (Obs:{i})")
         plt.show()
 
+def filter_samples(samples, finetune, conditional):
+
+    samples_by_obs = [samples[samples[:, 0] == i, 1:] for i in range(3)]
+
+    if conditional: 
+        return samples_by_obs #return list with all observations divided
+    elif finetune: 
+        return samples_by_obs[:1] #return list of just 0 observation
+    else: 
+        return [np.concatenate(samples_by_obs)] #return list with concatenated np array
 
 def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=None):
 
@@ -252,6 +263,12 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
             "log_likelihood": ll
         }
     }
+
+    if training_samples is not None:
+        train_data = np.load(training_samples)
+        filtered_samples = filter_samples(train_data, finetune, conditional)
+        ll_training = log_likelihood(filtered_samples)
+        print('Log likelihood of training samples:', ll_training)
 
     if viz:
         # Visualize training samples if passed in
