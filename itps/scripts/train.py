@@ -472,6 +472,14 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
             )
         pref_dl_iter = cycle(pref_dataloader)
 
+    # ensure non-film parameters are frozen for finetuning
+    if finetune: 
+        non_cond_encoder_trainable = [ n for n, p in policy.named_parameters() if p.requires_grad and "cond_encoder" not in n ] 
+        assert len(non_cond_encoder_trainable) == 0, f"Unexpected trainable params: {non_cond_encoder_trainable}" 
+        
+        cond_encoders = [ n for n, p in policy.named_parameters() if p.requires_grad ] 
+        logging.info(f"Training {len(cond_encoders)} cond_encoder param tensors")
+
     policy.train()
     offline_step = 0
     for _ in range(step, cfg.training.offline_steps):
