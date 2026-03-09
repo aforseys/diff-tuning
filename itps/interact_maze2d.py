@@ -605,6 +605,75 @@ class MazeExp(ConditionalMaze):
 
         pygame.quit()
 
+def extract_preference_pairs(loadpath, maze_type='large', score_threshold=0.3, viz=False):
+    maze_env = MazeEnv(maze_type)  # needed for similarity_score; also has viz if viz=True
+    
+    pairs = []
+    with open(loadpath, "r") as f:
+        trials = [json.loads(line) for line in f]
+    
+    for trial in trials:
+        guide = np.array(trial["guide"])
+        pred_traj = np.array(trial["pred_traj"])  # (B, T, 2) gui space
+        
+        if len(guide) == 0:
+            continue
+
+        pred_traj, scores = maze_env.similarity_score(pred_traj, guide)
+        
+        trial_pairs = []
+        for i in range(len(scores)):
+            for j in range(i + 1, len(scores)):
+                if abs(scores[i] - scores[j]) >= score_threshold:
+                    winner, loser = (i, j) if scores[i] > scores[j] else (j, i)
+                    trial_pairs.append({
+                        "obs_idx":      trial["trial_idx"],
+                        "agent_pos":    trial["agent_pos"],
+                        "guide":        guide.tolist(),
+                        "winner_traj":  pred_traj[winner].tolist(),
+                        "loser_traj":   pred_traj[loser].tolist(),
+                        "winner_score": float(scores[winner]),
+                        "loser_score":  float(scores[loser]),
+                    })
+        
+        pairs.extend(trial_pairs)
+
+        if viz and len(trial_pairs) > 0:
+            # Show winner (green) and loser (red) for this trial
+            # Stack them as a batch so update_screen can handle them
+            winner_traj = np.array(trial_pairs[0]["winner_traj"])[None]  # (1, T, 2)
+            loser_traj  = np.array(trial_pairs[0]["loser_traj"])[None]   # (1, T, 2)
+            viz_traj    = np.concatenate([winner_traj, loser_traj], axis=0)  # (2, T, 2)
+
+            maze_env.draw_traj = guide  # so update_screen draws the sketch
+            maze_env.agent_gui_pos = np.array(trial["agent_pos"])
+            maze_env.update_screen(
+                xy_pred=viz_traj,
+                collisions=np.array([False, True]),  # winner=clean, loser=tinted white
+                keep_drawing=True,
+                traj_in_gui_space=True,
+            )
+
+            # Wait for keypress: N to continue, Q to quit viz early
+            waiting = True
+            while waiting:
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        waiting = False
+                        viz = False  # stop viz for remaining trials
+                    if event.type == pygame.KEYDOWN:
+                        if event.key == pygame.K_n:
+                            waiting = False
+                        if event.key == pygame.K_q:
+                            waiting = False
+                            viz = False
+                maze_env.clock.tick(10)
+
+    if viz:
+        pygame.quit()
+
+    return pairs
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -671,7 +740,6 @@ if __name__ == "__main__":
     else:
         policy = None
         policy_tag = None
-    print('TEST', args.unconditional)
     if args.unconditional:
         interactiveMaze = UnconditionalMaze(policy, policy_tag=policy_tag, vis_energy=args.vis_energy, maze_type=args.maze_type)
     elif args.goal_conditioned:
