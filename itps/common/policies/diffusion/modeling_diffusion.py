@@ -671,6 +671,7 @@ class EBMDiffusionModel(nn.Module):
             energy_stack = torch.cat([energy_positive, energy_negative], dim=-1)
             target = torch.zeros(energy_positive.size(0)).to(energy_stack.device)
             loss_energy_finetune = F.cross_entropy(-1 * energy_stack, target.long(), reduction='none')[:, None]
+            loss_energy_finetune = loss_energy_finetune * extract(self.loss_weight, timesteps, loss_energy_finetune.shape) 
             #grad_energy_finetune = torch.autograd.grad([loss_energy_finetune.sum()], [traj_concat], create_graph=True)[0]
             #print('mean loss energy finetune grad:', [grad_energy_finetune.min(), grad_energy_finetune.max(), grad_energy_finetune.mean()])
             loss+=self.config.finetune_loss_weight*loss_energy_finetune
