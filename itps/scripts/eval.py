@@ -51,6 +51,7 @@ from copy import deepcopy
 from datetime import datetime as dt
 from pathlib import Path
 from typing import Callable
+from omegaconf import DictConfig
 
 import einops
 import gymnasium as gym
@@ -484,7 +485,7 @@ def main(
     assert isinstance(policy, nn.Module)
     policy.eval()
 
-    finetune = isinstance(hydra_cfg.dataset_root, dict)
+    finetune = isinstance(hydra_cfg.dataset_root, DictConfig)
 
     with torch.no_grad(), torch.autocast(device_type=device.type) if hydra_cfg.use_amp else nullcontext():
 
