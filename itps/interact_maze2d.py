@@ -780,35 +780,42 @@ def extract_preference_pairs(loadpath, savefile, maze_type='large', score_thresh
         
         pairs.extend(trial_pairs)
 
-        if viz and len(trial_pairs) > 0:
-            # Show winner (green) and loser (red) for this trial
-            # Stack them as a batch so update_screen can handle them
-            winner_traj = np.array(trial_pairs[0]["winner_traj"])[None]  # (1, T, 2)
-            loser_traj  = np.array(trial_pairs[0]["loser_traj"])[None]   # (1, T, 2)
-            viz_traj    = np.concatenate([winner_traj, loser_traj], axis=0)  # (2, T, 2)
+    print(f"Generated {len(pairs)} total preference pairs.")
+    if viz and len(pairs) > 0:
+        pair_idx = 0
+        running = True
 
-            maze_env.draw_traj =  guide if guide is not None else []  # so update_screen draws the sketch
-            maze_env.agent_gui_pos = np.array(trial["agent_pos"])
+        while running and pair_idx < len(pairs):
+            pair = pairs[pair_idx]
+            print(f"Visualizing pair {pair_idx + 1}/{len(pairs)}")
+
+            winner_traj = np.asarray(pair["winner_traj"], dtype=float)[None]
+            loser_traj = np.asarray(pair["loser_traj"], dtype=float)[None]
+            viz_traj = np.concatenate([winner_traj, loser_traj], axis=0)
+
+            maze_env.draw_traj = np.asarray(pair["guide"], dtype=float) if "guide" in pair else []
+            maze_env.agent_gui_pos = np.asarray(pair["agent_pos"], dtype=float)
+
             maze_env.update_screen(
                 xy_pred=viz_traj,
-                collisions=np.array([False, True]),  # winner=clean, loser=tinted white
-                keep_drawing=(guide is not None),
+                collisions=np.array([False, True]),
+                keep_drawing=("guide" in pair),
                 traj_in_gui_space=True,
             )
 
-            # Wait for keypress: N to continue, Q to quit viz early
             waiting = True
             while waiting:
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
                         waiting = False
-                        viz = False  # stop viz for remaining trials
-                    if event.type == pygame.KEYDOWN:
+                        running = False
+                    elif event.type == pygame.KEYDOWN:
                         if event.key == pygame.K_n:
+                            pair_idx += 1
                             waiting = False
-                        if event.key == pygame.K_q:
+                        elif event.key == pygame.K_q:
                             waiting = False
-                            viz = False
+                            running = False
                 maze_env.clock.tick(10)
 
     if viz:
