@@ -750,11 +750,13 @@ def extract_preference_pairs(loadpath, savefile, maze_type='large', score_thresh
             guide = np.array(trial["guide"])
             if len(guide) == 0:
                 continue
-            pred_traj, scores = maze_env.similarity_score(pred_traj, guide)
+            pred_traj = trial["pred_traj"]
+            samples, scores = maze_env.similarity_score(pred_traj, guide)
         elif metric == 'collision_rate':
-            xy_traj = np.array([[maze_env.gui2xy(p) for p in traj] for traj in pred_traj])
+            xy_traj = np.array([[maze_env.gui2xy(p) for p in traj] for traj in trial["pred_traj"]])
             collisions = maze_env.check_collision(xy_traj)  # (B,) bool
             scores = (~collisions).astype(float)  # 1.0 if no collision, 0.0 if collision
+            samples =  trial["pred_traj"]
             guide = None
         else:
             raise NotImplementedError(f"Metric '{metric}' is not implemented.")
@@ -769,8 +771,8 @@ def extract_preference_pairs(loadpath, savefile, maze_type='large', score_thresh
                         "metric_kwargs": metric_kwargs,
                         "obs_idx":      trial["trial_idx"],
                         "agent_pos":    trial["agent_pos"],
-                        "winner_traj":  pred_traj[winner].tolist(),
-                        "loser_traj":   pred_traj[loser].tolist(),
+                        "winner_traj":  samples[winner].tolist(),
+                        "loser_traj":   samples[loser].tolist(),
                         "winner_score": float(scores[winner]),
                         "loser_score":  float(scores[loser]),
                          **({"guide": guide.tolist()} if guide is not None else {}),
@@ -832,7 +834,7 @@ if __name__ == "__main__":
     parser.add_argument('-e', '--vis_energy', action='store_true', help="Visualize energy")
     parser.add_argument('-mt',  '--maze_type', default="large", type=str, help="Maze Type")
     parser.add_argument('-gc', '--goal_conditioned', action='store_true', help="Condition on goal")
-    parser.add_argument('-p', '--gen_pref', action='store_true', help="Generate preferences from passed in file")
+    parser.add_argument('-gp', '--gen_pref', action='store_true', help="Generate preferences from passed in file")
     args = parser.parse_args()
 
     # Create and load the policy
@@ -883,7 +885,7 @@ if __name__ == "__main__":
         policy = None
         policy_tag = None
     if args.gen_pref:
-        pairs = extract_preference_pairs(args.loadpath, args.savefile, maze_type=args.maze_type, score_threshold=0.3, metric='similarity_score', metric_kwargs=None, viz=True)
+        pairs = extract_preference_pairs(args.loadpath, args.savepath, maze_type=args.maze_type, score_threshold=0.3, metric='similarity_score', metric_kwargs=None, viz=True)
     
     if args.unconditional:
         interactiveMaze = UnconditionalMaze(policy, policy_tag=policy_tag, vis_energy=args.vis_energy, maze_type=args.maze_type)
