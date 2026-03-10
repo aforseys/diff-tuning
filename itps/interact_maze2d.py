@@ -253,7 +253,7 @@ class UnconditionalMaze(MazeEnv):
         self.policy_tag = policy_tag
         self.vis_energy = vis_energy
 
-    def infer_target(self, goal_pos=None, guide=None, visualizer=None, return_energy=False):
+    def infer_target(self, guide=None, visualizer=None, return_energy=False, goal_pos=None):
         agent_hist_xy = self.agent_history_xy[-1] 
         agent_hist_xy = np.array(agent_hist_xy).reshape(1, 2)
         if self.policy_tag == 'dp':
@@ -737,7 +737,7 @@ class MazeExp(ConditionalMaze):
 
         pygame.quit()
 
-def extract_preference_pairs(loadpath, maze_type='large', score_threshold=0.3, metric='similarity_score', metric_kwargs=None, viz=False):
+def extract_preference_pairs(loadpath, savefile, maze_type='large', score_threshold=0.3, metric='similarity_score', metric_kwargs=None, viz=False):
     maze_env = MazeEnv(maze_type)  # needed for similarity_score; also has viz if viz=True
     metric_kwargs = metric_kwargs or {}
     
@@ -812,6 +812,7 @@ def extract_preference_pairs(loadpath, maze_type='large', score_threshold=0.3, m
     if viz:
         pygame.quit()
 
+    savefile.write(json.dumps(pairs) + "\n")
     return pairs
 
 
@@ -831,6 +832,7 @@ if __name__ == "__main__":
     parser.add_argument('-e', '--vis_energy', action='store_true', help="Visualize energy")
     parser.add_argument('-mt',  '--maze_type', default="large", type=str, help="Maze Type")
     parser.add_argument('-gc', '--goal_conditioned', action='store_true', help="Condition on goal")
+    parser.add_argument('-p', '--gen_pref', action='store_true', help="Generate preferences from passed in file")
     args = parser.parse_args()
 
     # Create and load the policy
@@ -880,6 +882,9 @@ if __name__ == "__main__":
     else:
         policy = None
         policy_tag = None
+    if args.gen_pref:
+        pairs = extract_preference_pairs(args.loadpath, args.savefile, maze_type=args.maze_type, score_threshold=0.3, metric='similarity_score', metric_kwargs=None, viz=True)
+    
     if args.unconditional:
         interactiveMaze = UnconditionalMaze(policy, policy_tag=policy_tag, vis_energy=args.vis_energy, maze_type=args.maze_type)
     elif args.loadpath is not None:
