@@ -605,21 +605,27 @@ class MazeExp(ConditionalMaze):
 
         pygame.quit()
 
-def extract_preference_pairs(loadpath, maze_type='large', score_threshold=0.3, viz=False):
+def extract_preference_pairs(loadpath, maze_type='large', score_threshold=0.3, metric='similarity_score', metric_kwargs=None, viz=False):
     maze_env = MazeEnv(maze_type)  # needed for similarity_score; also has viz if viz=True
+    metric_kwargs = metric_kwargs or {}
     
     pairs = []
     with open(loadpath, "r") as f:
         trials = [json.loads(line) for line in f]
     
     for trial in trials:
-        guide = np.array(trial["guide"])
-        pred_traj = np.array(trial["pred_traj"])  # (B, T, 2) gui space
-        
-        if len(guide) == 0:
-            continue
-
-        pred_traj, scores = maze_env.similarity_score(pred_traj, guide)
+        if metric == 'similarity_score':
+            guide = np.array(trial["guide"])
+            if len(guide) == 0:
+                continue
+            pred_traj, scores = maze_env.similarity_score(pred_traj, guide)
+        elif metric == 'collision_rate':
+            xy_traj = np.array([[maze_env.gui2xy(p) for p in traj] for traj in pred_traj])
+            collisions = maze_env.check_collision(xy_traj)  # (B,) bool
+            scores = (~collisions).astype(float)  # 1.0 if no collision, 0.0 if collision
+            guide = None
+        else:
+            raise NotImplementedError(f"Metric '{metric}' is not implemented.")
         
         trial_pairs = []
         for i in range(len(scores)):
@@ -627,13 +633,15 @@ def extract_preference_pairs(loadpath, maze_type='large', score_threshold=0.3, v
                 if abs(scores[i] - scores[j]) >= score_threshold:
                     winner, loser = (i, j) if scores[i] > scores[j] else (j, i)
                     trial_pairs.append({
+                        "metric": metric,
+                        "metric_kwargs": metric_kwargs,
                         "obs_idx":      trial["trial_idx"],
                         "agent_pos":    trial["agent_pos"],
-                        "guide":        guide.tolist(),
                         "winner_traj":  pred_traj[winner].tolist(),
                         "loser_traj":   pred_traj[loser].tolist(),
                         "winner_score": float(scores[winner]),
                         "loser_score":  float(scores[loser]),
+                         **({"guide": guide.tolist()} if guide is not None else {}),
                     })
         
         pairs.extend(trial_pairs)
@@ -645,12 +653,12 @@ def extract_preference_pairs(loadpath, maze_type='large', score_threshold=0.3, v
             loser_traj  = np.array(trial_pairs[0]["loser_traj"])[None]   # (1, T, 2)
             viz_traj    = np.concatenate([winner_traj, loser_traj], axis=0)  # (2, T, 2)
 
-            maze_env.draw_traj = guide  # so update_screen draws the sketch
+            maze_env.draw_traj =  guide if guide is not None else []  # so update_screen draws the sketch
             maze_env.agent_gui_pos = np.array(trial["agent_pos"])
             maze_env.update_screen(
                 xy_pred=viz_traj,
                 collisions=np.array([False, True]),  # winner=clean, loser=tinted white
-                keep_drawing=True,
+                keep_drawing=(guide is not None),
                 traj_in_gui_space=True,
             )
 
