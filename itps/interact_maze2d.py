@@ -750,13 +750,13 @@ def extract_preference_pairs(loadpath, savefile, maze_type='large', score_thresh
             guide = np.array(trial["guide"])
             if len(guide) == 0:
                 continue
-            pred_traj = trial["pred_traj"]
+            pred_traj = np.asarray(trial["pred_traj"], dtype=float)
             samples, scores = maze_env.similarity_score(pred_traj, guide)
         elif metric == 'collision_rate':
             xy_traj = np.array([[maze_env.gui2xy(p) for p in traj] for traj in trial["pred_traj"]])
             collisions = maze_env.check_collision(xy_traj)  # (B,) bool
             scores = (~collisions).astype(float)  # 1.0 if no collision, 0.0 if collision
-            samples =  trial["pred_traj"]
+            samples = np.asarray(trial["pred_traj"], dtype=float)
             guide = None
         else:
             raise NotImplementedError(f"Metric '{metric}' is not implemented.")
