@@ -253,7 +253,7 @@ class UnconditionalMaze(MazeEnv):
         self.policy_tag = policy_tag
         self.vis_energy = vis_energy
 
-    def infer_target(self, guide=None, visualizer=None, return_energy=False):
+    def infer_target(self, goal_pos=None, guide=None, visualizer=None, return_energy=False):
         agent_hist_xy = self.agent_history_xy[-1] 
         agent_hist_xy = np.array(agent_hist_xy).reshape(1, 2)
         if self.policy_tag == 'dp':
@@ -267,6 +267,12 @@ class UnconditionalMaze(MazeEnv):
         obs_batch["observation.environment_state"] = einops.repeat(
             torch.from_numpy(agent_hist_xy).float().cuda(), "t d -> b t d", b=self.batch_size
         )
+
+        if goal_pos is not None:
+            goal = np.array(goal_pos).reshape(1,2)
+            obs_batch["episode_goal"] = einops.repeat(
+                torch.from_numpy(goal).float().cuda(), "t d -> b t d", b=self.batch_size
+            )
         
         if guide is not None:
             guide = torch.from_numpy(guide).float().cuda()
@@ -294,6 +300,13 @@ class UnconditionalMaze(MazeEnv):
             self.agent_color = self.RED        
         self.agent_history_xy.append(agent_xy_pos)
         self.agent_history_xy = self.agent_history_xy[-history_len:]
+    
+    def update_screen_goal_set(self):
+
+        self.draw_maze_background()
+        # show where mouse is
+        pygame.draw.circle(self.screen, self.BLUE, (int(self.mouse_pos[0]), int(self.mouse_pos[1])), 20)
+        pygame.display.flip()
 
     def run(self):
         while self.running:
@@ -319,74 +332,7 @@ class UnconditionalMaze(MazeEnv):
 
         pygame.quit()
 
-class GoalConditionedMaze(MazeEnv):
-    def __init__(self, policy, policy_tag=None, vis_energy=False, maze_type="large"):
-        super().__init__(maze_type=maze_type)
-        self.mouse_pos = None
-        self.agent_in_collision = False
-        self.agent_history_xy = []
-        self.policy = policy
-        self.policy_tag = policy_tag
-        self.vis_energy = vis_energy
-        self.goal_gui_pos = None
-        self.goal_pos = None
-        self.goal_set_mode = True  # Two modes: "SET_GOAL" or "MOVE_AGENT"
-
-    def infer_target(self, visualizer=None, return_energy=False):
-        agent_hist_xy = self.agent_history_xy[-1]
-        agent_hist_xy = np.array(agent_hist_xy).reshape(1, 2)
-        goal = np.array(self.goal_pos).reshape(1,2)
-        if self.policy_tag == 'dp':
-            agent_hist_xy = agent_hist_xy.repeat(2, axis=0)
-
-        obs_batch = {
-            "observation.state": einops.repeat(
-                torch.from_numpy(agent_hist_xy).float().cuda(), "t d -> b t d", b=self.batch_size
-            )
-        }
-        obs_batch["observation.environment_state"] = einops.repeat(
-            torch.from_numpy(agent_hist_xy).float().cuda(), "t d -> b t d", b=self.batch_size
-        )
-        
-        obs_batch["episode_goal"] = einops.repeat(
-            torch.from_numpy(goal).float().cuda(), "t d -> b t d", b=self.batch_size
-        )
-
-#        if guide is not None:
-#            guide = torch.from_numpy(guide).float().cuda()
-
-        with torch.autocast(device_type="cuda"), seeded_context(0):
-            if self.policy_tag == 'act':
-                actions = self.policy.run_inference(obs_batch).cpu().numpy()
-            elif return_energy:
-                actions, energy = self.policy.run_inference(obs_batch, visualizer=visualizer, return_energy=True) # directly call the policy in order to visualize the intermediate steps
-                return actions.detach().cpu().numpy(), energy.detach().cpu().numpy().squeeze()
-            else:
-                actions = self.policy.run_inference(obs_batch,visualizer=visualizer).cpu().numpy() # directly call the policy in order to visualize the intermediate steps
-        return actions
-    
-    def update_mouse_pos(self):
-        self.mouse_pos = np.array(pygame.mouse.get_pos())
-
-    def update_agent_pos(self, new_agent_pos, history_len=1):
-        self.agent_gui_pos = np.array(new_agent_pos)
-        agent_xy_pos = self.gui2xy(self.agent_gui_pos)
-        self.agent_in_collision = self.check_collision(agent_xy_pos.reshape(1, 1, 2))[0]
-        if self.agent_in_collision:
-            self.agent_color = self.blend_with_white(self.RED, 0.8)
-        else:
-            self.agent_color = self.RED        
-        self.agent_history_xy.append(agent_xy_pos)
-        self.agent_history_xy = self.agent_history_xy[-history_len:]
-
-    def update_screen_goal_set(self):
-
-        self.draw_maze_background()
-        # show where mouse is
-        pygame.draw.circle(self.screen, self.BLUE, (int(self.mouse_pos[0]), int(self.mouse_pos[1])), 20)
-        pygame.display.flip()
-
-    def run(self): 
+    def run_gc(self): 
         self.goal_set_mode = True
         while self.running:
             self.update_mouse_pos()
@@ -399,13 +345,10 @@ class GoalConditionedMaze(MazeEnv):
 
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     if self.goal_set_mode:
-                        self.goal_gui_pos = self.mouse_pos.copy()
-                        self.goal_pos = self.gui2xy(self.goal_gui_pos)
-                        print(f"Goal set at GUI: {self.goal_gui_pos}, XY: {self.goal_pos}")
+                        goal_gui_pos = self.mouse_pos.copy()
+                        goal_pos = self.gui2xy(goal_gui_pos)
+                        print(f"Goal set at GUI: {goal_gui_pos}, XY: {goal_pos}")
                         self.goal_set_mode = False
-                        #TODO: CHECK APPROPRIATE DIMENSIONS OF GOAL POS
-
-                #TODO: BY PRESSING A BUTTON --> MOVE INTO GOAL SELECTION MODE
 
             if self.goal_set_mode:
                 self.update_screen_goal_set()
@@ -413,18 +356,122 @@ class GoalConditionedMaze(MazeEnv):
             else:
                 self.update_agent_pos(self.mouse_pos.copy())
                 if self.vis_energy: 
-                    xy_pred, energy = self.infer_target(return_energy=True)
-                    self.update_screen(xy_pred, scores=energy, goal=self.goal_gui_pos)
+                    xy_pred, energy = self.infer_target(goal_pos = goal_pos, return_energy=True)
+                    self.update_screen(xy_pred, scores=energy, goal=goal_gui_pos)
                 else: 
                     xy_pred = self.infer_target()
-                    self.update_screen(xy_pred, goal=self.goal_gui_pos)
+                    self.update_screen(xy_pred, goal=goal_gui_pos)
                 self.clock.tick(30)
 
         pygame.quit()
 
+# class GoalConditionedMaze(MazeEnv):
+#     # for dragging the agent around to explore motion manifold with a designated goal 
+#     def __init__(self, policy, policy_tag=None, vis_energy=False, maze_type="large"):
+#         super().__init__(maze_type=maze_type)
+#         self.mouse_pos = None
+#         self.agent_in_collision = False
+#         self.agent_history_xy = []
+#         self.policy = policy
+#         self.policy_tag = policy_tag
+#         self.vis_energy = vis_energy
+#         self.goal_gui_pos = None
+#         self.goal_pos = None
+#         self.goal_set_mode = True  # Two modes: "SET_GOAL" or "MOVE_AGENT"
+
+#     def infer_target(self, visualizer=None, return_energy=False):
+#         agent_hist_xy = self.agent_history_xy[-1]
+#         agent_hist_xy = np.array(agent_hist_xy).reshape(1, 2)
+#         goal = np.array(self.goal_pos).reshape(1,2)
+#         if self.policy_tag == 'dp':
+#             agent_hist_xy = agent_hist_xy.repeat(2, axis=0)
+
+#         obs_batch = {
+#             "observation.state": einops.repeat(
+#                 torch.from_numpy(agent_hist_xy).float().cuda(), "t d -> b t d", b=self.batch_size
+#             )
+#         }
+#         obs_batch["observation.environment_state"] = einops.repeat(
+#             torch.from_numpy(agent_hist_xy).float().cuda(), "t d -> b t d", b=self.batch_size
+#         )
+        
+#         obs_batch["episode_goal"] = einops.repeat(
+#             torch.from_numpy(goal).float().cuda(), "t d -> b t d", b=self.batch_size
+#         )
+
+# #        if guide is not None:
+# #            guide = torch.from_numpy(guide).float().cuda()
+
+#         with torch.autocast(device_type="cuda"), seeded_context(0):
+#             if self.policy_tag == 'act':
+#                 actions = self.policy.run_inference(obs_batch).cpu().numpy()
+#             elif return_energy:
+#                 actions, energy = self.policy.run_inference(obs_batch, visualizer=visualizer, return_energy=True) # directly call the policy in order to visualize the intermediate steps
+#                 return actions.detach().cpu().numpy(), energy.detach().cpu().numpy().squeeze()
+#             else:
+#                 actions = self.policy.run_inference(obs_batch,visualizer=visualizer).cpu().numpy() # directly call the policy in order to visualize the intermediate steps
+#         return actions
+    
+#     def update_mouse_pos(self):
+#         self.mouse_pos = np.array(pygame.mouse.get_pos())
+
+#     def update_agent_pos(self, new_agent_pos, history_len=1):
+#         self.agent_gui_pos = np.array(new_agent_pos)
+#         agent_xy_pos = self.gui2xy(self.agent_gui_pos)
+#         self.agent_in_collision = self.check_collision(agent_xy_pos.reshape(1, 1, 2))[0]
+#         if self.agent_in_collision:
+#             self.agent_color = self.blend_with_white(self.RED, 0.8)
+#         else:
+#             self.agent_color = self.RED        
+#         self.agent_history_xy.append(agent_xy_pos)
+#         self.agent_history_xy = self.agent_history_xy[-history_len:]
+
+#     def update_screen_goal_set(self):
+
+#         self.draw_maze_background()
+#         # show where mouse is
+#         pygame.draw.circle(self.screen, self.BLUE, (int(self.mouse_pos[0]), int(self.mouse_pos[1])), 20)
+#         pygame.display.flip()
+
+#     def run(self): 
+#         self.goal_set_mode = True
+#         while self.running:
+#             self.update_mouse_pos()
+
+#             # Handle events
+#             for event in pygame.event.get():
+#                 if event.type == pygame.QUIT:
+#                     self.running = False
+#                     break
+
+#                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+#                     if self.goal_set_mode:
+#                         self.goal_gui_pos = self.mouse_pos.copy()
+#                         self.goal_pos = self.gui2xy(self.goal_gui_pos)
+#                         print(f"Goal set at GUI: {self.goal_gui_pos}, XY: {self.goal_pos}")
+#                         self.goal_set_mode = False
+#                         #TODO: CHECK APPROPRIATE DIMENSIONS OF GOAL POS
+
+#                 #TODO: BY PRESSING A BUTTON --> MOVE INTO GOAL SELECTION MODE
+
+#             if self.goal_set_mode:
+#                 self.update_screen_goal_set()
+
+#             else:
+#                 self.update_agent_pos(self.mouse_pos.copy())
+#                 if self.vis_energy: 
+#                     xy_pred, energy = self.infer_target(return_energy=True)
+#                     self.update_screen(xy_pred, scores=energy, goal=self.goal_gui_pos)
+#                 else: 
+#                     xy_pred = self.infer_target()
+#                     self.update_screen(xy_pred, goal=self.goal_gui_pos)
+#                 self.clock.tick(30)
+
+#         pygame.quit()
+
 class ConditionalMaze(UnconditionalMaze):
     # for interactive guidance dataset collection
-    def __init__(self, policy, vis_dp_dynamics=False, savepath=None, alignment_strategy=None, policy_tag=None,  maze_type='large'):
+    def __init__(self, policy, vis_dp_dynamics=False, savepath=None, alignment_strategy=None, policy_tag=None,  maze_type='large', obs_list=None):
         super().__init__(policy, policy_tag=policy_tag,  maze_type=maze_type)
         self.drawing = False
         self.keep_drawing = False
@@ -436,6 +483,7 @@ class ConditionalMaze(UnconditionalMaze):
         self.collisions = None # boolean array
         self.scores = None # numpy array
         self.alignment_strategy = alignment_strategy
+        self.obs_list=obs_list
 
     def run(self):
         if self.savepath is not None:
@@ -444,6 +492,12 @@ class ConditionalMaze(UnconditionalMaze):
 
         while self.running:
             self.update_mouse_pos()
+
+            if self.obs_list is not None:
+                if self.trial_idx >= len(self.obs_list):
+                    print("All observations complete.")
+                    break
+                self.update_agent_pos(self.xy2gui(self.obs_list[self.trial_idx]["start_xy"]))
 
             # Handle events
             for event in pygame.event.get():
@@ -492,6 +546,81 @@ class ConditionalMaze(UnconditionalMaze):
 
         pygame.quit()
 
+    def run_gc(self):
+        if self.savepath is not None:
+            self.savefile = open(self.savepath, "a+", buffering=1)
+            self.trial_idx = 0
+
+        goal_pos = None
+        goal_gui_pos = None
+        self.goal_set_mode = True
+
+        while self.running:
+            self.update_mouse_pos()
+
+            # Fix agent pos from obs_list if provided
+            if self.obs_list is not None:
+                if self.obs_idx >= len(self.obs_list):
+                    print("All observations complete.")
+                    break
+                current_obs = self.obs_list[self.obs_idx]
+                self.update_agent_pos(self.xy2gui(current_obs["start_xy"]))
+                # If goal provided in obs_list, skip interactive goal setting
+                if current_obs.get("goal_xy") is not None and self.goal_set_mode:
+                    goal_pos = current_obs["goal_xy"]
+                    goal_gui_pos = self.xy2gui(goal_pos)
+                    self.goal_set_mode = False
+
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.running = False
+                    break
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if self.goal_set_mode:
+                        goal_gui_pos = self.mouse_pos.copy()
+                        goal_pos = self.gui2xy(goal_gui_pos)
+                        print(f"Goal set at GUI: {goal_gui_pos}, XY: {goal_pos}")
+                        self.goal_set_mode = False
+                if any(pygame.mouse.get_pressed()):
+                    if not self.drawing:
+                        self.drawing = True
+                        self.draw_traj = []
+                    self.draw_traj.append(self.mouse_pos)
+                else:
+                    if self.drawing:
+                        self.drawing = False
+                        self.keep_drawing = True
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_g:  # press G to reset goal
+                        self.goal_set_mode = True
+                    if event.key == pygame.K_s and self.savefile is not None:
+                        self.save_trials()
+                        if self.obs_list is not None:
+                            self.obs_idx += 1
+                            self.goal_set_mode = True  # ask for new goal for next obs
+
+            if self.goal_set_mode:
+                self.update_screen_goal_set()
+                continue
+
+            if self.keep_drawing:
+                if np.linalg.norm(self.mouse_pos - self.agent_gui_pos) < 20:
+                    self.keep_drawing = False
+                    self.draw_traj = []
+
+            if not self.drawing:
+                if not self.keep_drawing and self.obs_list is None:
+                    self.update_agent_pos(self.mouse_pos.copy())
+                self.xy_pred = self.infer_target(goal_pos=goal_pos)
+                self.scores = None
+                self.collisions = self.check_collision(self.xy_pred)
+
+            self.update_screen(self.xy_pred, self.collisions, self.scores,
+                            self.keep_drawing or self.drawing, goal=goal_gui_pos)
+            self.clock.tick(30)
+
+        pygame.quit()
+
     def save_trials(self):
         b, t, _ = self.xy_pred.shape
         xy_pred = self.xy_pred.reshape(b*t, 2)
@@ -502,8 +631,11 @@ class ConditionalMaze(UnconditionalMaze):
             "agent_pos": self.agent_gui_pos.tolist(),
             "guide": np.array(self.draw_traj).tolist(),
             "pred_traj": pred_gui_traj.astype(int).tolist(),
-            "collisions": self.collisions.tolist()
+            "collisions": self.collisions.tolist(), 
         }
+        if self.obs_list is not None:
+            entry['obs']= self.obs_list[self.trial_idx]
+            
         self.savefile.write(json.dumps(entry) + "\n")
         print(f"Trial {self.trial_idx} saved to {self.savepath}.")
         self.trial_idx += 1
@@ -750,8 +882,6 @@ if __name__ == "__main__":
         policy_tag = None
     if args.unconditional:
         interactiveMaze = UnconditionalMaze(policy, policy_tag=policy_tag, vis_energy=args.vis_energy, maze_type=args.maze_type)
-    elif args.goal_conditioned:
-        interactiveMaze = GoalConditionedMaze(policy, policy_tag=policy_tag, vis_energy=args.vis_energy, maze_type=args.maze_type)
     elif args.loadpath is not None:
         if args.savepath is None:
             savepath = None
@@ -769,4 +899,7 @@ if __name__ == "__main__":
         interactiveMaze = MazeExp(policy, args.vis_dp_dynamics, savepath, alignment_strategy, policy_tag=policy_tag, loadpath=args.loadpath, maze_type=args.maze_type)
     else:
         interactiveMaze = ConditionalMaze(policy, args.vis_dp_dynamics, args.savepath, alignment_strategy, policy_tag=policy_tag, maze_type=args.maze_type)
-    interactiveMaze.run()
+    if args.goal_conditioned:
+        interactiveMaze.run_gc()
+    else:
+        interactiveMaze.run()
