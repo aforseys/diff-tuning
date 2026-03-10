@@ -201,10 +201,10 @@ class MazeEnv:
                     if scores is None:
                         circle_size = 5 if collisions[idx] else 5
                     else: # when similarity scores are provided, visualizing them by changing the trajectory size
-                        print('Scores:', scores)
-                        #circle_size = int(3 + 20 * scores[idx])
-                        circle_size = int(150- scores[idx])
-                        print('circle size:', circle_size)
+                        # print('Scores:', scores)
+                        circle_size = int(3 + 20 * scores[idx])
+                        # circle_size = int(150- scores[idx])
+                        # print('circle size:', circle_size)
                     if traj_in_gui_space:
                         start_pos = pred[step_idx]
                         end_pos = pred[step_idx + 1]
@@ -635,7 +635,7 @@ class ConditionalMaze(UnconditionalMaze):
         }
         if self.obs_list is not None:
             entry['obs']= self.obs_list[self.trial_idx]
-            
+
         self.savefile.write(json.dumps(entry) + "\n")
         print(f"Trial {self.trial_idx} saved to {self.savepath}.")
         self.trial_idx += 1
