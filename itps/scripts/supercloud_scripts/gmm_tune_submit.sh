@@ -28,7 +28,7 @@ source /etc/profile
 module load anaconda/2023a
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-CONFIGS_DIR="configs/policy/gm_tune_parameter_sweep"    # Directory containing generated run_*.yaml files
+CONFIGS_DIR="configs/policy/policy_param_tuning/sweep_1"    # Directory containing generated run_*.yaml files
 SCRIPT="train.py"             # The python training script
 ENV_NAME="gmm"                # env={ENV_NAME} passed to the script
 # ──────────────────────────────────────────────────────────────────────────────

@@ -20,8 +20,8 @@ parameters to vary, with lists of values. For example:
 
 All other keys in the joint config are treated as base values and copied
 into every generated config file, with sweep parameters overriding them.
-Generated configs are saved as:
-    configs/runs/run_0.yaml, configs/runs/run_1.yaml, ...
+Generated configs are saved as: (depending on sweep)
+    configs/policy_param_tuning/.../run_0.yaml, configs/policy_param_tuning/.../run_1.yaml, ...
 
 You can inspect these before submitting to verify they look correct.
 """
@@ -125,7 +125,7 @@ def generate_configs(joint_config_path, out_dir):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True, help="Path to joint config YAML")
-    parser.add_argument("--out_dir", default="configs/runs", help="Directory to write run configs")
+    parser.add_argument("--out_dir", default="configs/policy_param_tuning", help="Directory to write run configs")
     args = parser.parse_args()
 
     generate_configs(args.config, args.out_dir)
