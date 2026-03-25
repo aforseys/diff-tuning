@@ -26,8 +26,7 @@ def run_inference(policy, N=100, conditional=False):
 
     inference_output = []
     for o in obs:
-        with torch.inference_mode():
-            actions = policy.run_inference(o) 
+        actions = policy.run_inference(o)
         inference_output.append(actions.detach().cpu().squeeze(1).numpy())
 
     return inference_output
