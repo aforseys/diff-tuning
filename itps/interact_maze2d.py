@@ -476,7 +476,6 @@ class ConditionalMaze(UnconditionalMaze):
         self.drawing = False
         self.keep_drawing = False
         self.vis_dp_dynamics = vis_dp_dynamics
-        self.savefile = None
         self.savepath = savepath
         self.draw_traj = [] # gui coordinates
         self.xy_pred = None # numpy array
@@ -488,7 +487,7 @@ class ConditionalMaze(UnconditionalMaze):
     def run(self):
         if self.savepath is not None:
             self.savefile = open(self.savepath, "a+", buffering=1)
-            self.trial_idx = 0
+        self.trial_idx = 0
 
         while self.running:
             self.update_mouse_pos()
@@ -497,7 +496,7 @@ class ConditionalMaze(UnconditionalMaze):
                 if self.trial_idx >= len(self.obs_list):
                     print("All observations complete.")
                     break
-                self.update_agent_pos(self.xy2gui(self.obs_list[self.trial_idx]["start_xy"]))
+                self.update_agent_pos(self.xy2gui(np.array(self.obs_list[self.trial_idx])))
 
             # Handle events
             for event in pygame.event.get():
@@ -525,7 +524,7 @@ class ConditionalMaze(UnconditionalMaze):
                     self.draw_traj = []
 
             if not self.drawing: # inference mode
-                if not self.keep_drawing:
+                if not self.keep_drawing and self.obs_list is None:
                     self.update_agent_pos(self.mouse_pos.copy())
                 if len(self.draw_traj) > 0:
                     guide = np.array([self.gui2xy(point) for point in self.draw_traj])
@@ -947,9 +946,10 @@ def pick_start_positions(maze_type='large', n_positions=None, savepath=None):
         print(f"  [{i:02d}]  {p}")
 
     if savepath:
-        with open(savepath, "w") as f:
+        filename = f"set_obs_{len(positions)}_"+time.strftime("%Y%m%d_%H%M%S")
+        with open(os.path.join(savepath,filename), "w") as f:
             json.dump(positions, f, indent=2)
-        print(f"Saved to {savepath}")
+        print(f"Saved to {os.path.join(savepath,filename)}")
 
     return positions   # list of [x, y]  — maze XY space
 
@@ -971,6 +971,7 @@ if __name__ == "__main__":
     parser.add_argument('-gc', '--goal_conditioned', action='store_true', help="Condition on goal")
     parser.add_argument('-gp', '--gen_pref', action='store_true', help="Generate preferences from passed in file")
     parser.add_argument('-po', '--pick-obs', action='store_true', help="Pass in to select observations")
+    parser.add_argument('-of', '--obs-file', default=None, help="Path to loaded observations")
     args = parser.parse_args()
 
     # Create and load the policy
@@ -978,6 +979,13 @@ if __name__ == "__main__":
 
     if args.pick_obs:
         positions = pick_start_positions(maze_type=args.maze_type, savepath=args.savepath)
+        sys.exit(0)
+
+    if args.obs_file is not None:
+        with open(args.obs_file) as f:
+            obs_list = json.load(f)
+    else:
+        obs_list = None
 
     alignment_strategy = 'post-hoc'
     if args.post_hoc:
@@ -1024,8 +1032,8 @@ if __name__ == "__main__":
         policy = None
         policy_tag = None
     if args.gen_pref:
-        pairs = extract_preference_pairs(args.loadpath, args.savepath, maze_type=args.maze_type, score_threshold=0.3, metric='similarity_score', metric_kwargs=None, viz=True)
-    
+        pairs = extract_preference_pairs(args.loadpath, args.savepath, maze_type=args.maze_type, score_threshold=0.3, metric='similarity_score', metric_kwargs=None, viz=False)
+        sys.exit(0)
     if args.unconditional:
         interactiveMaze = UnconditionalMaze(policy, policy_tag=policy_tag, vis_energy=args.vis_energy, maze_type=args.maze_type)
     elif args.loadpath is not None:
@@ -1044,7 +1052,7 @@ if __name__ == "__main__":
             savepath = f"{args.loadpath[:-5]}_{policy_tag}_{alignment_tag}{args.savepath}"
         interactiveMaze = MazeExp(policy, args.vis_dp_dynamics, savepath, alignment_strategy, policy_tag=policy_tag, loadpath=args.loadpath, maze_type=args.maze_type)
     else:
-        interactiveMaze = ConditionalMaze(policy, args.vis_dp_dynamics, args.savepath, alignment_strategy, policy_tag=policy_tag, maze_type=args.maze_type)
+        interactiveMaze = ConditionalMaze(policy, args.vis_dp_dynamics, args.savepath, alignment_strategy, policy_tag=policy_tag, maze_type=args.maze_type, obs_list=obs_list)
     if args.goal_conditioned:
         interactiveMaze.run_gc()
     else:
