@@ -461,15 +461,16 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
         else:
             shuffle = True
             sampler = None
-            pref_dataloader = torch.utils.data.DataLoader(
-                pref_dataset,
-                num_workers=cfg.training.num_workers,
-                batch_size=cfg.training.batch_size,
-                shuffle=shuffle,
-                sampler=sampler,
-                pin_memory=device.type != "cpu",
-                drop_last=True,
-            )
+            
+        pref_dataloader = torch.utils.data.DataLoader(
+            pref_dataset,
+            num_workers=cfg.training.num_workers,
+            batch_size=cfg.training.batch_size,
+            shuffle=shuffle,
+            sampler=sampler,
+            pin_memory=device.type != "cpu",
+            drop_last=True,
+        )
         pref_dl_iter = cycle(pref_dataloader)
 
     # ensure non-film parameters are frozen for finetuning
