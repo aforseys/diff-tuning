@@ -1,11 +1,11 @@
 # @package _global_
 sweep: 
   training:
-    offline_steps: [250, 500, 1000, 2000]
+    offline_steps: [300, 500, 1000, 2000]
     lr: [1.0e-3, 1.0e-4, 1.0e-5]
     batch_size: [256, 128, 64]
   policy:
-    finetune_loss_weight: [5.0, 2.0, 10.0]
+    finetune_loss_weight: [5.0, 2.0, 7.0]
 
 seed: 1
 dataset_repo_id: gmm
@@ -24,15 +24,15 @@ hydra:
     # with the same value for `dir` its contents will be overwritten unless you set `resume` to true.
     dir: outputs/gmm/unconditioned/tune/param_sweep_1/${hydra.job.name}
   job:
-    name: $gmm_unconditional_tune_param_sweep_1_{now:%Y.%m.%d.%H.%M.%S}_${env.name}_${policy.name}
+    name: gmm_unconditional_tune_param_sweep_1_${now:%Y.%m.%d.%H.%M.%S}_${env.name}_${policy.name}
 
 device: "cuda"  # cpu
 
 training:
-  offline_steps: 1000
+  #offline_steps: 1000
   online_steps: 0
   eval_freq: 100
-  save_freq: 0
+  save_freq: 100
   log_freq: 100
   save_checkpoint: false
 
