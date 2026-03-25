@@ -41,8 +41,8 @@ def load_yaml(path):
 
 def save_yaml(data, path):
     with open(path, "w") as f:
+        f.write("# @package _global_\n")
         yaml.dump(data, f, default_flow_style=False, sort_keys=False)
-
 
 def flatten_sweep(sweep_dict, prefix=None):
     """

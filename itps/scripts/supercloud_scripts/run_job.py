@@ -55,10 +55,13 @@ def main():
     for i, config_path in enumerate(my_configs):
         # Pass the config file path as the policy config
         # Hydra will load it via --config-path / --config-name or directly
+        full_path = os.path.abspath(config_path)
+        relative = full_path.split("policy/", 1)[-1]
+
         cmd = (
             f"python {args.script} "
             f"env={args.env} "
-            f"policy={os.path.dirname(os.path.abspath(config_path))} "
+            f"policy={relative}"
         )
         print(f"\n[Rank {args.rank}/{args.size}] Running combo {i+1}/{len(my_configs)}:")
         print(f"  {cmd}\n")
