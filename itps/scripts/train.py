@@ -451,16 +451,16 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
 
     # create same dataloader for offline pref training
     if pref_dataset is not None:
-        if cfg.training.get("drop_n_last_frames"):
-            shuffle = False
-            sampler = EpisodeAwareSampler(
-                pref_dataset.episode_data_index,
-                drop_n_last_frames=cfg.training.drop_n_last_frames,
-                shuffle=True,
-            )
-        else:
-            shuffle = True
-            sampler = None
+        #if cfg.training.get("drop_n_last_frames"):
+        #    shuffle = False
+        #    sampler = EpisodeAwareSampler(
+        #        pref_dataset.episode_data_index,
+        #        drop_n_last_frames=cfg.training.drop_n_last_frames,
+        #        shuffle=True,
+        #    )
+        #else:
+        shuffle = True
+        sampler = None
             
         pref_dataloader = torch.utils.data.DataLoader(
             pref_dataset,
@@ -484,6 +484,8 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     policy.train()
     offline_step = 0
     for _ in range(step, cfg.training.offline_steps):
+
+        print('ON OFFLINE STEP:', offline_step)
         if offline_step == 0:
             logging.info("Start offline training on a fixed dataset")
 
@@ -502,6 +504,10 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
             neg_batch = {k: v.to(device, non_blocking=True) for k, v in pref_batch["neg"].items()}
             tune_batch=(pos_batch, neg_batch)
 
+        print('Batches gathered')
+        #print(tune_batch[0].shape)
+        #print(batch[0].shape)
+
         train_info = update_policy(
             policy,
             batch,
@@ -512,6 +518,8 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
             use_amp=cfg.use_amp,
             tune_batch = tune_batch
         )
+
+        print('Policy updated')
 
         train_info["dataloading_s"] = dataloading_s
 

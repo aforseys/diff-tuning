@@ -116,7 +116,7 @@ def get_hf_dataset_safe_version(repo_id: str, version: str) -> str:
 def load_hf_dataset(repo_id: str, version: str, root: Path, split: str, goal_horizon: int=60) -> datasets.Dataset:
     """hf_dataset contains all the observations, states, actions, rewards, etc."""
     if root is not None:
-        if 'hdf5' in root: # maze2d dataset
+        if 'hdf5' in root or "maze" in root: # maze2d dataset
             import h5py
             import numpy as np
             with h5py.File(root, 'r') as hdf5_file:
@@ -130,6 +130,8 @@ def load_hf_dataset(repo_id: str, version: str, root: Path, split: str, goal_hor
 
                 observations = observations[:state_index][::4]
                 timeouts = timeouts[:state_index-4][::4]
+                print('OBSERVATIONS SHAPE:', observations.shape)
+                print('TIMEOUTS SHAPE:', timeouts.shape)
 
             def create_episode_and_frame_indices(timeouts, observations, goal_horizon):
                 episode_endings = np.where(timeouts)[0]  # Indices where episodes end
