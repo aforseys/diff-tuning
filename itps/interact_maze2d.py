@@ -121,7 +121,7 @@ class MazeEnv:
         pygame.init()
         self.screen = pygame.display.set_mode(self.gui_size)
         pygame.display.set_caption("Maze")
-        self.clock = pygame.time.Clock()
+        self.clock = pygame.time.Clock()                                              
         self.agent_gui_pos = np.array([0, 0]) # Initialize the position of the red dot
         self.running = True
 
@@ -737,7 +737,9 @@ class MazeExp(ConditionalMaze):
 
         pygame.quit()
 
-def extract_preference_pairs(loadpath, savefile, maze_type='large', score_threshold=0.3, metric='similarity_score', metric_kwargs=None, viz=False):
+def extract_preference_pairs(loadpath, savepath, maze_type='large', score_threshold=0.3, metric='similarity_score', metric_kwargs=None, viz=False):
+    prefix = time.strftime("%Y%m%d_%H%M%S")
+    
     maze_env = MazeEnv(maze_type)  # needed for similarity_score; also has viz if viz=True
     metric_kwargs = metric_kwargs or {}
     
@@ -821,9 +823,135 @@ def extract_preference_pairs(loadpath, savefile, maze_type='large', score_thresh
     if viz:
         pygame.quit()
 
-    savefile.write(json.dumps(pairs) + "\n")
+    # savefile.write(json.dumps(pairs) + "\n")
+    if not pairs:
+        print("No pairs to save.")
+        return []
+
+    # ── save as index-aligned numpy arrays in maze XY space ──
+    T = len(pairs[0]['winner_traj'])
+    N = len(pairs)
+    winners = np.zeros((N, 1 + T, 2), dtype=np.float32)
+    losers  = np.zeros((N, 1 + T, 2), dtype=np.float32)
+    meta    = []
+
+    for i, pair in enumerate(pairs):
+        agent_xy = maze_env.gui2xy(np.array(pair['agent_pos'], dtype=float))
+        w_xy = np.array([maze_env.gui2xy(np.array(p, dtype=float))
+                         for p in pair['winner_traj']], dtype=np.float32)
+        l_xy = np.array([maze_env.gui2xy(np.array(p, dtype=float))
+                         for p in pair['loser_traj']], dtype=np.float32)
+        winners[i, 0]  = agent_xy;  winners[i, 1:] = w_xy
+        losers[i, 0]   = agent_xy;  losers[i, 1:]  = l_xy
+        entry = {
+            'obs_idx':      pair['obs_idx'],
+            'winner_score': float(pair['winner_score']),
+            'loser_score':  float(pair['loser_score']),
+        }
+        if 'guide' in pair:
+            entry['guide'] = [maze_env.gui2xy(np.array(p, dtype=float)).tolist()
+                                  for p in pair['guide']]
+        meta.append(entry)
+
+    np.save(os.path.join(savepath, f"{prefix}_winners.npy"), winners)
+    np.save(os.path.join(savepath, f"{prefix}_losers.npy"),  losers)
+    with open(os.path.join(savepath, f"{prefix}_meta.json"), "w") as f:
+        json.dump(meta, f, indent=2)
+
+    print(f"Saved {N} pairs → {prefix}_{{winners,losers}}.npy + _meta.json")
+    print(f"  winners/losers shape: {winners.shape}  (N, 1+T, action_dim)")
     return pairs
 
+def pick_start_positions(maze_type='large', n_positions=None, savepath=None):
+    """
+    Display the maze and let the user click valid (non-collision) starting
+    positions.  Each accepted click is printed and optionally saved.
+
+    Controls
+    --------
+    Left-click       : accept position (skipped silently if in collision)
+    U (undo)         : remove last accepted position
+    Q / Enter / ×    : finish and return
+
+    Parameters
+    ----------
+    maze_type    : 'open' | 'sparse' | 'large'
+    n_positions  : stop automatically after this many valid picks (None = unlimited)
+    savepath     : if given, write the list as JSON to this path
+
+    Returns
+    -------
+    list of [x, y] positions in maze XY space (NOT gui space)
+    """
+    env = MazeEnv(maze_type)
+    pygame.font.init()
+    font = pygame.font.SysFont(None, 30)
+    positions = []
+    running = True
+
+    while running:
+        mouse_pos   = np.array(pygame.mouse.get_pos())
+        mouse_xy    = env.gui2xy(mouse_pos)
+        in_collision = env.check_collision(mouse_xy.reshape(1, 1, 2))[0]
+
+        # ── draw ──────────────────────────────────────────────
+        env.draw_maze_background()
+
+        # already-accepted positions (green dots)
+        for xy in positions:
+            gui = env.xy2gui(np.array(xy))
+            pygame.draw.circle(env.screen, env.GREEN, (int(gui[0]), int(gui[1])), 12)
+            pygame.draw.circle(env.screen, (0, 180, 0), (int(gui[0]), int(gui[1])), 12, 2)
+
+        # live cursor — blue = valid, faded red = collision
+        cursor_color = (180, 180, 180) if in_collision else env.BLUE
+        pygame.draw.circle(env.screen, cursor_color,
+                           (int(mouse_pos[0]), int(mouse_pos[1])), 12)
+
+        # HUD
+        status  = "COLLISION — move away" if in_collision else "valid"
+        caption = (f"Picked: {len(positions)}"
+                   + (f"/{n_positions}" if n_positions else "")
+                   + f"   [{status}]   U=undo  Q=done")
+        surf = font.render(caption, True, (30, 30, 30), (220, 220, 220))
+        env.screen.blit(surf, (8, 8))
+        pygame.display.flip()
+
+        # ── events ────────────────────────────────────────────
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if in_collision:
+                    print(f"  ✗ ({mouse_xy[0]:.2f}, {mouse_xy[1]:.2f}) — in collision, skipped")
+                else:
+                    positions.append(mouse_xy.tolist())
+                    print(f"  ✓ #{len(positions):02d}  xy = {mouse_xy.round(3).tolist()}")
+                    if n_positions and len(positions) >= n_positions:
+                        running = False
+
+            elif event.type == pygame.KEYDOWN:
+                if event.key in (pygame.K_q, pygame.K_RETURN, pygame.K_ESCAPE):
+                    running = False
+                elif event.key == pygame.K_u and positions:
+                    removed = positions.pop()
+                    print(f"  ↩ removed {removed}")
+
+        env.clock.tick(30)
+
+    pygame.quit()
+
+    print(f"\nCollected {len(positions)} start positions:")
+    for i, p in enumerate(positions):
+        print(f"  [{i:02d}]  {p}")
+
+    if savepath:
+        with open(savepath, "w") as f:
+            json.dump(positions, f, indent=2)
+        print(f"Saved to {savepath}")
+
+    return positions   # list of [x, y]  — maze XY space
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -842,10 +970,14 @@ if __name__ == "__main__":
     parser.add_argument('-mt',  '--maze_type', default="large", type=str, help="Maze Type")
     parser.add_argument('-gc', '--goal_conditioned', action='store_true', help="Condition on goal")
     parser.add_argument('-gp', '--gen_pref', action='store_true', help="Generate preferences from passed in file")
+    parser.add_argument('-po', '--pick-obs', action='store_true', help="Pass in to select observations")
     args = parser.parse_args()
 
     # Create and load the policy
     device = torch.device("cuda")
+
+    if args.pick_obs:
+        positions = pick_start_positions(maze_type=args.maze_type, savepath=args.savepath)
 
     alignment_strategy = 'post-hoc'
     if args.post_hoc:
