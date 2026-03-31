@@ -117,21 +117,27 @@ def load_hf_dataset(repo_id: str, version: str, root: Path, split: str, goal_hor
     """hf_dataset contains all the observations, states, actions, rewards, etc."""
     if root is not None:
         if 'hdf5' in root or "maze" in root: # maze2d dataset
-            import h5py
             import numpy as np
-            with h5py.File(root, 'r') as hdf5_file:
-                # skip every 4th frame to match the original dataset
-                observations = np.array(hdf5_file['observations'])
-                timeouts = np.array(hdf5_file['timeouts'])
-                if len(observations)>1000000:
-                    state_index = 1000000
-                else:
-                    state_index = len(observations)
+            if 'hdf5' in root: 
+                import h5py
+                with h5py.File(root, 'r') as hdf5_file:
+                    # skip every 4th frame to match the original dataset
+                    observations = np.array(hdf5_file['observations'])
+                    timeouts = np.array(hdf5_file['timeouts'])
+            else:         
+                np_file = np.load(root)
+                observations = np.array(np_file['observations'])
+                timeouts = np.array(np_file['timeouts'])
 
-                observations = observations[:state_index][::4]
-                timeouts = timeouts[:state_index-4][::4]
-                print('OBSERVATIONS SHAPE:', observations.shape)
-                print('TIMEOUTS SHAPE:', timeouts.shape)
+            if len(observations)>1000000:
+                state_index = 1000000
+            else:
+                state_index = len(observations)
+
+            observations = observations[:state_index][::4]
+            timeouts = timeouts[:state_index-4][::4]
+            # print('OBSERVATIONS SHAPE:', observations.shape)
+            # print('TIMEOUTS SHAPE:', timeouts.shape)
 
             def create_episode_and_frame_indices(timeouts, observations, goal_horizon):
                 episode_endings = np.where(timeouts)[0]  # Indices where episodes end

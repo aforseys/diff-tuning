@@ -737,7 +737,7 @@ class MazeExp(ConditionalMaze):
         pygame.quit()
 
 def extract_preference_pairs(loadpath, savepath, maze_type='large', score_threshold=0.3, metric='similarity_score', metric_kwargs=None, viz=False):
-    prefix = time.strftime("%Y%m%d_%H%M%S")
+    prefix = 'maze_'+time.strftime("%Y%m%d_%H%M%S")
     
     maze_env = MazeEnv(maze_type)  # needed for similarity_score; also has viz if viz=True
     metric_kwargs = metric_kwargs or {}
@@ -826,8 +826,20 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
     if not pairs:
         print("No pairs to save.")
         return []
+    
 
-    # ── save as index-aligned numpy arrays in maze XY space ──
+# ── build flat observations + timeouts arrays ──────────────────────────
+    # Each preference pair is treated as one "episode" of length (1 + T):
+    #   step 0  → agent start position
+    #   steps 1…T → predicted trajectory
+    #
+    # load_hf_dataset (maze branch) expects:
+    #   observations : (N * (1+T), 2)   — all episodes concatenated
+    #   timeouts     : (N * (1+T),)     — True at the last step of every
+    #                                     episode *except* the final one
+    #                                     (the last episode length is inferred
+    #                                     as len(timeouts) - last_ending - 1)
+
     T = len(pairs[0]['winner_traj'])
     N = len(pairs)
     winners = np.zeros((N, 1 + T, 2), dtype=np.float32)
@@ -852,14 +864,36 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
                                   for p in pair['guide']]
         meta.append(entry)
 
-    np.save(os.path.join(savepath, f"{prefix}_winners.npy"), winners)
-    np.save(os.path.join(savepath, f"{prefix}_losers.npy"),  losers)
+    step_size = 1 + T                                      # frames per episode
+    timeouts  = np.zeros(N * step_size, dtype=bool)
+    # mark the closing frame of every episode but the last
+    timeouts[np.arange(1, N) * step_size - 1] = True
+
+    np.savez(
+        os.path.join(savepath, f"{prefix}_winners.npz"),
+        observations=winners.reshape(-1, 2),
+        timeouts=timeouts,
+    )
+    np.savez(
+        os.path.join(savepath, f"{prefix}_losers.npz"),
+        observations=losers.reshape(-1, 2),
+        timeouts=timeouts,
+    )
     with open(os.path.join(savepath, f"{prefix}_meta.json"), "w") as f:
         json.dump(meta, f, indent=2)
 
-    print(f"Saved {N} pairs → {prefix}_{{winners,losers}}.npy + _meta.json")
-    print(f"  winners/losers shape: {winners.shape}  (N, 1+T, action_dim)")
-    return pairs
+    print(f"Saved {N} pairs → {prefix}_{{winners,losers}}.npz + _meta.json")
+    print(f"  observations shape: {winners.reshape(-1, 2).shape}  "
+          f"(N*(1+T)={N}*{step_size}, 2)")
+
+    # np.save(os.path.join(savepath, f"{prefix}_winners.npy"), winners)
+    # np.save(os.path.join(savepath, f"{prefix}_losers.npy"),  losers)
+    # with open(os.path.join(savepath, f"{prefix}_meta.json"), "w") as f:
+    #     json.dump(meta, f, indent=2)
+
+    # print(f"Saved {N} pairs → {prefix}_{{winners,losers}}.npy + _meta.json")
+    # print(f"  winners/losers shape: {winners.shape}  (N, 1+T, action_dim)")
+    # return pairs
 
 def pick_start_positions(maze_type='large', n_positions=None, savepath=None):
     """
