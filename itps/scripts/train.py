@@ -504,7 +504,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
             neg_batch = {k: v.to(device, non_blocking=True) for k, v in pref_batch["neg"].items()}
             tune_batch=(pos_batch, neg_batch)
 
-        print('Batches gathered')
+        #print('Batches gathered')
         #print(tune_batch[0].shape)
         #print(batch[0].shape)
 

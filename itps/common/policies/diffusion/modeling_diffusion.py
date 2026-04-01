@@ -650,14 +650,14 @@ class EBMDiffusionModel(nn.Module):
             # resample noise trajectory (apply same noise to positive and negative trajectory)
             positive_trajs = pos_batch["action"]
             negative_trajs = neg_batch["action"]
-            print(positive_trajs.shape)
-            print(negative_trajs.shape)
+            # print(positive_trajs.shape)
+            # print(negative_trajs.shape)
             # add same amount of noise to both positive and negative comparisons
             eps = torch.randn(positive_trajs.shape, device=trajectory.device)
             positive_sample = self.noise_scheduler.add_noise(positive_trajs, eps, timesteps)
             negative_sample = self.noise_scheduler.add_noise(negative_trajs, eps, timesteps)
-            print(positive_sample.shape)
-            print(negative_sample.shape)
+            # print(positive_sample.shape)
+            # print(negative_sample.shape)
             # Compute energy of both samples (positive and negative)
             global_cond_concat = torch.cat([global_cond_pos, global_cond_neg], dim=0) #comparisons must have same global cond
             traj_concat = torch.cat([positive_sample, negative_sample], dim=0)
@@ -666,10 +666,10 @@ class EBMDiffusionModel(nn.Module):
                 mask_concat = torch.cat([pos_batch_mask, neg_batch_mask], dim=0)
             else:
                 mask_concat = None
-            print(traj_concat.shape)
-            print(t_concat.shape)
-            print(global_cond_concat.shape)
-            print(mask_concat)
+            # print(traj_concat.shape)
+            # print(t_concat.shape)
+            # print(global_cond_concat.shape)
+            # print(mask_concat)
             energy = self.model(traj_concat, t_concat, global_cond=global_cond_concat, return_energy=True, mask=mask_concat)
 
             # Compute contrastive loss
