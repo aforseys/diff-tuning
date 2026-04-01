@@ -124,18 +124,18 @@ def load_hf_dataset(repo_id: str, version: str, root: Path, split: str, goal_hor
                     # skip every 4th frame to match the original dataset
                     observations = np.array(hdf5_file['observations'])
                     timeouts = np.array(hdf5_file['timeouts'])
-            else:         
+                if len(observations)>1000000:
+                    state_index = 1000000
+                else:
+                    state_index = len(observations)
+                observations = observations[:state_index][::4]
+                timeouts = timeouts[:state_index-4][::4]
+
+            else: #Otherwise preference dataset, don't downsample
                 np_file = np.load(root)
                 observations = np.array(np_file['observations'])
                 timeouts = np.array(np_file['timeouts'])
-
-            if len(observations)>1000000:
-                state_index = 1000000
-            else:
-                state_index = len(observations)
-
-            observations = observations[:state_index][::4]
-            timeouts = timeouts[:state_index-4][::4]
+                timeouts = timeouts[:len(observations)-1]
             # print('OBSERVATIONS SHAPE:', observations.shape)
             # print('TIMEOUTS SHAPE:', timeouts.shape)
 
