@@ -778,7 +778,8 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
                         "loser_score":  float(scores[loser]),
                          **({"guide": guide.tolist()} if guide is not None else {}),
                     })
-        
+                    #print(samples[winner].tolist()[5])
+                    #print(samples[loser].tolist()[0])
         pairs.extend(trial_pairs)
 
     print(f"Generated {len(pairs)} total preference pairs.")
@@ -868,6 +869,11 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
     timeouts  = np.zeros(N * step_size, dtype=bool)
     # mark the closing frame of every episode but the last
     timeouts[np.arange(1, N) * step_size - 1] = True
+
+    #print("agent_xy:", agent_xy)
+    #print("winners[i,0]:", winners[i,0])
+    #print("losers[i,0]:", losers[i,0])
+    assert np.all(losers[:,0]==winners[:,0])
 
     np.savez(
         os.path.join(savepath, f"{prefix}_winners.npz"),
