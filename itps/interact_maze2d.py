@@ -853,8 +853,12 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
                          for p in pair['winner_traj']], dtype=np.float32)
         l_xy = np.array([maze_env.gui2xy(np.array(p, dtype=float))
                          for p in pair['loser_traj']], dtype=np.float32)
-        winners[i, 0]  = agent_xy;  winners[i, 1:] = w_xy
-        losers[i, 0]   = agent_xy;  losers[i, 1:]  = l_xy
+        # winners[i, 0]  = agent_xy;  winners[i, 1:] = w_xy
+        # losers[i, 0]   = agent_xy;  losers[i, 1:]  = l_xy
+        winners[i, 0:2] = agent_xy   # repeat start pos for both obs steps
+        winners[i, 2:]  = w_xy
+        losers[i, 0:2]  = agent_xy
+        losers[i, 2:]   = l_xy
         entry = {
             'obs_idx':      pair['obs_idx'],
             'winner_score': float(pair['winner_score']),
