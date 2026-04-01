@@ -537,20 +537,54 @@ class PreferencePairDataset(torch.utils.data.Dataset):
         assert torch.equal(pos_ds.episode_data_index["to"], neg_ds.episode_data_index["to"])
 
         # given datasets are the same, set index to match one dataset (used for samplers)
-        self.episode_data_index = pos_ds.episode_data_index
+        #self.episode_data_index = pos_ds.episode_data_index
+
+        # start index of each episode
+        self.start_indices = pos_ds.episode_data_index["from"].clone()
+
+        # expose episode boundaries in the same "dataset-level" convention
+        # one dataset item == one episode start
+        n = len(self.start_indices)
+        self.episode_data_index = {
+            "from": torch.arange(n, dtype=torch.long),
+            "to": torch.arange(1, n + 1, dtype=torch.long),
+        }
+
+    # def __len__(self):
+    #     # or `return min(len(self.pos_ds), len(self.neg_ds))`
+    #     return len(self.pos_ds)
+
+    # def __getitem__(self, idx):
+    #     pos_sample = self.pos_ds[idx]
+    #     neg_sample = self.neg_ds[idx]
+
+    #     # ensure samples are aligned
+    #     if "episode_index" in pos_sample and "episode_index" in neg_sample:
+    #         assert pos_sample["episode_index"].item() == neg_sample["episode_index"].item()
+    #         assert pos_sample["frame_index"].item() == neg_sample["frame_index"].item()
+
+    #     return {
+    #         "pos": pos_sample,
+    #         "neg": neg_sample,
+    #     }
 
     def __len__(self):
-        # or `return min(len(self.pos_ds), len(self.neg_ds))`
-        return len(self.pos_ds)
+        # one item per episode, not per frame
+        return len(self.start_indices)
 
     def __getitem__(self, idx):
-        pos_sample = self.pos_ds[idx]
-        neg_sample = self.neg_ds[idx]
+        start_idx = int(self.start_indices[idx].item())
 
-        # ensure samples are aligned
+        pos_sample = self.pos_ds[start_idx]
+        neg_sample = self.neg_ds[start_idx]
+
+        # these should now always be aligned and at frame_index == 0
         if "episode_index" in pos_sample and "episode_index" in neg_sample:
             assert pos_sample["episode_index"].item() == neg_sample["episode_index"].item()
             assert pos_sample["frame_index"].item() == neg_sample["frame_index"].item()
+            assert pos_sample["frame_index"].item() == 0, (
+                f"Expected only episode starts, got frame_index={pos_sample['frame_index'].item()}"
+            )
 
         return {
             "pos": pos_sample,
