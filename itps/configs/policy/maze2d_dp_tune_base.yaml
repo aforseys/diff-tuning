@@ -6,8 +6,8 @@ condition_type: unconditional
 env_type: dense
 dataset_root:
   base: 'data/maze2d-large-sparse-v1.hdf5'
-  pos: 'data/maze_comparisons/maze_20260331_190038_winners.npz'
-  neg: 'data/maze_comparisons/maze_20260331_190038_losers.npz'
+  pos: 'data/maze_comparisons/maze_20260331_215109_winners.npz'
+  neg: 'data/maze_comparisons/maze_20260331_215109_losers.npz'
 pretrained_policy_path: "data/maze2d_dp/outputs/2026.01.23/03.12.47_maze2d_diffusion/checkpoints/last/pretrained_model/"
 
 wandb:

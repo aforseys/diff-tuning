@@ -843,8 +843,8 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
 
     T = len(pairs[0]['winner_traj'])
     N = len(pairs)
-    winners = np.zeros((N, 1 + T, 2), dtype=np.float32)
-    losers  = np.zeros((N, 1 + T, 2), dtype=np.float32)
+    winners = np.zeros((N, 2 + T, 2), dtype=np.float32)
+    losers  = np.zeros((N, 2 + T, 2), dtype=np.float32)
     meta    = []
 
     for i, pair in enumerate(pairs):
@@ -869,7 +869,7 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
                                   for p in pair['guide']]
         meta.append(entry)
 
-    step_size = 1 + T                                      # frames per episode
+    step_size = 2 + T                                      # frames per episode
     timeouts  = np.zeros(N * step_size, dtype=bool)
     # mark the closing frame of every episode but the last
     timeouts[np.arange(1, N) * step_size - 1] = True
