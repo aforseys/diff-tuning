@@ -350,6 +350,17 @@ class EBMDiffusionModel(nn.Module):
                 cosine_sim = (grad_normalized * direction_to_mode).sum(dim=1).mean()
                 print(f"t={t.item():4d} | cosine sim: {cosine_sim.item():.4f}")
 
+                sample_before = sample.clone()
+                scheduler_output = self.noise_scheduler.step(model_output, t, sample, generator=generator)
+                prev_sample = scheduler_output.prev_sample
+
+                delta = prev_sample - sample_before
+                cos_sims = F.cosine_similarity(delta.flatten(1), (-model_output).flatten(1), dim=1)
+                print(f"t={t.item():4d} | sample delta magnitude: {delta.abs().mean().item():.6f} | "
+                    f"cosine with grad: mean={cos_sims.mean().item():.4f}, std={cos_sims.std().item():.4f}")
+
+                sample = prev_sample
+
                 # add interaction gradient
                 if guide is not None and t > final_influence_step:
                     grad = self.guide_gradient(sample, guide)
