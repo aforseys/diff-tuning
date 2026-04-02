@@ -337,6 +337,10 @@ class EBMDiffusionModel(nn.Module):
                     global_cond=global_cond,
                 )
                 #print('model output while sampling:', model_output.shape)
+                        # ADD THIS:
+                print(f"t={t.item():4d} | grad magnitude: mean={model_output.abs().mean().item():.6f}, "
+                    f"max={model_output.abs().max().item():.6f}, "
+                    f"std={model_output.std().item():.6f}")
 
                 # add interaction gradient
                 if guide is not None and t > final_influence_step:
