@@ -341,6 +341,14 @@ class EBMDiffusionModel(nn.Module):
                 print(f"t={t.item():4d} | grad magnitude: mean={model_output.abs().mean().item():.6f}, "
                     f"max={model_output.abs().max().item():.6f}, "
                     f"std={model_output.std().item():.6f}")
+                
+                preferred_mode_center = torch.tensor([0.0, 0.0], device=sample.device).float()
+                preferred_mode_center = self.normalize_targets({"action": preferred_mode_center.reshape(1, 1, 2)})["action"].squeeze()
+                target = preferred_mode_center.expand(sample.shape)
+                direction_to_mode = F.normalize((target - sample).flatten(1), dim=1)
+                grad_normalized = F.normalize((-model_output).flatten(1), dim=1)
+                cosine_sim = (grad_normalized * direction_to_mode).sum(dim=1).mean()
+                print(f"t={t.item():4d} | cosine sim: {cosine_sim.item():.4f}")
 
                 # add interaction gradient
                 if guide is not None and t > final_influence_step:
