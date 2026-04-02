@@ -22,13 +22,12 @@ hydra:
 device: "cuda:1"  # cpu
 
 training:
-  offline_steps: 1000
+  offline_steps: 2000
   online_steps: 0
   eval_freq: 100
   save_freq: 100
   log_freq: 100
-  save_checkpoint: false
-
+  save_checkpoint: True
   batch_size: 256
   grad_clip_norm: 10
   lr: 1.0e-4

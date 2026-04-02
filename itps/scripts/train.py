@@ -485,7 +485,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     offline_step = 0
     for _ in range(step, cfg.training.offline_steps):
 
-        print('ON OFFLINE STEP:', offline_step)
+        #print('ON OFFLINE STEP:', offline_step)
         if offline_step == 0:
             logging.info("Start offline training on a fixed dataset")
 
@@ -519,7 +519,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
             tune_batch = tune_batch
         )
 
-        print('Policy updated')
+        #print('Policy updated')
 
         train_info["dataloading_s"] = dataloading_s
 
