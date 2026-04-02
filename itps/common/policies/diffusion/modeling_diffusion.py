@@ -343,7 +343,7 @@ class EBMDiffusionModel(nn.Module):
                     f"std={model_output.std().item():.6f}")
                 
                 preferred_mode_center = torch.tensor([0.0, 0.0], device=sample.device).float()
-                preferred_mode_center = self.normalize_targets({"action": preferred_mode_center.reshape(1, 1, 2)})["action"].squeeze()
+                preferred_mode_center = normalizer.normalize_targets({"action": preferred_mode_center.reshape(1, 1, 2)})["action"].squeeze()
                 target = preferred_mode_center.expand(sample.shape)
                 direction_to_mode = F.normalize((target - sample).flatten(1), dim=1)
                 grad_normalized = F.normalize((-model_output).flatten(1), dim=1)
