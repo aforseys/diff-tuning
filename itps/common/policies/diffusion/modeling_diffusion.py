@@ -417,8 +417,8 @@ class EBMDiffusionModel(nn.Module):
                 #grad = torch.autograd.grad(energy.sum(), sample)[0]
 
                 # IRED-style step size: beta_t / sqrt(1 - alpha_bar_t)
-                beta_t = self.noise_scheduler.betas[t]
-                alpha_bar_t = self.noise_scheduler.alphas_cumprod[t]
+                beta_t = self.noise_scheduler.betas[t].to(sample.device)
+                alpha_bar_t = self.noise_scheduler.alphas_cumprod[t].to(sample.device)
                 opt_step_size = beta_t / torch.sqrt(1 - alpha_bar_t)
                 
                 sample_new = sample - opt_step_size * grad
