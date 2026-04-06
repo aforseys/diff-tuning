@@ -422,6 +422,10 @@ class EBMDiffusionModel(nn.Module):
                 opt_step_size = beta_t / torch.sqrt(1 - alpha_bar_t)
                 
                 sample_new = sample - opt_step_size * grad
+
+                # clamp to expected scale at this noise level
+                max_val = torch.sqrt(alpha_bar_t)
+                sample_new = torch.clamp(sample_new, -max_val, max_val)
                 
                 # rejection check: only accept if energy decreases
                 energy_new = self.model(sample_new, batched_t, global_cond=global_cond, return_energy=True)
