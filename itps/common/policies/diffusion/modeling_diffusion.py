@@ -413,8 +413,8 @@ class EBMDiffusionModel(nn.Module):
             batched_t = torch.full(sample.shape[:1], t, dtype=torch.long, device=sample.device)
             for _ in range(steps_per_timestep):
                 # compute energy gradient
-                energy = self.model(sample, batched_t, global_cond=global_cond, return_energy=True)
-                grad = torch.autograd.grad(energy.sum(), sample)[0]
+                energy, grad = self.model(sample, batched_t, global_cond=global_cond, return_both=True)
+                #grad = torch.autograd.grad(energy.sum(), sample)[0]
 
                 # IRED-style step size: beta_t / sqrt(1 - alpha_bar_t)
                 beta_t = self.noise_scheduler.betas[t]
