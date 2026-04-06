@@ -115,7 +115,8 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
             )
         gen_actions = self.diffusion.generate_actions(observation_batch, guide=guide, visualizer=visualizer, normalizer=self,return_full=return_full)
         #print('gen actions output:', gen_actions['actions'].shape)
-        energies = self.diffusion.get_traj_energies(gen_actions['actions'], t=0, observation_batch=observation_batch)
+        if return_energy:
+            energies = self.diffusion.get_traj_energies(gen_actions['actions'], t=0, observation_batch=observation_batch)
         #print(energies)
         #print(np.min(energies))
         #print(np.max(energies))
@@ -391,6 +392,55 @@ class EBMDiffusionModel(nn.Module):
         #print('returned sample shape:', sample.shape)
         return sample
     
+    def opt_energy(self, batch_size: int, global_cond: Tensor | None = None, generator: torch.Generator | None = None,
+    ) -> Tensor:
+        device = get_device_from_parameters(self)
+        dtype = get_dtype_from_parameters(self)
+
+        # Sample prior.
+        sample = torch.randn(
+            size=(batch_size, self.config.horizon, self.config.output_shapes["action"][0]),
+            dtype=dtype,
+            device=device,
+            generator=generator,
+        )
+
+        total_timesteps = 100
+        steps_per_timestep = 5
+        self.noise_scheduler.set_timesteps(total_timesteps)
+
+        for t in self.noise_scheduler.timesteps:
+            batched_t = torch.full(sample.shape[:1], t, dtype=torch.long, device=sample.device)
+            for _ in range(steps_per_timestep):
+                # compute energy gradient
+                energy = self.model(sample, batched_t, global_cond=global_cond, return_energy=True)
+                grad = torch.autograd.grad(energy.sum(), sample)[0]
+
+                # IRED-style step size: beta_t / sqrt(1 - alpha_bar_t)
+                beta_t = self.noise_scheduler.betas[t]
+                alpha_bar_t = self.noise_scheduler.alphas_cumprod[t]
+                opt_step_size = beta_t / torch.sqrt(1 - alpha_bar_t)
+                
+                sample_new = sample - opt_step_size * grad
+                
+                # rejection check: only accept if energy decreases
+                energy_new = self.model(sample_new, batched_t, global_cond=global_cond, return_energy=True)
+                bad_step = (energy_new > energy).squeeze(-1)
+                sample_new[bad_step] = sample[bad_step]
+                
+                sample = sample_new.detach()
+            
+            # c1 rescaling to next landscape
+            if t > 0:
+                t_prev = t - 1
+                alpha_bar_t_prev = self.noise_scheduler.alphas_cumprod[t_prev]
+                # unscale to x_0 estimate then rescale to t-1
+                x0_est = sample / torch.sqrt(alpha_bar_t)
+                sample = torch.sqrt(alpha_bar_t_prev) * x0_est
+        
+        return sample
+
+
     def guide_gradient(self, naction, guide):
         # naction: (B, pred_horizon, action_dim);
         # guide: (guide_horizon, action_dim)
@@ -521,7 +571,8 @@ class EBMDiffusionModel(nn.Module):
         global_cond = self._prepare_global_conditioning(batch)  # (B, global_cond_dim)
 
         # run sampling
-        actions = self.conditional_sample(batch_size, global_cond=global_cond, guide=guide, visualizer=visualizer, normalizer=normalizer)
+        actions = self.opt_energy(batch_size, global_cond=global_cond)
+        #actions = self.conditional_sample(batch_size, global_cond=global_cond, guide=guide, visualizer=visualizer, normalizer=normalizer)
         #print('actions from sampling:', actions.shape)
         if return_full:
             action_dict['full_traj'] = actions
