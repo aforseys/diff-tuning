@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 # Alexandra Forsey-Smerek
-
+import time
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
@@ -25,10 +25,19 @@ def run_inference(policy, N=100, conditional=False):
     obs = gen_obs(conditional=conditional, N=N, device=device)
 
     inference_output = []
+    sample_times = []
+
     for o in obs:
+        start = time.perf_counter()
         actions = policy.run_inference(o)
+        torch.cuda.synchronize()
+        elapsed = time.perf_counter() - start
+
+        sample_times.append(elapsed)
+        print(f"Sample time: {elapsed*1000:.1f}ms")
         inference_output.append(actions.detach().cpu().squeeze(1).numpy())
 
+    print(f"Avg sample time over {len(sample_times)} obs: {np.mean(sample_times)*1000:.1f}ms")
     return inference_output
 
 ## -- CALCULATE ENERGY  -- 

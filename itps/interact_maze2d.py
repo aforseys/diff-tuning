@@ -125,6 +125,8 @@ class MazeEnv:
         self.agent_gui_pos = np.array([0, 0]) # Initialize the position of the red dot
         self.running = True
 
+        self._sample_times=[]
+
     def check_collision(self, xy_traj):
         assert xy_traj.shape[2] == 2, "Input must be a 2D array of (x, y) coordinates."
         batch_size, num_steps, _ = xy_traj.shape
@@ -217,7 +219,6 @@ class MazeEnv:
         if keep_drawing: # visualize the human drawing input
             for i in range(len(self.draw_traj) - 1):
                 pygame.draw.line(self.screen, self.GRAY, self.draw_traj[i], self.draw_traj[i + 1], 10)
-
   
         pygame.display.flip()
 
@@ -244,7 +245,7 @@ class MazeEnv:
 
 class UnconditionalMaze(MazeEnv):
     # for dragging the agent around to explore motion manifold
-    def __init__(self, policy, policy_tag=None, vis_energy=False, maze_type="large"):
+    def __init__(self, policy, policy_tag=None, vis_energy=False, maze_type="large", obs_list=None):
         super().__init__(maze_type=maze_type)
         self.mouse_pos = None
         self.agent_in_collision = False
@@ -252,6 +253,7 @@ class UnconditionalMaze(MazeEnv):
         self.policy = policy
         self.policy_tag = policy_tag
         self.vis_energy = vis_energy
+        self.obs_list = obs_list
 
     def infer_target(self, guide=None, visualizer=None, return_energy=False, goal_pos=None):
         agent_hist_xy = self.agent_history_xy[-1] 
@@ -277,6 +279,7 @@ class UnconditionalMaze(MazeEnv):
         if guide is not None:
             guide = torch.from_numpy(guide).float().cuda()
 
+        start = time.perf_counter()
         with torch.autocast(device_type="cuda"), seeded_context(0):
             if self.policy_tag == 'act':
                 actions = self.policy.run_inference(obs_batch).cpu().numpy()
@@ -285,6 +288,12 @@ class UnconditionalMaze(MazeEnv):
                 return actions.detach().cpu().numpy(), energy.detach().cpu().numpy().squeeze()
             else:
                 actions = self.policy.run_inference(obs_batch, guide=guide, visualizer=visualizer).cpu().numpy() # directly call the policy in order to visualize the intermediate steps
+        torch.cuda.synchronize()  # important — ensures GPU work is complete before stopping the clock
+        elapsed = time.perf_counter() - start
+
+        self._sample_times.append(elapsed)
+        print(f"Sample time: {elapsed*1000:.1f}ms | Avg: {np.mean(self._sample_times)*1000:.1f}ms")
+        
         return actions
     
     def update_mouse_pos(self):
@@ -309,6 +318,12 @@ class UnconditionalMaze(MazeEnv):
         pygame.display.flip()
 
     def run(self):
+        trial_idx = 0
+
+        if self.obs_list is not None:
+            self.update_agent_pos(self.xy2gui(np.array(self.obs_list[trial_idx])))
+
+
         while self.running:
             self.update_mouse_pos()
             
@@ -317,8 +332,19 @@ class UnconditionalMaze(MazeEnv):
                 if event.type == pygame.QUIT:
                     self.running = False
                     break
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_n and self.obs_list is not None:
+                        trial_idx += 1
+                        if trial_idx >= len(self.obs_list):
+                            print("All observations complete.")
+                            self.running = False
+                            break
+                        print(f"Moving to obs {trial_idx}: {self.obs_list[trial_idx]}")
+                        self.update_agent_pos(self.xy2gui(np.array(self.obs_list[trial_idx])))
 
-            self.update_agent_pos(self.mouse_pos.copy())
+            if self.obs_list is None:
+                self.update_agent_pos(self.mouse_pos.copy())
+                
             if self.policy is not None:
                 if self.vis_energy: 
                     xy_pred, energy = self.infer_target(return_energy=True)
