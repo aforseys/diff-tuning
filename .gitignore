@@ -4,6 +4,8 @@ itps/weights/
 itps/weights_*/
 itps/weights_*.zip
 itps/data/
+ired_code_release/
 __pycache__/
 .DS_Store
 .vscode
+CLAUDE.md
