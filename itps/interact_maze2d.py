@@ -1105,7 +1105,7 @@ if __name__ == "__main__":
         pairs = extract_preference_pairs(args.loadpath, args.savepath, maze_type=args.maze_type, score_threshold=0.3, metric='similarity_score', metric_kwargs=None, viz=False)
         sys.exit(0)
     if args.unconditional:
-        interactiveMaze = UnconditionalMaze(policy, policy_tag=policy_tag, vis_energy=args.vis_energy, maze_type=args.maze_type)
+        interactiveMaze = UnconditionalMaze(policy, policy_tag=policy_tag, vis_energy=args.vis_energy, maze_type=args.maze_type, obs_list=obs_list)
     elif args.loadpath is not None:
         if args.savepath is None:
             savepath = None
