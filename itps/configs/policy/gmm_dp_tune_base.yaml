@@ -17,16 +17,16 @@ hydra:
     # with the same value for `dir` its contents will be overwritten unless you set `resume` to true.
     dir: data/gmm/unconditioned/tune/outputs/${now:%Y.%m.%d}/${hydra.job.name}
   job:
-    name: $gmm_unconditional_tune_{now:%Y.%m.%d.%H.%M.%S}_${env.name}_${policy.name}
+    name: gmm_unconditional_tune_${now:%Y.%m.%d.%H.%M.%S}_${env.name}_${policy.name}
 
 device: "cuda:1"  # cpu
 
 training:
-  offline_steps: 2000
+  offline_steps: 100
   online_steps: 0
-  eval_freq: 100
-  save_freq: 100
-  log_freq: 100
+  eval_freq: 10
+  save_freq: 10
+  log_freq: 10
   save_checkpoint: True
   batch_size: 256
   grad_clip_norm: 10
@@ -48,7 +48,7 @@ training:
   drop_n_last_frames: false #7  # ${policy.horizon} - ${policy.n_action_steps} - ${policy.n_obs_steps} + 1
 
 eval:
-  n_samples: 200
+  n_samples: 1
 
 policy:
   name: diffusion
