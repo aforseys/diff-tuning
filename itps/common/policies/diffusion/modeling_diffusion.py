@@ -318,7 +318,7 @@ class EBMDiffusionModel(nn.Module):
 
         final_influence_step = self.config.num_train_timesteps
         if self.alignment_strategy in ['guided-diffusion', 'stochastic-sampling']:
-            final_influence_step = 0 
+            final_influence_step = 0
 
         for t in self.noise_scheduler.timesteps:
             if visualizer is not None and normalizer is not None:
@@ -405,39 +405,53 @@ class EBMDiffusionModel(nn.Module):
             generator=generator,
         )
 
-        total_timesteps = 100
-        steps_per_timestep = 5
+        total_timesteps = 10
+        steps_per_timestep = 2
         self.noise_scheduler.set_timesteps(total_timesteps)
 
         for t in self.noise_scheduler.timesteps:
             batched_t = torch.full(sample.shape[:1], t, dtype=torch.long, device=sample.device)
+            beta_t = self.noise_scheduler.betas[t].to(sample.device)
+            alpha_bar_t = self.noise_scheduler.alphas_cumprod[t].to(sample.device)
+
             for _ in range(steps_per_timestep):
                 # compute energy gradient
                 energy, grad = self.model(sample, batched_t, global_cond=global_cond, return_both=True)
                 #grad = torch.autograd.grad(energy.sum(), sample)[0]
 
                 # IRED-style step size: beta_t / sqrt(1 - alpha_bar_t)
-                beta_t = self.noise_scheduler.betas[t].to(sample.device)
-                alpha_bar_t = self.noise_scheduler.alphas_cumprod[t].to(sample.device)
+                #beta_t = self.noise_scheduler.betas[t].to(sample.device)
+                #alpha_bar_t = self.noise_scheduler.alphas_cumprod[t].to(sample.device)
+
                 opt_step_size = beta_t / torch.sqrt(1 - alpha_bar_t)
-                
-                sample_new = sample - opt_step_size * grad
+                #snr = alpha_bar_t / (1 - alpha_bar_t)
+                #opt_step_size = (1 / snr)  # large when noisy, small when clean
+
+                sample_new = sample - opt_step_size * grad * 2
 
                 # clamp to expected scale at this noise level
                 max_val = torch.sqrt(alpha_bar_t)
                 sample_new = torch.clamp(sample_new, -max_val, max_val)
                 
                 # rejection check: only accept if energy decreases
-                energy_new = self.model(sample_new, batched_t, global_cond=global_cond, return_energy=True)
-                bad_step = (energy_new > energy).squeeze(-1)
-                sample_new[bad_step] = sample[bad_step]
+                #energy_new = self.model(sample_new, batched_t, global_cond=global_cond, return_energy=True)
+                #bad_step = (energy_new > energy).squeeze(-1)
+                #sample_new[bad_step] = sample[bad_step]
                 
                 sample = sample_new.detach()
             
             # c1 rescaling to next landscape
-            if t > 0:
-                t_prev = t - 1
+            timesteps = self.noise_scheduler.timesteps
+           # t_prev_idx = (timesteps == t).nonzero().item() + 1
+            if t>0:
+                #t_prev = t - 1
+                t_prev_idx = (timesteps == t).nonzero().item() + 1
+                t_prev = timesteps[t_prev_idx]
                 alpha_bar_t_prev = self.noise_scheduler.alphas_cumprod[t_prev]
+                if steps_per_timestep==0:
+                    # clamp to expected scale at this noise level if not done before
+                    max_val = torch.sqrt(alpha_bar_t)
+                    sample = torch.clamp(sample, -max_val, max_val)
                 # unscale to x_0 estimate then rescale to t-1
                 x0_est = sample / torch.sqrt(alpha_bar_t)
                 sample = torch.sqrt(alpha_bar_t_prev) * x0_est
