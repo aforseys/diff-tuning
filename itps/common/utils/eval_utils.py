@@ -24,21 +24,23 @@ def run_inference(policy, N=100, conditional=False):
     device = next(policy.parameters()).device
     obs = gen_obs(conditional=conditional, N=N, device=device)
 
-    inference_output = []
-    sample_times = []
+    DDIM_inference_output = []
+    IRED_inference_output = []
+    #sample_times = []
 
     for o in obs:
-        start = time.perf_counter()
-        actions = policy.run_inference(o)
+        #start = time.perf_counter()
+        DDIM_actions, IRED_actions = policy.run_inference(o, both=True)
         torch.cuda.synchronize()
-        elapsed = time.perf_counter() - start
+        # elapsed = time.perf_counter() - start
 
-        sample_times.append(elapsed)
-        print(f"Sample time: {elapsed*1000:.1f}ms")
-        inference_output.append(actions.detach().cpu().squeeze(1).numpy())
+        # sample_times.append(elapsed)
+        # print(f"Sample time: {elapsed*1000:.1f}ms")
+        DDIM_inference_output.append(DDIM_actions.detach().cpu().squeeze(1).numpy())
+        IRED_inference_output.append(IRED_actions.detach().cpu().squeeze(1).numpy())
 
-    print(f"Avg sample time over {len(sample_times)} obs: {np.mean(sample_times)*1000:.1f}ms")
-    return inference_output
+    # print(f"Avg sample time over {len(sample_times)} obs: {np.mean(sample_times)*1000:.1f}ms")
+    return DDIM_inference_output, IRED_inference_output
 
 ## -- CALCULATE ENERGY  -- 
 def torchify(t, device):
@@ -135,19 +137,24 @@ def log_likelihood(policy, conditional, finetune, N=100, samples=None):
 
     assert not (conditional and finetune), "Simultaneous conditional and finetune not supported"
     if samples is None:
-        samples=run_inference(policy, N=N, conditional=conditional)
-    assert (conditional and (len(samples)==3)) or (len(samples)==1), "Incorrect number of sample sets"
+        DDIM_samples, IRED_samples =run_inference(policy, N=N, conditional=conditional)
+        assert (conditional and (len(DDIM_samples)==3)) or (len(DDIM_samples)==1), "Incorrect number of DDIM sample sets"
+        assert (conditional and (len(IRED_samples)==3)) or (len(IRED_samples)==1), "Incorrect number of IRED sample sets"
+        samples = [DDIM_samples, IRED_samples]
+    else:
+        assert (conditional and (len(samples)==3)) or (len(samples)==1), "Incorrect number of DDIM sample sets"
+        samples = [samples]
 
     if conditional: # evaluate each sample set under corresponding gt pdf
-        p_x = [eval_gt_pdf(samples[i], conditional=True, centers=[i])[0] for i in range(len(samples))]
+        p_x = [[eval_gt_pdf(s[i], conditional=True, centers=[i])[0] for i in range(len(s))] for s in samples]
     elif finetune: # evaluate sample set under target distribution
-        p_x = eval_gt_pdf(samples[0], conditional=True, centers=[0])
+        p_x = [eval_gt_pdf(s[0], conditional=True, centers=[0]) for s in samples]
     else: # evaluate sample set under mixture 
-        p_x = eval_gt_pdf(samples[0], conditional=False)     
+        p_x = [eval_gt_pdf(s[0], conditional=False) for s in samples]
 
     #get average log likelihood across all samples and distributions
     eps =1e-8
-    ll = np.mean(np.log(np.clip(np.concatenate(p_x, axis=0),eps, None)))
+    ll = [np.mean(np.log(np.clip(np.concatenate(dist, axis=0),eps, None))) for dist in p_x]
 
     return samples, ll
 
@@ -268,29 +275,33 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
     info ={
         "aggregated":{
             "kl_div": kl_div,
-            "log_likelihood": ll
+            "DDIM_log_likelihood": ll[0],
+            "IRED_log_likelihood": ll[1],
         }
     }
 
     if training_samples is not None:
         train_data = np.load(training_samples)
         filtered_samples = filter_samples(train_data, finetune, conditional)
-        ll_training = log_likelihood(filtered_samples)
+        ll_training = log_likelihood(policy, conditional, finetune, samples = filtered_samples)
         print('Log likelihood of training samples:', ll_training)
 
     if viz:
         # Visualize training samples if passed in
         if training_samples is not None:
             train_data = np.load(training_samples)[:, 1:] #remove conditional obs
-            train_sample_comparison = run_inference(policy, N=np.shape(train_data)[0], conditional=conditional)
-            vis_sample_comparison(train_sample_comparison, train_data)
+            DDIM_samples, IRED_samples = run_inference(policy, N=np.shape(train_data)[0], conditional=conditional)
+            vis_sample_comparison(DDIM_samples, train_data)
+            vis_sample_comparison(IRED_samples, train_data)
 
         # Visualize inferred samples over gt distribution 
-        vis_inference(policy, samples=samples, conditional=conditional, learned_contour=False)
+        vis_inference(policy, samples=DDIM_samples, conditional=conditional, learned_contour=False)
+        vis_inference(policy, samples=IRED_samples, conditional=conditional, learned_contour=False)
 
         # Visualize learned distribution at different denoising steps
         for i in range(10):
-            vis_inference(policy, samples=samples, conditional=conditional, learned_contour=True, t=i*10)
+            vis_inference(policy, samples=DDIM_samples, conditional=conditional, learned_contour=True, t=i*10)
+            vis_inference(policy, samples=IRED_samples, conditional=conditional, learned_contour=True, t=i*10)
             vis_energy_landscape(policy, conditional, t=i*10)
 
     return info

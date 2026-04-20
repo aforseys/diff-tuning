@@ -105,7 +105,7 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
         return set(self.config.input_shapes)
 
     @torch.no_grad 
-    def run_inference(self, observation_batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, return_full=False, return_energy=False) -> Tensor:
+    def run_inference(self, observation_batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, return_full=False, return_energy=False, both=False) -> Tensor:
         observation_batch = self.normalize_inputs(observation_batch)
         if guide is not None:
             guide = self.normalize_targets({"action": guide})["action"]
@@ -113,18 +113,27 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
             observation_batch["observation.images"] = torch.stack(
                 [observation_batch[k] for k in self.expected_image_keys], dim=-4
             )
-        gen_actions = self.diffusion.generate_actions(observation_batch, guide=guide, visualizer=visualizer, normalizer=self,return_full=return_full)
+
+        # default: use optimization-based sampling
+        gen_actions = [self.diffusion.generate_actions(observation_batch, guide=guide, visualizer=visualizer, normalizer=self,return_full=return_full)]
+        
+        # if returning both, use denoising-based sampling as well
+        if both: 
+            gen_actions_denoise = self.diffusion.generate_actions(observation_batch, guide=guide, visualizer=visualizer, normalizer=self,return_full=return_full, opt_energy=False)
+            gen_actions.append(gen_actions_denoise)
+
+
         #print('gen actions output:', gen_actions['actions'].shape)
         if return_energy:
-            energies = self.diffusion.get_traj_energies(gen_actions['actions'], t=0, observation_batch=observation_batch)
+            energies = [self.diffusion.get_traj_energies(a['actions'], t=0, observation_batch=observation_batch) for a in gen_actions]
         #print(energies)
         #print(np.min(energies))
         #print(np.max(energies))
         #print(np.mean(energies))
-        actions = self.unnormalize_outputs({"action": gen_actions['actions']})["action"]
+        actions = [self.unnormalize_outputs({"action": a['actions']})["action"] for a in gen_actions]
         #print('actions after unnormalization output:', actions.shape)
         if return_full:
-            full_traj = self.unnormalize_outputs({"action": gen_actions['full_traj']})["action"]
+            full_traj = [self.unnormalize_outputs({"action": a['full_traj']})["action"] for a in gen_actions]
             return actions, full_traj
         #elif return_energy:
         #    return actions, gen_actions['energy'], full_traj
@@ -570,7 +579,7 @@ class EBMDiffusionModel(nn.Module):
         # return energy_sum/ n
 
 
-    def generate_actions(self, batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, normalizer=None,return_full=False) -> Tensor:
+    def generate_actions(self, batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, normalizer=None,return_full=False, opt_energy=True) -> Tensor:
         """
         This function expects `batch` to have:
         {
@@ -589,8 +598,10 @@ class EBMDiffusionModel(nn.Module):
         global_cond = self._prepare_global_conditioning(batch)  # (B, global_cond_dim)
 
         # run sampling
-        actions = self.opt_energy(batch_size, global_cond=global_cond)
-        #actions = self.conditional_sample(batch_size, global_cond=global_cond, guide=guide, visualizer=visualizer, normalizer=normalizer)
+        if opt_energy:
+            actions = self.opt_energy(batch_size, global_cond=global_cond)
+        else:
+            actions = self.conditional_sample(batch_size, global_cond=global_cond, guide=guide, visualizer=visualizer, normalizer=normalizer)
         #print('actions from sampling:', actions.shape)
         if return_full:
             action_dict['full_traj'] = actions
