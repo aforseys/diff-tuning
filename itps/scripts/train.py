@@ -392,7 +392,8 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
                         condition_type=condition_type, 
                         N = cfg.eval.n_samples,
                         viz = False,
-                        finetune=finetune
+                        finetune=finetune, 
+                        opt_steps=cfg.eval.opt_steps
                         )
 
                 else:

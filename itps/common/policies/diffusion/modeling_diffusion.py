@@ -105,7 +105,7 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
         return set(self.config.input_shapes)
 
     @torch.no_grad 
-    def run_inference(self, observation_batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, return_full=False, return_energy=False, both=False) -> Tensor:
+    def run_inference(self, observation_batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, return_full=False, return_energy=False, both=False, opt_steps=[1]) -> Tensor:
         observation_batch = self.normalize_inputs(observation_batch)
         if guide is not None:
             guide = self.normalize_targets({"action": guide})["action"]
@@ -115,7 +115,9 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
             )
 
         # default: use optimization-based sampling
-        gen_actions = [self.diffusion.generate_actions(observation_batch, guide=guide, visualizer=visualizer, normalizer=self,return_full=return_full)]
+        gen_actions = []
+        for n in opt_steps: 
+            gen_actions.append(self.diffusion.generate_actions(observation_batch, guide=guide, visualizer=visualizer, normalizer=self,return_full=return_full, steps_per_timestep=n))
         
         # if returning both, use denoising-based sampling as well
         if both: 
@@ -348,28 +350,28 @@ class EBMDiffusionModel(nn.Module):
                 )
                 #print('model output while sampling:', model_output.shape)
                         # ADD THIS:
-                print(f"t={t.item():4d} | grad magnitude: mean={model_output.abs().mean().item():.6f}, "
-                    f"max={model_output.abs().max().item():.6f}, "
-                    f"std={model_output.std().item():.6f}")
+                # print(f"t={t.item():4d} | grad magnitude: mean={model_output.abs().mean().item():.6f}, "
+                #     f"max={model_output.abs().max().item():.6f}, "
+                #     f"std={model_output.std().item():.6f}")
                 
-                preferred_mode_center = torch.tensor([0.0, 0.0], device=sample.device).float()
-                preferred_mode_center = normalizer.normalize_targets({"action": preferred_mode_center.reshape(1, 1, 2)})["action"].squeeze()
-                target = preferred_mode_center.expand(sample.shape)
-                direction_to_mode = F.normalize((target - sample).flatten(1), dim=1)
-                grad_normalized = F.normalize((-model_output).flatten(1), dim=1)
-                cosine_sim = (grad_normalized * direction_to_mode).sum(dim=1).mean()
-                print(f"t={t.item():4d} | cosine sim: {cosine_sim.item():.4f}")
+                # preferred_mode_center = torch.tensor([0.0, 0.0], device=sample.device).float()
+                # preferred_mode_center = normalizer.normalize_targets({"action": preferred_mode_center.reshape(1, 1, 2)})["action"].squeeze()
+                # target = preferred_mode_center.expand(sample.shape)
+                # direction_to_mode = F.normalize((target - sample).flatten(1), dim=1)
+                # grad_normalized = F.normalize((-model_output).flatten(1), dim=1)
+                # cosine_sim = (grad_normalized * direction_to_mode).sum(dim=1).mean()
+                # # print(f"t={t.item():4d} | cosine sim: {cosine_sim.item():.4f}")
 
-                sample_before = sample.clone()
-                scheduler_output = self.noise_scheduler.step(model_output, t, sample, generator=generator)
-                prev_sample = scheduler_output.prev_sample
+                # sample_before = sample.clone()
+                # scheduler_output = self.noise_scheduler.step(model_output, t, sample, generator=generator)
+                # prev_sample = scheduler_output.prev_sample
 
-                delta = prev_sample - sample_before
-                cos_sims = F.cosine_similarity(delta.flatten(1), (-model_output).flatten(1), dim=1)
-                print(f"t={t.item():4d} | sample delta magnitude: {delta.abs().mean().item():.6f} | "
-                    f"cosine with grad: mean={cos_sims.mean().item():.4f}, std={cos_sims.std().item():.4f}")
+                # delta = prev_sample - sample_before
+                # cos_sims = F.cosine_similarity(delta.flatten(1), (-model_output).flatten(1), dim=1)
+                # print(f"t={t.item():4d} | sample delta magnitude: {delta.abs().mean().item():.6f} | "
+                #     f"cosine with grad: mean={cos_sims.mean().item():.4f}, std={cos_sims.std().item():.4f}")
 
-                sample = prev_sample
+                # sample = prev_sample
 
                 # add interaction gradient
                 if guide is not None and t > final_influence_step:
@@ -401,7 +403,7 @@ class EBMDiffusionModel(nn.Module):
         #print('returned sample shape:', sample.shape)
         return sample
     
-    def opt_energy(self, batch_size: int, global_cond: Tensor | None = None, generator: torch.Generator | None = None,
+    def opt_energy(self, batch_size: int, global_cond: Tensor | None = None, generator: torch.Generator | None = None, steps_per_timestep: int | None = 1
     ) -> Tensor:
         device = get_device_from_parameters(self)
         dtype = get_dtype_from_parameters(self)
@@ -415,7 +417,7 @@ class EBMDiffusionModel(nn.Module):
         )
 
         total_timesteps = 10
-        steps_per_timestep = 2
+        # steps_per_timestep = 2
         self.noise_scheduler.set_timesteps(total_timesteps)
 
         for t in self.noise_scheduler.timesteps:
@@ -579,7 +581,7 @@ class EBMDiffusionModel(nn.Module):
         # return energy_sum/ n
 
 
-    def generate_actions(self, batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, normalizer=None,return_full=False, opt_energy=True) -> Tensor:
+    def generate_actions(self, batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, normalizer=None,return_full=False, opt_energy=True, steps_per_timestep=1) -> Tensor:
         """
         This function expects `batch` to have:
         {
@@ -599,7 +601,7 @@ class EBMDiffusionModel(nn.Module):
 
         # run sampling
         if opt_energy:
-            actions = self.opt_energy(batch_size, global_cond=global_cond)
+            actions = self.opt_energy(batch_size, global_cond=global_cond, steps_per_timestep=steps_per_timestep)
         else:
             actions = self.conditional_sample(batch_size, global_cond=global_cond, guide=guide, visualizer=visualizer, normalizer=normalizer)
         #print('actions from sampling:', actions.shape)
