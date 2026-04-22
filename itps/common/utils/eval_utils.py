@@ -30,18 +30,19 @@ def run_inference(policy, N=100, conditional=False, opt_steps=[1]):
     IRED_inference_output = [[] for _ in opt_steps]
     DDIM_inference_output = []
     #sample_times = []
+    o=obs[0]
 
-    for o in obs:
+    #for o in obs:
         #start = time.perf_counter()
-        actions = policy.run_inference(o, both=True, opt_steps=opt_steps)
-        #torch.cuda.synchronize()
-        # elapsed = time.perf_counter() - start
+    actions = policy.run_inference(o, both=True, opt_steps=opt_steps)
+    #torch.cuda.synchronize()
+    # elapsed = time.perf_counter() - start
 
-        # sample_times.append(elapsed)
-        # print(f"Sample time: {elapsed*1000:.1f}ms")
-        DDIM_inference_output.append(actions[-1].detach().cpu().squeeze(1).numpy())
-        for i in range(len(opt_steps)):
-            IRED_inference_output[i].append(actions[i].detach().cpu().squeeze(1).numpy())
+    # sample_times.append(elapsed)
+    # print(f"Sample time: {elapsed*1000:.1f}ms")
+    DDIM_inference_output.append(actions[-1].detach().cpu().squeeze(1).numpy())
+    for i in range(len(opt_steps)):
+        IRED_inference_output[i].append(actions[i].detach().cpu().squeeze(1).numpy())
 
     # print(f"Avg sample time over {len(sample_times)} obs: {np.mean(sample_times)*1000:.1f}ms")
     return IRED_inference_output + [DDIM_inference_output]
@@ -55,17 +56,18 @@ def run_inference_with_grad_steps(policy, N=50, conditional=False, opt_steps=[1]
 
     grad_histories_per_opt = [[] for _ in opt_steps]
     #sample_times = []
+    o=obs[0]
 
-    for o in obs:
-        #start = time.perf_counter()
-        _, grad_histories = policy.run_inference(o, both=False, opt_steps=opt_steps, return_grad_steps=True)
-        #torch.cuda.synchronize()
-        # elapsed = time.perf_counter() - start
-        for i in range(len(opt_steps)):
-            grad_histories_per_opt[i].append(grad_histories[i])
+    
+    #start = time.perf_counter()
+    _, grad_histories = policy.run_inference(o, both=False, opt_steps=opt_steps, return_grad_steps=True)
+    #torch.cuda.synchronize()
+    # elapsed = time.perf_counter() - start
+    for i in range(len(opt_steps)):
+        grad_histories_per_opt[i].append(grad_histories[i])
 
-        # sample_times.append(elapsed)
-        # print(f"Sample time: {elapsed*1000:.1f}ms")
+    # sample_times.append(elapsed)
+    # print(f"Sample time: {elapsed*1000:.1f}ms")
     return grad_histories_per_opt
 
 ## -- CALCULATE ENERGY  -- 
@@ -399,12 +401,12 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
         if viz_opt:
           assert not conditional, "Conditional sampling not supported for grad viz"
           grad_N = min(50, N)                                                         
-          grad_histories_per_obs = run_inference_with_grad_steps(                     
+          grad_histories_per_opt = run_inference_with_grad_steps(                     
               policy, N=grad_N, conditional=conditional, opt_steps=opt_steps          
           )                                                                           
           for t in range(10):
               for step_i, n_steps in enumerate(opt_steps):                            
-                    grad_hist = grad_histories_per_obs[step_i]
+                    grad_hist = grad_histories_per_opt[step_i][0]
                     vis_ired_grad_steps(                                            
                         policy, grad_hist, t=t, conditional=conditional,
                         n_inner_steps_label=str(n_steps)               
