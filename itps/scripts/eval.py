@@ -497,7 +497,8 @@ def main(
                 N = hydra_cfg.eval.n_samples,
                 viz = viz,
                 training_samples = training_samples, #used for viz if viz True
-                opt_steps=[1,2,5]
+                opt_steps=[1,2,5], 
+                viz_opt=True
                 )
         
         elif hydra_cfg.env.name == 'maze2d':
