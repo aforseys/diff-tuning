@@ -21,6 +21,9 @@ def gen_obs(conditional, N, device):
     return observations
 
 def run_inference(policy, N=100, conditional=False, opt_steps=[1]):
+
+    assert not conditional, "Conditional sampling not supported for multiple opt steps"
+
     device = next(policy.parameters()).device
     obs = gen_obs(conditional=conditional, N=N, device=device)
 
@@ -42,6 +45,28 @@ def run_inference(policy, N=100, conditional=False, opt_steps=[1]):
 
     # print(f"Avg sample time over {len(sample_times)} obs: {np.mean(sample_times)*1000:.1f}ms")
     return IRED_inference_output + [DDIM_inference_output]
+
+def run_inference_with_grad_steps(policy, N=50, conditional=False, opt_steps=[1]):
+
+    assert not conditional, "Conditional sampling not supported for multiple opt steps"
+
+    device = next(policy.parameters()).device
+    obs = gen_obs(conditional=conditional, N=N, device=device)
+
+    grad_histories_per_opt = [[] for _ in opt_steps]
+    #sample_times = []
+
+    for o in obs:
+        #start = time.perf_counter()
+        _, grad_histories = policy.run_inference(o, both=False, opt_steps=opt_steps, return_grad_steps=True)
+        #torch.cuda.synchronize()
+        # elapsed = time.perf_counter() - start
+        for i in range(len(opt_steps)):
+            grad_histories_per_opt[i].append(grad_histories[i])
+
+        # sample_times.append(elapsed)
+        # print(f"Sample time: {elapsed*1000:.1f}ms")
+    return grad_histories_per_opt
 
 ## -- CALCULATE ENERGY  -- 
 def torchify(t, device):
@@ -246,6 +271,66 @@ def vis_sample_comparison(samples, train_data):
         plt.title(f"Samples against training data (Obs:{i})")
         plt.show()
 
+def vis_ired_grad_steps(policy, grad_history, t, conditional, n_inner_steps_label="", x_range=(-10, 10), y_range=(-10,10)):
+ 
+      """         
+      Overlay IRED gradient step arrows on the learned energy landscape at denoising  
+  timestep t.                                                                         
+   
+      grad_history: {t_int: [{'pos': Tensor(B,H,D), 'next_pos': Tensor(B,H,D)}]}      
+                    for one obs and one opt_step config, positions in data space.     
+      """                                           
+      assert not conditional, "Conditional sampling not supported for multiple opt steps"
+
+      steps_at_t = grad_history.get(t, [])                                            
+      if not steps_at_t:                                                              
+          print(f"No grad steps recorded for timestep {t}")
+          return                                                                      
+                  
+      device = next(policy.parameters()).device                                       
+      trajs = gen_xy_grid(x_range=x_range, y_range=y_range, device=device)
+      energies = eval_energy(policy, trajs, t=t, conditional=conditional)             
+      xx = trajs[:, 0, 0].cpu().numpy().reshape(200, 200)                             
+      yy = trajs[:, 0, 1].cpu().numpy().reshape(200, 200)                             
+                                                                                      
+      energy = energies[0]              
+      zz = np.exp(-energy.reshape(200, 200))
+                                                                                      
+      n_inner = len(steps_at_t)
+      fig, axes = plt.subplots(1, n_inner, figsize=(5 * n_inner, 5), squeeze=False)   
+      axes = axes[0]                                                                  
+   
+      for step_i, step_data in enumerate(steps_at_t):                                 
+          ax = axes[step_i]
+          ax.imshow(zz, origin='lower', extent=[xx.min(), xx.max(), yy.min(), yy.max()], aspect='auto', cmap='viridis')                                         
+   
+          pos = step_data['pos'].squeeze(1).cpu().numpy()   # (B, 2)                  
+          nxt = step_data['next_pos'].squeeze(1).cpu().numpy()  # (B, 2)
+          dx = nxt[:, 0] - pos[:, 0]                                                  
+          dy = nxt[:, 1] - pos[:, 1]
+          magnitudes = np.sqrt(dx**2 + dy**2)                                         
+                                                                                      
+          ax.scatter(pos[:, 0], pos[:, 1], s=10, c='red', alpha=0.6, zorder=3)        
+          q = ax.quiver(pos[:, 0], pos[:, 1], dx, dy, magnitudes,                     
+                        cmap='cool', alpha=0.8, scale=1, scale_units='xy',            
+  angles='xy', zorder=4)                                                              
+          plt.colorbar(q, ax=ax, label='step magnitude')                              
+                                                                                      
+          ax.set_xlim(x_range)                                                        
+          ax.set_ylim(y_range)
+          ax.set_title(f"inner step {step_i + 1}/{n_inner}\nmean={magnitudes.mean():.3f}, max={magnitudes.max():.3f}")            
+          ax.set_xlabel("X")
+          ax.set_ylabel("Y")                                                          
+                  
+      title = f"IRED gradient steps at denoising t={t}"                               
+      if n_inner_steps_label:
+          title += f" ({n_inner_steps_label} inner steps/timestep)"                   
+    #   if conditional:
+    #       title += f"\nConditioned on obs {obs_i}"                                    
+      plt.suptitle(title)                                                             
+      plt.tight_layout()
+      plt.show()   
+
 def filter_samples(samples, finetune, conditional):
 
     samples_by_obs = [samples[samples[:, 0] == i, 1:] for i in range(3)]
@@ -257,7 +342,7 @@ def filter_samples(samples, finetune, conditional):
     else: 
         return [np.concatenate(samples_by_obs)] #return list with concatenated np array
 
-def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=None, opt_steps=[1]):
+def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=None, opt_steps=[1], viz_opt=False):
 
     if condition_type == "conditional":
         conditional=True
@@ -310,11 +395,26 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
             for opt_step_samples in IRED_samples:
                 vis_inference(policy, samples=opt_step_samples, conditional=conditional, learned_contour=False)
 
-        # Visualize learned distribution at different denoising steps
-        for i in range(10):
-            vis_inference(policy, samples=DDIM_samples, conditional=conditional, learned_contour=True, t=i)
-            for opt_step_samples in IRED_samples:
-                vis_inference(policy, samples=opt_step_samples, conditional=conditional, learned_contour=True, t=i)
-            vis_energy_landscape(policy, conditional, t=i*10)
+        # If visualizing the gradient steps
+        if viz_opt:
+          assert not conditional, "Conditional sampling not supported for grad viz"
+          grad_N = min(50, N)                                                         
+          grad_histories_per_obs = run_inference_with_grad_steps(                     
+              policy, N=grad_N, conditional=conditional, opt_steps=opt_steps          
+          )                                                                           
+          for t in range(10):
+              for step_i, n_steps in enumerate(opt_steps):                            
+                    grad_hist = grad_histories_per_obs[step_i]
+                    vis_ired_grad_steps(                                            
+                        policy, grad_hist, t=t, conditional=conditional,
+                        n_inner_steps_label=str(n_steps)               
+                    )
+        else:
+            # Visualize learned distribution at different denoising steps
+            for i in range(10):
+                vis_inference(policy, samples=DDIM_samples, conditional=conditional, learned_contour=True, t=i)
+                for opt_step_samples in IRED_samples:
+                    vis_inference(policy, samples=opt_step_samples, conditional=conditional, learned_contour=True, t=i)
+                vis_energy_landscape(policy, conditional, t=i)
 
     return info
