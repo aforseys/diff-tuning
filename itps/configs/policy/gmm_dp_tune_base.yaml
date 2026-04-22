@@ -7,7 +7,7 @@ dataset_root:
   base: 'data/gmm_unconditional_1000_42_20251204_174604.npy'
   pos: 'data/gmm_unconditional_pref_cluster_0_positive_dataset_20251204_192929.npy'
   neg: 'data/gmm_unconditional_pref_cluster_0_negative_dataset_20251204_192929.npy'
-pretrained_policy_path: "outputs/train/gmm/run_unconditional_2025-12-04_18-29-47/"
+pretrained_policy_path: "data/gmm/unconditioned/train/outputs/2026.04.20/gmm_2026.04.20.19.54.33_gmm_diffusion/checkpoints/last/pretrained_model" #"outputs/train/gmm/run_unconditional_2025-12-04_18-29-47/"
 
 wandb:
   enable: true
@@ -48,7 +48,8 @@ training:
   drop_n_last_frames: false #7  # ${policy.horizon} - ${policy.n_action_steps} - ${policy.n_obs_steps} + 1
 
 eval:
-  n_samples: 1
+  n_samples: 200
+  opt_steps: [1,2,5]
 
 policy:
   name: diffusion
@@ -88,7 +89,7 @@ policy:
   use_film_scale_modulation: True
   # Noise scheduler.
   noise_scheduler_type: DDIM
-  num_train_timesteps: 100
+  num_train_timesteps: 10
   beta_schedule: squaredcos_cap_v2
   beta_start: 0.0001
   beta_end: 0.02

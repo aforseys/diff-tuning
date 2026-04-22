@@ -13,17 +13,17 @@ hydra:
     # with the same value for `dir` its contents will be overwritten unless you set `resume` to true.
     dir: data/gmm/unconditioned/train/outputs/${now:%Y.%m.%d}/${hydra.job.name}
   job:
-    name: $gmm_{now:%Y.%m.%d.%H.%M.%S}_${env.name}_${policy.name}
+    name: gmm_${now:%Y.%m.%d.%H.%M.%S}_${env.name}_${policy.name}
 
 device: "cuda:1"  # cpu
 
 training:
   offline_steps: 5000
   online_steps: 0
-  eval_freq: 500
-  save_freq: 500
-  log_freq: 500
-  save_checkpoint: false
+  eval_freq: 100
+  save_freq: 100
+  log_freq: 100
+  save_checkpoint: true
 
   batch_size: 256
   grad_clip_norm: 10
@@ -46,6 +46,7 @@ training:
 
 eval:
   n_samples: 200
+  opt_steps: [1,2,5]
 
 policy:
   name: diffusion
@@ -85,7 +86,7 @@ policy:
   use_film_scale_modulation: True
   # Noise scheduler.
   noise_scheduler_type: DDIM
-  num_train_timesteps: 100
+  num_train_timesteps: 10
   beta_schedule: squaredcos_cap_v2
   beta_start: 0.0001
   beta_end: 0.02
