@@ -446,6 +446,11 @@ class EBMDiffusionModel(nn.Module):
             if return_grad_steps:
                 grad_history[t.item()]=[]
 
+            # Repredict sample from denoised estimate
+            pred_noise = self.model(sample, batched_t, global_cond=global_cond)
+            x0_hat = (sample - torch.sqrt(1-alpha_bar_t)*pred_noise)/torch.sqrt(alpha_bar_t)
+            sample = torch.clamp(torch.sqrt(alpha_bar_t) * x0_hat, -max_val, max_val).detach()
+
             for _ in range(steps_per_timestep):
                 # compute energy gradient
                 energy, grad = self.model(sample, batched_t, global_cond=global_cond, return_both=True)
@@ -489,6 +494,7 @@ class EBMDiffusionModel(nn.Module):
                 #     # clamp to expected scale at this noise level if not done before
                 #     max_val = torch.sqrt(alpha_bar_t)
                 #     sample = torch.clamp(sample, -max_val, max_val)
+
                 # unscale to x_0 estimate then rescale to t-1
                 x0_est = sample / torch.sqrt(alpha_bar_t)
                 sample = torch.sqrt(alpha_bar_t_prev) * x0_est
