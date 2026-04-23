@@ -502,19 +502,21 @@ def main(
                 )
         
         elif hydra_cfg.env.name == 'maze2d':
-            info = eval_policy(
-                env,
-                policy,
-                hydra_cfg.eval.n_episodes,
-                max_episodes_rendered=10,
-                videos_dir=Path(out_dir) / "videos",
-                start_seed=hydra_cfg.seed,
-                enable_progbar=True,
-                enable_inner_progbar=True,
-            )
+            # info = eval_policy(
+            #     env,
+            #     policy,
+            #     hydra_cfg.eval.n_episodes,
+            #     max_episodes_rendered=10,
+            #     videos_dir=Path(out_dir) / "videos",
+            #     start_seed=hydra_cfg.seed,
+            #     enable_progbar=True,
+            #     enable_inner_progbar=True,
+            # )
+
+            #TODO: SEPARATELY SAVE UNDER TRAIN V. TEST NAMES
             if hydra_cfg.eval.get('train_obs') is not None or hydra_cfg.eval.get('test_obs') is not None:
                 for split in ('train', 'test'):
-                    split_info = eval_maze(policy, hydra_cfg.eval, split=split)
+                    split_info = eval_maze(policy, hydra_cfg, split=split)
                     info['aggregated'].update(split_info)
 
     print(info["aggregated"])

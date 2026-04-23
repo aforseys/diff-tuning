@@ -466,7 +466,7 @@ def check_maze_collision(xy_traj, maze):
     return np.any(collisions, axis=1)
 
 
-def eval_maze(policy, eval_cfg, split='test'):
+def eval_maze(policy, cfg, split='test'):
     """
     Offline trajectory evaluation for maze2d without running the gym env.
 
@@ -479,51 +479,60 @@ def eval_maze(policy, eval_cfg, split='test'):
       metrics:           list of "collision_rate" | "path_length" | "goal_dist"
       train_obs / test_obs: list of [state_x, state_y, goal_x, goal_y]
     """
-    obs_list = eval_cfg.train_obs if split == 'train' else eval_cfg.test_obs
-    if obs_list is None:
+    obs_file = cfg.eval.train_obs if split == 'train' else cfg.eval.test_obs
+    if obs_file is None:
         return {}
 
-    maze = MAZE_MAPS[eval_cfg.maze_type]
+    maze = MAZE_MAPS[cfg.env_type]
     device = next(policy.parameters()).device
-    n_samples = eval_cfg.n_samples_per_obs
-    metrics = list(eval_cfg.metrics)
+    n_samples = cfg.eval.n_samples
+    metrics = list(cfg.eval.metrics)
     n_obs_steps = policy.config.n_obs_steps
+    opt_steps = cfg.eval.n_opt_steps
 
-    per_obs = {m: [] for m in metrics}
+    #TODO: read in obs file, can we treat as one big batch and update all accordingly?
+    state = # read in obs file
+    state_t = torch.tensor(state, dtype=torch.float32, device=device)
 
-    for entry in obs_list:
-        state = list(entry[:2])
-        goal  = list(entry[2:])
+    # (n_samples, n_obs_steps, 2) — repeat starting pos for all history steps
+    obs = {
+        'observation.state':
+            state_t.view(1, 1, -1).expand(n_samples, n_obs_steps, -1).clone(),
+        'observation.environment_state':
+            state_t.view(1, 1, -1).expand(n_samples, n_obs_steps, -1).clone(),
+    }
 
-        state_t = torch.tensor(state, dtype=torch.float32, device=device)
-        goal_t  = torch.tensor(goal,  dtype=torch.float32, device=device)
+    with torch.no_grad():
+        actions_list = policy.run_inference(obs, both=True, opt_steps=opt_steps)
 
-        # (n_samples, n_obs_steps, 2) — repeat starting pos for all history steps
-        obs = {
-            'observation.state':
-                state_t.view(1, 1, -1).expand(n_samples, n_obs_steps, -1).clone(),
-            'observation.environment_state':
-                goal_t.view(1, 1, -1).expand(n_samples, n_obs_steps, -1).clone(),
-        }
+    # actions_list[-1] is the DDIM output: (n_samples, horizon, 2)
+    trajs = [a.cpu().numpy() for a in actions_list]
+    #TODO: MOVE THEM INTO MAZE SPACE?
 
-        with torch.no_grad():
-            actions_list = policy.run_inference(obs, both=True, opt_steps=[1])
+    metrics_dict ={}
+    for i in range(len(trajs)):
+        #TODO: CHECK REINSTATING THIS WON'T MESS THINGS UP
+        per_obs ={m:[] for m in metrics}
 
-        # actions_list[-1] is the DDIM output: (n_samples, horizon, 2)
-        traj = actions_list[-1].cpu().numpy()
-
+        #TODO: check all this math with numpy and the batches etc. executes / lines up correctly
         for m in metrics:
             if m == 'collision_rate':
-                collisions = check_maze_collision(traj, maze)
+                collisions = check_maze_collision(trajs[i], maze)
                 per_obs[m].append(float(collisions.mean()))
-            elif m == 'path_length':
-                lengths = np.linalg.norm(np.diff(traj, axis=1), axis=2).sum(axis=1)
-                per_obs[m].append(float(lengths.mean()))
             elif m == 'goal_dist':
-                dists = np.linalg.norm(traj[:, -1, :] - np.array(goal), axis=1)
+                dists = np.linalg.norm(trajs[i][:, -1, :] - np.array(cfg.eval.goal), axis=1)
                 per_obs[m].append(float(dists.mean()))
+            else:
+                raise NotImplementedError
 
-    return {
-        f"{split}_{m}": {"mean": float(np.mean(vals)), "std": float(np.std(vals)), "per_obs": vals}
-        for m, vals in per_obs.items()
-    }
+        if i==(len(trajs)-1): 
+            metrics_dict['DDIM'] ={
+                f"{split}_{m}": {"mean": float(np.mean(vals)), "std": float(np.std(vals)), "per_obs": vals}
+                for m, vals in per_obs.items()
+            }
+
+        else:
+            metrics_dict[f'IRED_{opt_steps[i]}_steps'] ={
+                f"{split}_{m}": {"mean": float(np.mean(vals)), "std": float(np.std(vals)), "per_obs": vals}
+                for m, vals in per_obs.items()
+            }
