@@ -72,7 +72,7 @@ from itps.common.policies.policy_protocol import Policy
 from itps.common.policies.utils import get_device_from_parameters
 from itps.common.utils.io_utils import write_video
 from itps.common.utils.utils import get_safe_torch_device, init_hydra_config, init_logging, set_global_seed
-from itps.common.utils.eval_utils import eval_GMM
+from itps.common.utils.eval_utils import eval_GMM, eval_maze
 
 def rollout(
     env: gym.vector.VectorEnv,
@@ -512,6 +512,10 @@ def main(
                 enable_progbar=True,
                 enable_inner_progbar=True,
             )
+            if hydra_cfg.eval.get('train_obs') is not None or hydra_cfg.eval.get('test_obs') is not None:
+                for split in ('train', 'test'):
+                    split_info = eval_maze(policy, hydra_cfg.eval, split=split)
+                    info['aggregated'].update(split_info)
 
     print(info["aggregated"])
 

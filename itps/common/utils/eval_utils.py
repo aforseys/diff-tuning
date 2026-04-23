@@ -420,3 +420,110 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
                 vis_energy_landscape(policy, conditional, t=i)
 
     return info
+
+
+# -- MAZE2D EVALUATION --
+
+MAZE_MAPS = {
+    "open": np.array([[1, 1, 1, 1, 1, 1, 1],
+                      [1, 0, 0, 0, 0, 0, 1],
+                      [1, 0, 0, 0, 0, 0, 1],
+                      [1, 0, 0, 0, 0, 0, 1],
+                      [1, 1, 1, 1, 1, 1, 1]]).astype(bool),
+    "sparse": np.array([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+                        [1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1],
+                        [1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1],
+                        [1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 1],
+                        [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1],
+                        [1, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 1],
+                        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+                        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]]).astype(bool),
+    "large": np.array([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                       [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1],
+                       [1, 0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1],
+                       [1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1],
+                       [1, 0, 1, 1, 1, 1, 0, 1, 1, 1, 0, 1],
+                       [1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1],
+                       [1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 1],
+                       [1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
+                       [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]]).astype(bool),
+}
+
+
+def check_maze_collision(xy_traj, maze):
+    """
+    xy_traj: (batch, steps, 2) numpy array in maze coordinate space
+    maze: 2D boolean array where True = wall
+    Returns: (batch,) boolean array, True if trajectory has any collision
+    """
+    batch_size, num_steps, _ = xy_traj.shape
+    xy_flat = xy_traj.reshape(-1, 2)
+    xy_flat = np.clip(xy_flat, [0, 0], [maze.shape[0] - 1, maze.shape[1] - 1])
+    mx = np.round(xy_flat[:, 0]).astype(int)
+    my = np.round(xy_flat[:, 1]).astype(int)
+    collisions = maze[mx, my].reshape(batch_size, num_steps)
+    return np.any(collisions, axis=1)
+
+
+def eval_maze(policy, eval_cfg, split='test'):
+    """
+    Offline trajectory evaluation for maze2d without running the gym env.
+
+    For each starting obs in eval_cfg.{split}_obs, generates n_samples_per_obs
+    trajectories via DDIM and computes the requested metrics.
+
+    Config fields (under eval):
+      maze_type:         "large" | "sparse" | "open"
+      n_samples_per_obs: int
+      metrics:           list of "collision_rate" | "path_length" | "goal_dist"
+      train_obs / test_obs: list of [state_x, state_y, goal_x, goal_y]
+    """
+    obs_list = eval_cfg.train_obs if split == 'train' else eval_cfg.test_obs
+    if obs_list is None:
+        return {}
+
+    maze = MAZE_MAPS[eval_cfg.maze_type]
+    device = next(policy.parameters()).device
+    n_samples = eval_cfg.n_samples_per_obs
+    metrics = list(eval_cfg.metrics)
+    n_obs_steps = policy.config.n_obs_steps
+
+    per_obs = {m: [] for m in metrics}
+
+    for entry in obs_list:
+        state = list(entry[:2])
+        goal  = list(entry[2:])
+
+        state_t = torch.tensor(state, dtype=torch.float32, device=device)
+        goal_t  = torch.tensor(goal,  dtype=torch.float32, device=device)
+
+        # (n_samples, n_obs_steps, 2) — repeat starting pos for all history steps
+        obs = {
+            'observation.state':
+                state_t.view(1, 1, -1).expand(n_samples, n_obs_steps, -1).clone(),
+            'observation.environment_state':
+                goal_t.view(1, 1, -1).expand(n_samples, n_obs_steps, -1).clone(),
+        }
+
+        with torch.no_grad():
+            actions_list = policy.run_inference(obs, both=True, opt_steps=[1])
+
+        # actions_list[-1] is the DDIM output: (n_samples, horizon, 2)
+        traj = actions_list[-1].cpu().numpy()
+
+        for m in metrics:
+            if m == 'collision_rate':
+                collisions = check_maze_collision(traj, maze)
+                per_obs[m].append(float(collisions.mean()))
+            elif m == 'path_length':
+                lengths = np.linalg.norm(np.diff(traj, axis=1), axis=2).sum(axis=1)
+                per_obs[m].append(float(lengths.mean()))
+            elif m == 'goal_dist':
+                dists = np.linalg.norm(traj[:, -1, :] - np.array(goal), axis=1)
+                per_obs[m].append(float(dists.mean()))
+
+    return {
+        f"{split}_{m}": {"mean": float(np.mean(vals)), "std": float(np.std(vals)), "per_obs": vals}
+        for m, vals in per_obs.items()
+    }

@@ -48,6 +48,12 @@ training:
 eval:
   n_episodes: 50
   batch_size: 50
+  # Offline trajectory evaluation (no gym env required)
+  maze_type: large          # "large" | "sparse" | "open"
+  n_samples_per_obs: 50     # trajectory samples per starting observation
+  metrics: [collision_rate, path_length, goal_dist]
+  train_obs: null           # list of [state_x, state_y, goal_x, goal_y]
+  test_obs: null            # list of [state_x, state_y, goal_x, goal_y]
 
 policy:
   name: diffusion
