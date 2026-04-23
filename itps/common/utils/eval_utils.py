@@ -2,6 +2,7 @@
 
 # Alexandra Forsey-Smerek
 import time
+import json
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
@@ -490,10 +491,14 @@ def eval_maze(policy, cfg, split='test'):
     n_obs_steps = policy.config.n_obs_steps
     opt_steps = cfg.eval.n_opt_steps
 
-    #TODO: read in obs file, can we treat as one big batch and update all accordingly?
-    state = # read in obs file
-    state_t = torch.tensor(state, dtype=torch.float32, device=device)
-
+    #Read in obs
+    with open(obs_file, 'r') as f:                                                                                    
+        positions = json.load(f)  # [[x0,y0], [x1,y1], ...]                                                           
+    obs_data = np.array(positions, dtype=np.float32)  # (N_obs, 2)                                                    
+    N_obs = len(obs_data)  
+    states = np.repeat(obs_data, n_samples, axis=0)
+    state_t = torch.tensor(states, dtype=torch.float32, device=device)  
+    
     # (n_samples, n_obs_steps, 2) — repeat starting pos for all history steps
     obs = {
         'observation.state':
@@ -510,29 +515,22 @@ def eval_maze(policy, cfg, split='test'):
     #TODO: MOVE THEM INTO MAZE SPACE?
 
     metrics_dict ={}
-    for i in range(len(trajs)):
-        #TODO: CHECK REINSTATING THIS WON'T MESS THINGS UP
-        per_obs ={m:[] for m in metrics}
+    for i, traj in enumerate(trajs):
+        per_obs ={}
 
         #TODO: check all this math with numpy and the batches etc. executes / lines up correctly
         for m in metrics:
             if m == 'collision_rate':
-                collisions = check_maze_collision(trajs[i], maze)
-                per_obs[m].append(float(collisions.mean()))
+                collisions = check_maze_collision(traj, maze)
+                per_obs[m] = collisions.reshape(N_obs, n_samples).mean(axis=1).tolist() 
             elif m == 'goal_dist':
-                dists = np.linalg.norm(trajs[i][:, -1, :] - np.array(cfg.eval.goal), axis=1)
-                per_obs[m].append(float(dists.mean()))
+                dists = np.linalg.norm(traj[:, -1, :] - np.array(cfg.eval.goal), axis=1)
+                per_obs[m] = dists.reshape(N_obs, n_samples).mean(axis=1).tolist()
             else:
-                raise NotImplementedError
+                raise NotImplementedError(f"Metric '{m}' not implemented") 
 
-        if i==(len(trajs)-1): 
-            metrics_dict['DDIM'] ={
-                f"{split}_{m}": {"mean": float(np.mean(vals)), "std": float(np.std(vals)), "per_obs": vals}
-                for m, vals in per_obs.items()
-            }
-
-        else:
-            metrics_dict[f'IRED_{opt_steps[i]}_steps'] ={
-                f"{split}_{m}": {"mean": float(np.mean(vals)), "std": float(np.std(vals)), "per_obs": vals}
-                for m, vals in per_obs.items()
-            }
+        label = 'DDIM' if i == len(trajs) - 1 else f'IRED_{opt_steps[i]}_steps'
+        metrics_dict[label] ={
+            f"{split}_{m}": {"mean": float(np.mean(vals)), "std": float(np.std(vals)), "per_obs": vals}
+            for m, vals in per_obs.items()
+        }
