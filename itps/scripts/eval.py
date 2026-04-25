@@ -497,7 +497,7 @@ def main(
                 N = hydra_cfg.eval.n_samples,
                 viz = viz,
                 training_samples = training_samples, #used for viz if viz True
-                opt_steps=[1,2,5], 
+                opt_params=[1,2,5], 
                 viz_opt=True
                 )
         
@@ -513,11 +513,13 @@ def main(
             #     enable_inner_progbar=True,
             # )
 
-            #TODO: SEPARATELY SAVE UNDER TRAIN V. TEST NAMES
+            info = {"aggregated":{}}
             if hydra_cfg.eval.get('train_obs') is not None or hydra_cfg.eval.get('test_obs') is not None:
                 for split in ('train', 'test'):
                     split_info = eval_maze(policy, hydra_cfg, split=split)
-                    info['aggregated'].update(split_info)
+                    for label, metrics in split_info.items():
+                        for metric_name, vals in metrics.items():
+                            info['aggregated'][f"{metric_name}_{label}"] = vals['mean']
 
     print(info["aggregated"])
 

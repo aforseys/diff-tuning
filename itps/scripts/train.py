@@ -49,7 +49,7 @@ from itps.common.utils.utils import (
     set_global_seed,
 )
 from itps.scripts.eval import eval_policy, eval_GMM
-
+from itps.common.utils.eval_utils import eval_maze
 
 def make_optimizer_and_scheduler(cfg, policy, finetune=False):
     if cfg.policy.name == "act":
@@ -230,7 +230,7 @@ def log_eval_info(logger, info, step, cfg, dataset, is_online):
         f"epch:{num_epochs:.2f}"]
     
     # Log environment-specific evaluation information 
-    if cfg.dataset_repo_id != 'gmm':
+    if cfg.dataset_repo_id not in ('gmm', 'maze2d'):
         eval_s = info["eval_s"]
         avg_sum_reward = info["avg_sum_reward"]
         pc_success = info["pc_success"]
@@ -338,7 +338,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     # using the eval.py instead, with gym_dora environment and dora-rs.
     eval_env = None
     if cfg.training.eval_freq > 0:
-        if cfg.dataset_repo_id != 'gmm':
+        if not (cfg.dataset_repo_id=='gmm' or cfg.dataset_repo_id=='maze2d'):
             logging.info("make_env")
             eval_env = make_env(cfg)
 
@@ -393,8 +393,17 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
                         N = cfg.eval.n_samples,
                         viz = False,
                         finetune=finetune, 
-                        opt_steps=cfg.eval.opt_steps
+                        opt_params = list(cfg.eval.opt_params)
                         )
+                
+                elif cfg.dataset_repo_id == 'maze2d':
+                    eval_info = {'aggregated':{}}
+                    if cfg.eval.get('train_obs') is not None or cfg.eval.get('test_obs') is not None: 
+                        for split in ('train', 'test'):
+                            split_info = eval_maze(policy, cfg, split=split)
+                            for label, metrics in split_info.items():
+                                for metric_name, vals in metrics.items():
+                                    eval_info['aggregated'][f"{metric_name}_{label}"] = vals['mean']
 
                 else:
                     assert eval_env is not None
@@ -408,7 +417,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
                     )
             log_eval_info(logger, eval_info["aggregated"], step, cfg, offline_dataset, is_online=is_online)
             if cfg.wandb.enable:
-                if cfg.dataset_repo_id != 'gmm':
+                if cfg.dataset_repo_id not in ('gmm', 'maze2d'):
                     logger.log_video(eval_info["video_paths"][0], step, mode="eval")
             logging.info("Resume training")
 

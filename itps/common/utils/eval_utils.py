@@ -21,50 +21,50 @@ def gen_obs(conditional, N, device):
         observations.append(obs_dict)
     return observations
 
-def run_inference(policy, N=100, conditional=False, opt_steps=[1]):
+def run_inference(policy, N=100, conditional=False, opt_params=[1]):
 
     assert not conditional, "Conditional sampling not supported for multiple opt steps"
 
     device = next(policy.parameters()).device
     obs = gen_obs(conditional=conditional, N=N, device=device)
 
-    IRED_inference_output = [[] for _ in opt_steps]
+    IRED_inference_output = [[] for _ in opt_params]
     DDIM_inference_output = []
     #sample_times = []
     o=obs[0]
 
     #for o in obs:
         #start = time.perf_counter()
-    actions = policy.run_inference(o, both=True, opt_steps=opt_steps)
+    actions = policy.run_inference(o, both=True, opt_params=opt_params)
     #torch.cuda.synchronize()
     # elapsed = time.perf_counter() - start
 
     # sample_times.append(elapsed)
     # print(f"Sample time: {elapsed*1000:.1f}ms")
     DDIM_inference_output.append(actions[-1].detach().cpu().squeeze(1).numpy())
-    for i in range(len(opt_steps)):
+    for i in range(len(opt_params)):
         IRED_inference_output[i].append(actions[i].detach().cpu().squeeze(1).numpy())
 
     # print(f"Avg sample time over {len(sample_times)} obs: {np.mean(sample_times)*1000:.1f}ms")
     return IRED_inference_output + [DDIM_inference_output]
 
-def run_inference_with_grad_steps(policy, N=50, conditional=False, opt_steps=[1]):
+def run_inference_with_grad_steps(policy, N=50, conditional=False, opt_params=[1]):
 
     assert not conditional, "Conditional sampling not supported for multiple opt steps"
 
     device = next(policy.parameters()).device
     obs = gen_obs(conditional=conditional, N=N, device=device)
 
-    grad_histories_per_opt = [[] for _ in opt_steps]
+    grad_histories_per_opt = [[] for _ in opt_params]
     #sample_times = []
     o=obs[0]
 
     
     #start = time.perf_counter()
-    _, grad_histories = policy.run_inference(o, both=False, opt_steps=opt_steps, return_grad_steps=True)
+    _, grad_histories = policy.run_inference(o, both=False, opt_params=opt_params, return_grad_steps=True)
     #torch.cuda.synchronize()
     # elapsed = time.perf_counter() - start
-    for i in range(len(opt_steps)):
+    for i in range(len(opt_params)):
         grad_histories_per_opt[i].append(grad_histories[i])
 
     # sample_times.append(elapsed)
@@ -159,14 +159,14 @@ def kl_divergence(policy, conditional, finetune, t=0, eps=1e-8):
 
     return kl_div
 
-def log_likelihood(policy, conditional, finetune, N=100, samples=None, opt_steps=[1]):
+def log_likelihood(policy, conditional, finetune, N=100, samples=None, opt_params=[1]):
     """
     Assumes only conditional or finetune is true. 
     """
 
     assert not (conditional and finetune), "Simultaneous conditional and finetune not supported"
     if samples is None:
-        samples =run_inference(policy, N=N, conditional=conditional, opt_steps=opt_steps)
+        samples =run_inference(policy, N=N, conditional=conditional, opt_params=opt_params)
     else:
         samples = [samples]
 
@@ -345,7 +345,7 @@ def filter_samples(samples, finetune, conditional):
     else: 
         return [np.concatenate(samples_by_obs)] #return list with concatenated np array
 
-def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=None, opt_steps=[1], viz_opt=False):
+def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=None, opt_params=[1], viz_opt=False):
 
     if condition_type == "conditional":
         conditional=True
@@ -358,7 +358,7 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
     kl_div = kl_divergence(policy, conditional, finetune)
 
     # Generate samples and calculate log likelihood
-    samples, ll = log_likelihood(policy, conditional, finetune, N, opt_steps=opt_steps)
+    samples, ll = log_likelihood(policy, conditional, finetune, N, opt_params=opt_params)
 
     # DDIM samples are last set, all others are IRED sampling 
     DDIM_samples = samples[-1]
@@ -373,8 +373,14 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
             "DDIM_log_likelihood": DDIM_ll
             }
     }
-    for i in range(len(opt_steps)):
-        info["aggregated"][f"IRED_log_likelihood_{opt_steps[i]}_timesteps"] = IRED_ll[i]
+    for i in range(len(opt_params)):
+
+        if isinstance(opt_params[i], (list, tuple)):
+            label = f'IRED_{opt_params[i][0]}steps_last{opt_params[i][1]}'                                                                                          
+        else:                                     
+            label = f'IRED_{opt_params[i]}_steps' 
+
+        info["aggregated"][label] = IRED_ll[i]
 
     if training_samples is not None:
         train_data = np.load(training_samples)
@@ -386,7 +392,7 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
         # Visualize training samples if passed in
         if training_samples is not None:
             train_data = np.load(training_samples)[:, 1:] #remove conditional obs
-            samples = run_inference(policy, N=np.shape(train_data)[0], conditional=conditional, opt_steps=opt_steps)
+            samples = run_inference(policy, N=np.shape(train_data)[0], conditional=conditional, opt_params=opt_params)
             DDIM_samples = samples[-1]
             IRED_samples = samples[0:-1]
             vis_sample_comparison(DDIM_samples, train_data)
@@ -403,10 +409,10 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
           assert not conditional, "Conditional sampling not supported for grad viz"
           grad_N = min(50, N)                                                         
           grad_histories_per_opt = run_inference_with_grad_steps(                     
-              policy, N=grad_N, conditional=conditional, opt_steps=opt_steps          
+              policy, N=grad_N, conditional=conditional, opt_params=opt_params          
           )                                                                           
           for t in range(10):
-              for step_i, n_steps in enumerate(opt_steps):                            
+              for step_i, n_steps in enumerate(opt_params):                            
                     grad_hist = grad_histories_per_opt[step_i][0]
                     vis_ired_grad_steps(                                            
                         policy, grad_hist, t=t, conditional=conditional,
@@ -489,7 +495,7 @@ def eval_maze(policy, cfg, split='test'):
     n_samples = cfg.eval.n_samples
     metrics = list(cfg.eval.metrics)
     n_obs_steps = policy.config.n_obs_steps
-    opt_steps = cfg.eval.n_opt_steps
+    opt_params = list(cfg.eval.opt_params)
 
     #Read in obs
     with open(obs_file, 'r') as f:                                                                                    
@@ -498,21 +504,21 @@ def eval_maze(policy, cfg, split='test'):
     N_obs = len(obs_data)  
     states = np.repeat(obs_data, n_samples, axis=0)
     state_t = torch.tensor(states, dtype=torch.float32, device=device)  
-    
-    # (n_samples, n_obs_steps, 2) — repeat starting pos for all history steps
+
+    # (N_obs*n_samples, n_obs_steps, 2) — repeat starting pos for all history steps
     obs = {
         'observation.state':
-            state_t.view(1, 1, -1).expand(n_samples, n_obs_steps, -1).clone(),
+            state_t.unsqueeze(1).expand(-1, n_obs_steps, -1).clone(),
         'observation.environment_state':
-            state_t.view(1, 1, -1).expand(n_samples, n_obs_steps, -1).clone(),
+            state_t.unsqueeze(1).expand(-1, n_obs_steps, -1).clone(),
     }
 
     with torch.no_grad():
-        actions_list = policy.run_inference(obs, both=True, opt_steps=opt_steps)
+        actions_list = policy.run_inference(obs, both=True, opt_params=opt_params)
 
-    # actions_list[-1] is the DDIM output: (n_samples, horizon, 2)
+    # run infernece unnormalizes --> trajectories are in coordinate space
+    # actions_list: [IRED_opt0, ..., DDIM] each (N_obs * n_samples, horizon, 2)
     trajs = [a.cpu().numpy() for a in actions_list]
-    #TODO: MOVE THEM INTO MAZE SPACE?
 
     metrics_dict ={}
     for i, traj in enumerate(trajs):
@@ -529,8 +535,14 @@ def eval_maze(policy, cfg, split='test'):
             else:
                 raise NotImplementedError(f"Metric '{m}' not implemented") 
 
-        label = 'DDIM' if i == len(trajs) - 1 else f'IRED_{opt_steps[i]}_steps'
+        if isinstance(opt_params[i], (list, tuple)):
+            label = f'IRED_{opt_params[i][0]}steps_last{opt_params[i][1]}'                                                                                          
+        else:                                     
+            label = f'IRED_{opt_params[i]}_steps'   
+
         metrics_dict[label] ={
             f"{split}_{m}": {"mean": float(np.mean(vals)), "std": float(np.std(vals)), "per_obs": vals}
             for m, vals in per_obs.items()
         }
+    
+    return metrics_dict
