@@ -49,7 +49,7 @@ training:
 
 eval:
   n_samples: 200
-  opt_steps: [1,2,5]
+  opt_params: [1,2,5]
 
 policy:
   name: diffusion

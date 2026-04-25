@@ -105,7 +105,7 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
         return set(self.config.input_shapes)
 
     @torch.no_grad 
-    def run_inference(self, observation_batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, return_full=False, return_energy=False, both=False, opt_steps=[1], return_grad_steps=False) -> Tensor:
+    def run_inference(self, observation_batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, return_full=False, return_energy=False, both=False, opt_params=[1], return_grad_steps=False) -> Tensor:
         observation_batch = self.normalize_inputs(observation_batch)
         if guide is not None:
             guide = self.normalize_targets({"action": guide})["action"]
@@ -116,8 +116,9 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
 
         # default: use optimization-based sampling
         gen_actions = []
-        for n in opt_steps: 
-            gen_actions.append(self.diffusion.generate_actions(observation_batch, guide=guide, visualizer=visualizer, normalizer=self,return_full=return_full, steps_per_timestep=n, return_grad_steps=return_grad_steps))
+        for p in opt_params: 
+            n, subset = (p[0], p[1]) if isinstance(p, (list, tuple)) else (p, None)
+            gen_actions.append(self.diffusion.generate_actions(observation_batch, guide=guide, visualizer=visualizer, normalizer=self,return_full=return_full, steps_per_timestep=n, opt_subset=subset, return_grad_steps=return_grad_steps))
         
         # if returning both, use denoising-based sampling as well
         if both: 
@@ -135,7 +136,7 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
 
         if return_grad_steps:
             grad_histories = []
-            for ga in gen_actions[:len(opt_steps)]:
+            for ga in gen_actions[:len(opt_params)]:
                 if 'grad_history' in ga:
                     unnorm_hist={}
                     for t_key, steps in ga['grad_history'].items():
@@ -418,7 +419,7 @@ class EBMDiffusionModel(nn.Module):
         #print('returned sample shape:', sample.shape)
         return sample
     
-    def opt_energy(self, batch_size: int, global_cond: Tensor | None = None, generator: torch.Generator | None = None, steps_per_timestep: int | None = 1, return_grad_steps: bool = False
+    def opt_energy(self, batch_size: int, global_cond: Tensor | None = None, generator: torch.Generator | None = None, steps_per_timestep: int = 1, opt_subset: int | None = None, return_grad_steps: bool = False
     ) -> Tensor:
         device = get_device_from_parameters(self)
         dtype = get_dtype_from_parameters(self)
@@ -451,36 +452,38 @@ class EBMDiffusionModel(nn.Module):
             #x0_hat = (sample - torch.sqrt(1-alpha_bar_t)*pred_noise)/torch.sqrt(alpha_bar_t)
             #sample = torch.clamp(torch.sqrt(alpha_bar_t) * x0_hat, -max_val, max_val).detach()
 
-            for _ in range(steps_per_timestep):
-                # compute energy gradient
-                energy, grad = self.model(sample, batched_t, global_cond=global_cond, return_both=True)
-                #grad = torch.autograd.grad(energy.sum(), sample)[0]
+            t_idx = (self.noise_scheduler.timesteps == t).nonzero().item()                                                                      
+            if opt_subset is None or t_idx >= (total_timesteps - opt_subset): #skip optimization in landscapes if specified 
+                for _ in range(steps_per_timestep):
+                    # compute energy gradient
+                    energy, grad = self.model(sample, batched_t, global_cond=global_cond, return_both=True)
+                    #grad = torch.autograd.grad(energy.sum(), sample)[0]
 
-                # IRED-style step size: beta_t / sqrt(1 - alpha_bar_t)
-                #beta_t = self.noise_scheduler.betas[t].to(sample.device)
-                #alpha_bar_t = self.noise_scheduler.alphas_cumprod[t].to(sample.device)
+                    # IRED-style step size: beta_t / sqrt(1 - alpha_bar_t)
+                    #beta_t = self.noise_scheduler.betas[t].to(sample.device)
+                    #alpha_bar_t = self.noise_scheduler.alphas_cumprod[t].to(sample.device)
 
-                opt_step_size = beta_t / torch.sqrt(1 - alpha_bar_t)
-                #snr = alpha_bar_t / (1 - alpha_bar_t)
-                #opt_step_size = (1 / snr)  # large when noisy, small when clean
+                    opt_step_size = beta_t / torch.sqrt(1 - alpha_bar_t)
+                    #snr = alpha_bar_t / (1 - alpha_bar_t)
+                    #opt_step_size = (1 / snr)  # large when noisy, small when clean
 
-                sample_new = sample - opt_step_size * grad * 2
+                    sample_new = sample - opt_step_size * grad * 2
 
-                # clamp to expected scale at this noise level
-                sample_new = torch.clamp(sample_new, -max_val, max_val)
+                    # clamp to expected scale at this noise level
+                    sample_new = torch.clamp(sample_new, -max_val, max_val)
 
-                if return_grad_steps:
-                    grad_history[t.item()].append({
-                        'pos': sample.detach().clone(),
-                        'next_pos': sample_new.detach().clone()
-                    })
-                
-                # rejection check: only accept if energy decreases
-                #energy_new = self.model(sample_new, batched_t, global_cond=global_cond, return_energy=True)
-                #bad_step = (energy_new > energy).squeeze(-1)
-                #sample_new[bad_step] = sample[bad_step]
-                
-                sample = sample_new.detach()
+                    if return_grad_steps:
+                        grad_history[t.item()].append({
+                            'pos': sample.detach().clone(),
+                            'next_pos': sample_new.detach().clone()
+                        })
+                    
+                    # rejection check: only accept if energy decreases
+                    #energy_new = self.model(sample_new, batched_t, global_cond=global_cond, return_energy=True)
+                    #bad_step = (energy_new > energy).squeeze(-1)
+                    #sample_new[bad_step] = sample[bad_step]
+                    
+                    sample = sample_new.detach()
             
             # c1 rescaling to next landscape
             timesteps = self.noise_scheduler.timesteps
@@ -616,7 +619,7 @@ class EBMDiffusionModel(nn.Module):
         # return energy_sum/ n
 
 
-    def generate_actions(self, batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, normalizer=None,return_full=False, opt_energy=True, steps_per_timestep=1, return_grad_steps=False) -> Tensor:
+    def generate_actions(self, batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, normalizer=None,return_full=False, opt_energy=True, steps_per_timestep=1, opt_subset: int | None = None, return_grad_steps=False) -> Tensor:
         """
         This function expects `batch` to have:
         {
@@ -636,7 +639,7 @@ class EBMDiffusionModel(nn.Module):
 
         # run sampling
         if opt_energy:
-            result = self.opt_energy(batch_size, global_cond=global_cond, steps_per_timestep=steps_per_timestep, return_grad_steps=return_grad_steps)
+            result = self.opt_energy(batch_size, global_cond=global_cond, steps_per_timestep=steps_per_timestep, opt_subset=opt_subset, return_grad_steps=return_grad_steps)
             if return_grad_steps:
                 actions, action_dict['grad_history'] = result
             else:

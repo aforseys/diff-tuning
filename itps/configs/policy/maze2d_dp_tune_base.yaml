@@ -3,7 +3,7 @@
 seed: 100000
 dataset_repo_id: maze2d
 condition_type: unconditional
-env_type: dense
+env_type: large
 dataset_root:
   base: 'data/maze2d-large-sparse-v1.hdf5'
   pos: 'data/maze_comparisons/maze_20260331_215109_winners.npz'
@@ -25,9 +25,9 @@ device: "cuda"  # cpu
 training:
   offline_steps: 50000
   online_steps: 0
-  eval_freq: 0
+  eval_freq: 5000
   save_freq: 5000
-  log_freq: 250
+  log_freq: 500
   save_checkpoint: true
 
   batch_size: 256
@@ -50,8 +50,12 @@ training:
   drop_n_last_frames: 7  # ${policy.horizon} - ${policy.n_action_steps} - ${policy.n_obs_steps} + 1
 
 eval:
-  n_episodes: 50
-  batch_size: 50
+  n_samples: 32
+  opt_params: [1, 2, 5]
+  goal: null
+  metrics: [collision_rate, goal]
+  train_obs: null
+  test_obs: null
 
 policy:
   name: diffusion
