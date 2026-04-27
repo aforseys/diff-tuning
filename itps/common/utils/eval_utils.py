@@ -21,35 +21,33 @@ def gen_obs(conditional, N, device):
         observations.append(obs_dict)
     return observations
 
-def run_inference(policy, N=100, conditional=False, opt_params=[1]):
-
-    assert not conditional, "Conditional sampling not supported for multiple opt steps"
+def run_inference(policy, N=100, conditional=False, opt_params=[{'n_opt': 1, 't_subset': None, 'denoise': False}], methods=['ired', 'ddim']):
 
     device = next(policy.parameters()).device
     obs = gen_obs(conditional=conditional, N=N, device=device)
 
-    IRED_inference_output = [[] for _ in opt_params]
-    DDIM_inference_output = []
+    IRED_inference_output = [[] for _ in opt_params] if 'ired' in methods else None
+    DDIM_inference_output = [] if 'ddim' in methods else None
     #sample_times=[]
 
     for o in obs:
         #start = time.perf_counter()
-        actions = policy.run_inference(o, methods=['ired', 'ddim'], opt_params=opt_params)
+        actions = policy.run_inference(o, methods=methods, opt_params=opt_params)
         #torch.cuda.synchronize()
         # elapsed = time.perf_counter() - start
 
         # sample_times.append(elapsed)
         # print(f"Sample time: {elapsed*1000:.1f}ms")
-        DDIM_inference_output.append(actions[-1].detach().cpu().squeeze(1).numpy())
-        for i in range(len(opt_params)):
-            IRED_inference_output[i].append(actions[i].detach().cpu().squeeze(1).numpy())
+        if 'ired' in methods:
+            for i in range(len(opt_params)): 
+                IRED_inference_output[i].append(actions[i].detach().cpu().squeeze(1).numpy())
+        if 'ddim' in methods:
+            DDIM_inference_output.append(actions[-1].detach().cpu().squeeze(1).numpy())
 
     # print(f"Avg sample time over {len(sample_times)} obs: {np.mean(sample_times)*1000:.1f}ms")
     return IRED_inference_output + [DDIM_inference_output]
 
-def run_inference_with_grad_steps(policy, N=50, conditional=False, opt_params=[1]):
-
-    assert not conditional, "Conditional sampling not supported for multiple opt steps"
+def run_inference_with_grad_steps(policy, N=50, conditional=False,opt_params=[{'n_opt': 1, 't_subset': None, 'denoise': False}]):
 
     device = next(policy.parameters()).device
     obs = gen_obs(conditional=conditional, N=N, device=device)
@@ -151,14 +149,14 @@ def kl_divergence(policy, conditional, finetune, t=0, eps=1e-8):
 
     return kl_div
 
-def log_likelihood(policy, conditional, finetune, N=100, samples=None, opt_params=[1]):
+def log_likelihood(policy, conditional, finetune, N=100, samples=None, opt_params=[{'n_opt': 1, 't_subset': None, 'denoise': False}], methods=['ired', 'ddim']):
     """
     Assumes only conditional or finetune is true. 
     """
 
     assert not (conditional and finetune), "Simultaneous conditional and finetune not supported"
     if samples is None:
-        samples =run_inference(policy, N=N, conditional=conditional, opt_params=opt_params)
+        samples =run_inference(policy, N=N, conditional=conditional, methods=methods, opt_params=opt_params)
     else:
         samples = [samples]
 
@@ -268,74 +266,65 @@ def viz_sample_comparison(samples, train_data):
 
 def viz_ired_grad_steps(policy, grad_history, t, conditional, opt_vals, x_range=(-10, 10), y_range=(-10,10)):
  
-      """         
-      Overlay IRED gradient step arrows on the learned energy landscape at denoising  
-  timestep t.                                                                         
-   
-      grad_history: {t_int: [{'pos': Tensor(B,H,D), 'next_pos': Tensor(B,H,D)}]}      
-                    for one obs and one opt_step config, positions in data space.     
-      """                                           
-      assert not conditional, "Conditional sampling not supported for multiple opt steps"
+    """         
+    Overlay IRED gradient step arrows on the learned energy landscape at denoising timestep t.                                                                         
 
-      steps_at_t = grad_history.get(t, [])                                            
-      if not steps_at_t:                                                              
-          print(f"No grad steps recorded for timestep {t}")
-          return                                                                      
-                  
-      device = next(policy.parameters()).device                                       
-      trajs = gen_xy_grid(x_range=x_range, y_range=y_range, device=device)
-      energies = eval_energy(policy, trajs, t=t, conditional=conditional)             
-      xx = trajs[:, 0, 0].cpu().numpy().reshape(200, 200)                             
-      yy = trajs[:, 0, 1].cpu().numpy().reshape(200, 200)                             
-                                                                                      
-      energy = energies[0]              
-      zz = np.exp(-energy.reshape(200, 200))
-                                                                                      
-      n_inner = len(steps_at_t)
-      fig, axes = plt.subplots(1, n_inner, figsize=(5 * n_inner, 5), squeeze=False)   
-      axes = axes[0]                                                                  
-   
-      for step_i, step_data in enumerate(steps_at_t):                                 
-          ax = axes[step_i]
-          ax.imshow(zz, origin='lower', extent=[xx.min(), xx.max(), yy.min(), yy.max()], aspect='auto', cmap='viridis')                                         
-   
-          pos = step_data['pos'].squeeze(1).cpu().numpy()   # (B, 2)                  
-          nxt = step_data['next_pos'].squeeze(1).cpu().numpy()  # (B, 2)
-          dx = nxt[:, 0] - pos[:, 0]                                                  
-          dy = nxt[:, 1] - pos[:, 1]
-          magnitudes = np.sqrt(dx**2 + dy**2)                                         
-                                                                                      
-          ax.scatter(pos[:, 0], pos[:, 1], s=10, c='red', alpha=0.6, zorder=3)        
-          q = ax.quiver(pos[:, 0], pos[:, 1], dx, dy, magnitudes,                     
-                        cmap='cool', alpha=0.8, scale=1, scale_units='xy',            
-  angles='xy', zorder=4)                                                              
-          plt.colorbar(q, ax=ax, label='step magnitude')                              
-                                                                                      
-          ax.set_xlim(x_range)                                                        
-          ax.set_ylim(y_range)
-          ax.set_title(f"inner step {step_i + 1}/{n_inner}\nmean={magnitudes.mean():.3f}, max={magnitudes.max():.3f}")            
-          ax.set_xlabel("X")
-          ax.set_ylabel("Y")                                                          
-                  
-      title = f"IRED gradient steps at denoising t={t}"      
+    grad_history: {t_int: [{'pos': Tensor(B,H,D), 'next_pos': Tensor(B,H,D)}]}      
+                for one obs and one opt_step config, positions in data space.     
+    """                                           
+    assert not conditional, "Conditional sampling not supported for multiple opt steps"
 
-      
-      if isinstance(opt_vals, dict):
+    steps_at_t = grad_history.get(t, [])                                            
+    if not steps_at_t:                                                              
+        print(f"No grad steps recorded for timestep {t}")
+        return                                                                      
+                  
+    device = next(policy.parameters()).device                                       
+    trajs = gen_xy_grid(x_range=x_range, y_range=y_range, device=device)
+    energies = eval_energy(policy, trajs, t=t, conditional=conditional)             
+    xx = trajs[:, 0, 0].cpu().numpy().reshape(200, 200)                             
+    yy = trajs[:, 0, 1].cpu().numpy().reshape(200, 200)                             
+                                                                                    
+    energy = energies[0]              
+    zz = np.exp(-energy.reshape(200, 200))
+                                                                                    
+    n_inner = len(steps_at_t)
+    fig, axes = plt.subplots(1, n_inner, figsize=(5 * n_inner, 5), squeeze=False)   
+    axes = axes[0]                                                                  
+
+    for step_i, step_data in enumerate(steps_at_t):                                 
+        ax = axes[step_i]
+        ax.imshow(zz, origin='lower', extent=[xx.min(), xx.max(), yy.min(), yy.max()], aspect='auto', cmap='viridis')                                         
+
+        pos = step_data['pos'].squeeze(1).cpu().numpy()   # (B, 2)                  
+        nxt = step_data['next_pos'].squeeze(1).cpu().numpy()  # (B, 2)
+        dx = nxt[:, 0] - pos[:, 0]                                                  
+        dy = nxt[:, 1] - pos[:, 1]
+        magnitudes = np.sqrt(dx**2 + dy**2)                                         
+                                                                                    
+        ax.scatter(pos[:, 0], pos[:, 1], s=10, c='red', alpha=0.6, zorder=3)        
+        q = ax.quiver(pos[:, 0], pos[:, 1], dx, dy, magnitudes,                     
+                    cmap='cool', alpha=0.8, scale=1, scale_units='xy', angles='xy', zorder=4)                                                              
+        plt.colorbar(q, ax=ax, label='step magnitude')                              
+                                                                                    
+        ax.set_xlim(x_range)                                                        
+        ax.set_ylim(y_range)
+        ax.set_title(f"inner step {step_i + 1}/{n_inner}\nmean={magnitudes.mean():.3f}, max={magnitudes.max():.3f}")            
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")                                                          
+                
+        title = f"IRED gradient steps at denoising t={t}"      
         n_inner_steps_label = opt_vals["n_opt"]
         t_time_steps_label = opt_vals["t_subset"]
         denoise = opt_vals["denoise"]
-      else:
-        n_inner_steps_label = int(opt_vals)
-        t_time_steps_label = "All"
-        denoise = "False"
 
-      title += f" ({n_inner_steps_label} inner steps/timestep, {t_time_steps_label} timesteps, denoise = {denoise})"      
-                   
+    title += f" ({n_inner_steps_label} inner steps/timestep, {t_time_steps_label} timesteps, denoise = {denoise})"      
+                
     #   if conditional:
     #       title += f"\nConditioned on obs {obs_i}"                                    
-      plt.suptitle(title)                                                             
-      plt.tight_layout()
-      plt.show()   
+    plt.suptitle(title)                                                             
+    plt.tight_layout()
+    plt.show()   
 
 def filter_samples(samples, finetune, conditional):
 
@@ -348,7 +337,7 @@ def filter_samples(samples, finetune, conditional):
     else: 
         return [np.concatenate(samples_by_obs)] #return list with concatenated np array
 
-def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=None, opt_params=[1], viz_opt=False):
+def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=None, opt_params=[1], methods=['ired', 'ddim'], viz_opt=False):
 
     if condition_type == "conditional":
         conditional=True
@@ -361,7 +350,7 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
     kl_div = kl_divergence(policy, conditional, finetune)
 
     # Generate samples and calculate log likelihood
-    samples, ll = log_likelihood(policy, conditional, finetune, N, opt_params=opt_params)
+    samples, ll = log_likelihood(policy, conditional, finetune, N, opt_params=opt_params, methods=methods)
 
     # DDIM samples are last set, all others are IRED sampling 
     DDIM_samples = samples[-1]
@@ -378,14 +367,11 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
     }
     for i in range(len(opt_params)):
 
-        if not isinstance(opt_params[i], dict):
-            label = f'IRED_{opt_params[i]}_steps' 
-        else: 
-            label = f'IRED_{opt_params[i]["n_opt"]}steps'
-            if opt_params["t_subset"] is not None:
-                label+=f'steps_last{opt_params[i]["t_subset"]}'
-            if opt_params["denoise"]:
-                label+='denoise'
+        label = f'IRED_{opt_params[i]["n_opt"]}steps'
+        if opt_params[i]["t_subset"] is not None:
+            label+=f'steps_last{opt_params[i]["t_subset"]}'
+        if opt_params[i]["denoise"]:
+            label+='denoise'
 
         info["aggregated"][label] = IRED_ll[i]
 
@@ -401,7 +387,7 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
             train_data_raw = np.load(training_samples)
             train_data_split = filter_samples(train_data_raw, finetune=finetune, conditonal=conditional)
             N_per_obs = len(train_data_split[0])
-            samples = run_inference(policy, N=N_per_obs, conditional=conditional, opt_params=opt_params)
+            samples = run_inference(policy, N=N_per_obs, conditional=conditional,  methods=methods, opt_params=opt_params)
             DDIM_samples = samples[-1]
             IRED_samples = samples[0:-1]
             viz_sample_comparison(DDIM_samples, train_data_split)
@@ -583,14 +569,11 @@ def eval_maze(policy, cfg, split='test'):
             label = "DDIM"
 
         else: 
-            if not isinstance(opt_params[i], dict):
-                label = f'IRED_{opt_params[i]}_steps' 
-            else: 
-                label = f'IRED_{opt_params[i]["n_opt"]}steps'
-                if opt_params[i]["t_subset"] is not None:
-                    label+=f'steps_last{opt_params[i]["t_subset"]}'
-                if opt_params[i]["denoise"]:
-                    label+='denoise'
+            label = f'IRED_{opt_params[i]["n_opt"]}steps'
+            if opt_params[i]["t_subset"] is not None:
+                label+=f'steps_last{opt_params[i]["t_subset"]}'
+            if opt_params[i]["denoise"]:
+                label+='denoise'
 
         metrics_dict[label] ={
             f"{split}_{m}": {"mean": float(np.mean(vals)), "std": float(np.std(vals)), "per_obs": vals}

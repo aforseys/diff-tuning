@@ -290,7 +290,7 @@ class UnconditionalMaze(MazeEnv):
                 actions, energy = self.policy.run_inference(obs_batch, guide=guide, visualizer=visualizer, return_energy=True) # directly call the policy in order to visualize the intermediate steps
                 return actions.detach().cpu().numpy(), energy.detach().cpu().numpy().squeeze()
             else:
-                actions = self.policy.run_inference(obs_batch, guide=guide, visualizer=visualizer, opt_params=self.opt_params, method=self.sampling_methods)[0].cpu().numpy() # directly call the policy in order to visualize the intermediate steps
+                actions = self.policy.run_inference(obs_batch, guide=guide, visualizer=visualizer, opt_params=self.opt_params, methods=self.sampling_methods)[0].cpu().numpy() # directly call the policy in order to visualize the intermediate steps
         torch.cuda.synchronize()  # important — ensures GPU work is complete before stopping the clock
         elapsed = time.perf_counter() - start
 
