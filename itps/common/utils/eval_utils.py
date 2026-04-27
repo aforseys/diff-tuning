@@ -398,8 +398,10 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
             N_per_obs = len(train_data_split[0])
             samples = run_inference(policy, N=N_per_obs, conditional=conditional,  methods=methods, opt_params=opt_params)
             if 'ddim' in methods:
+                DDIM_samples=samples[-1]
                 viz_sample_comparison(DDIM_samples, train_data_split)
             if 'ired' in methods:
+                IRED_samples=samples[0:len(opt_params)]
                 for opt_step_samples in IRED_samples:
                     viz_sample_comparison(opt_step_samples, train_data_split)
 
