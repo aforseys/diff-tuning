@@ -246,7 +246,7 @@ class MazeEnv:
 class UnconditionalMaze(MazeEnv):
 
     # for dragging the agent around to explore motion manifold
-    def __init__(self, policy, policy_tag=None, vis_energy=False, maze_type="large", obs_list=None):
+    def __init__(self, policy, policy_tag=None, vis_energy=False, maze_type="large", obs_list=None, opt_params=None, ddim=False):
         super().__init__(maze_type=maze_type)
         self.mouse_pos = None
         self.agent_in_collision = False
@@ -255,14 +255,14 @@ class UnconditionalMaze(MazeEnv):
         self.policy_tag = policy_tag
         self.vis_energy = vis_energy
         self.obs_list = obs_list
+        self.opt_params = opt_params if opt_params is not None else [{'n_opt': 1, 't_subset': None, 'denoise': False}]
+        self.sampling_methods = ['ddim'] if ddim else ["ired"]
 
     def infer_target(self, guide=None, visualizer=None, return_energy=False, goal_pos=None):
         agent_hist_xy = self.agent_history_xy[-1] 
         agent_hist_xy = np.array(agent_hist_xy).reshape(1, 2)
         if self.policy_tag == 'dp':
             agent_hist_xy = agent_hist_xy.repeat(2, axis=0)
-
-        opt_params = [[2, None, False]] #TODO: UPDATE AS DESIRED FOR VISUALIZATION
 
         obs_batch = {
             "observation.state": einops.repeat(
@@ -290,7 +290,7 @@ class UnconditionalMaze(MazeEnv):
                 actions, energy = self.policy.run_inference(obs_batch, guide=guide, visualizer=visualizer, return_energy=True) # directly call the policy in order to visualize the intermediate steps
                 return actions.detach().cpu().numpy(), energy.detach().cpu().numpy().squeeze()
             else:
-                actions = self.policy.run_inference(obs_batch, guide=guide, visualizer=visualizer, opt_params=opt_params)[0].cpu().numpy() # directly call the policy in order to visualize the intermediate steps
+                actions = self.policy.run_inference(obs_batch, guide=guide, visualizer=visualizer, opt_params=self.opt_params, method=self.sampling_methods)[0].cpu().numpy() # directly call the policy in order to visualize the intermediate steps
         torch.cuda.synchronize()  # important — ensures GPU work is complete before stopping the clock
         elapsed = time.perf_counter() - start
 
@@ -394,114 +394,10 @@ class UnconditionalMaze(MazeEnv):
 
         pygame.quit()
 
-# class GoalConditionedMaze(MazeEnv):
-#     # for dragging the agent around to explore motion manifold with a designated goal 
-#     def __init__(self, policy, policy_tag=None, vis_energy=False, maze_type="large"):
-#         super().__init__(maze_type=maze_type)
-#         self.mouse_pos = None
-#         self.agent_in_collision = False
-#         self.agent_history_xy = []
-#         self.policy = policy
-#         self.policy_tag = policy_tag
-#         self.vis_energy = vis_energy
-#         self.goal_gui_pos = None
-#         self.goal_pos = None
-#         self.goal_set_mode = True  # Two modes: "SET_GOAL" or "MOVE_AGENT"
-
-#     def infer_target(self, visualizer=None, return_energy=False):
-#         agent_hist_xy = self.agent_history_xy[-1]
-#         agent_hist_xy = np.array(agent_hist_xy).reshape(1, 2)
-#         goal = np.array(self.goal_pos).reshape(1,2)
-#         if self.policy_tag == 'dp':
-#             agent_hist_xy = agent_hist_xy.repeat(2, axis=0)
-
-#         obs_batch = {
-#             "observation.state": einops.repeat(
-#                 torch.from_numpy(agent_hist_xy).float().cuda(), "t d -> b t d", b=self.batch_size
-#             )
-#         }
-#         obs_batch["observation.environment_state"] = einops.repeat(
-#             torch.from_numpy(agent_hist_xy).float().cuda(), "t d -> b t d", b=self.batch_size
-#         )
-        
-#         obs_batch["episode_goal"] = einops.repeat(
-#             torch.from_numpy(goal).float().cuda(), "t d -> b t d", b=self.batch_size
-#         )
-
-# #        if guide is not None:
-# #            guide = torch.from_numpy(guide).float().cuda()
-
-#         with torch.autocast(device_type="cuda"), seeded_context(0):
-#             if self.policy_tag == 'act':
-#                 actions = self.policy.run_inference(obs_batch).cpu().numpy()
-#             elif return_energy:
-#                 actions, energy = self.policy.run_inference(obs_batch, visualizer=visualizer, return_energy=True) # directly call the policy in order to visualize the intermediate steps
-#                 return actions.detach().cpu().numpy(), energy.detach().cpu().numpy().squeeze()
-#             else:
-#                 actions = self.policy.run_inference(obs_batch,visualizer=visualizer).cpu().numpy() # directly call the policy in order to visualize the intermediate steps
-#         return actions
-    
-#     def update_mouse_pos(self):
-#         self.mouse_pos = np.array(pygame.mouse.get_pos())
-
-#     def update_agent_pos(self, new_agent_pos, history_len=1):
-#         self.agent_gui_pos = np.array(new_agent_pos)
-#         agent_xy_pos = self.gui2xy(self.agent_gui_pos)
-#         self.agent_in_collision = self.check_collision(agent_xy_pos.reshape(1, 1, 2))[0]
-#         if self.agent_in_collision:
-#             self.agent_color = self.blend_with_white(self.RED, 0.8)
-#         else:
-#             self.agent_color = self.RED        
-#         self.agent_history_xy.append(agent_xy_pos)
-#         self.agent_history_xy = self.agent_history_xy[-history_len:]
-
-#     def update_screen_goal_set(self):
-
-#         self.draw_maze_background()
-#         # show where mouse is
-#         pygame.draw.circle(self.screen, self.BLUE, (int(self.mouse_pos[0]), int(self.mouse_pos[1])), 20)
-#         pygame.display.flip()
-
-#     def run(self): 
-#         self.goal_set_mode = True
-#         while self.running:
-#             self.update_mouse_pos()
-
-#             # Handle events
-#             for event in pygame.event.get():
-#                 if event.type == pygame.QUIT:
-#                     self.running = False
-#                     break
-
-#                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-#                     if self.goal_set_mode:
-#                         self.goal_gui_pos = self.mouse_pos.copy()
-#                         self.goal_pos = self.gui2xy(self.goal_gui_pos)
-#                         print(f"Goal set at GUI: {self.goal_gui_pos}, XY: {self.goal_pos}")
-#                         self.goal_set_mode = False
-#                         #TODO: CHECK APPROPRIATE DIMENSIONS OF GOAL POS
-
-#                 #TODO: BY PRESSING A BUTTON --> MOVE INTO GOAL SELECTION MODE
-
-#             if self.goal_set_mode:
-#                 self.update_screen_goal_set()
-
-#             else:
-#                 self.update_agent_pos(self.mouse_pos.copy())
-#                 if self.vis_energy: 
-#                     xy_pred, energy = self.infer_target(return_energy=True)
-#                     self.update_screen(xy_pred, scores=energy, goal=self.goal_gui_pos)
-#                 else: 
-#                     xy_pred = self.infer_target()
-#                     self.update_screen(xy_pred, goal=self.goal_gui_pos)
-#                 self.clock.tick(30)
-
-#         pygame.quit()
-
 class ConditionalMaze(UnconditionalMaze):
     # for interactive guidance dataset collection
-    def __init__(self, policy, vis_dp_dynamics=False, savepath=None, alignment_strategy=None, policy_tag=None,  maze_type='large', obs_list=None):
-        super().__init__(policy, policy_tag=policy_tag,  maze_type=maze_type)
+    def __init__(self, policy, vis_dp_dynamics=False, savepath=None, alignment_strategy=None, policy_tag=None,  maze_type='large', obs_list=None, opt_params=None, ddim=False):
+        super().__init__(policy, policy_tag=policy_tag,  maze_type=maze_type, obs_list=obs_list, opt_params=opt_params, ddim=ddim)
         self.drawing = False
         self.keep_drawing = False
         self.vis_dp_dynamics = vis_dp_dynamics
@@ -511,7 +407,6 @@ class ConditionalMaze(UnconditionalMaze):
         self.collisions = None # boolean array
         self.scores = None # numpy array
         self.alignment_strategy = alignment_strategy
-        self.obs_list=obs_list
 
     def run(self):
         if self.savepath is not None:
@@ -592,11 +487,12 @@ class ConditionalMaze(UnconditionalMaze):
                     print("All observations complete.")
                     break
                 current_obs = self.obs_list[self.obs_idx]
-                self.update_agent_pos(self.xy2gui(current_obs["start_xy"]))
+                start_xy = current_obs[:2]
+                goal_xy = current_obs[2:] if len(current_obs)==4 else None
+                self.update_agent_pos(self.xy2gui(start_xy))
                 # If goal provided in obs_list, skip interactive goal setting
-                if current_obs.get("goal_xy") is not None and self.goal_set_mode:
-                    goal_pos = current_obs["goal_xy"]
-                    goal_gui_pos = self.xy2gui(goal_pos)
+                if goal_xy is not None and self.goal_set_mode:
+                    goal_gui_pos = self.xy2gui(goal_xy)
                     self.goal_set_mode = False
 
             for event in pygame.event.get():
@@ -765,165 +661,165 @@ class MazeExp(ConditionalMaze):
 
         pygame.quit()
 
-def extract_preference_pairs(loadpath, savepath, maze_type='large', score_threshold=0.3, metric='similarity_score', metric_kwargs=None, viz=False):
-    prefix = 'maze_'+time.strftime("%Y%m%d_%H%M%S")
+# def extract_preference_pairs(loadpath, savepath, maze_type='large', score_threshold=0.3, metric='similarity_score', metric_kwargs=None, viz=False):
+#     prefix = 'maze_'+time.strftime("%Y%m%d_%H%M%S")
     
-    maze_env = MazeEnv(maze_type)  # needed for similarity_score; also has viz if viz=True
-    metric_kwargs = metric_kwargs or {}
+#     maze_env = MazeEnv(maze_type)  # needed for similarity_score; also has viz if viz=True
+#     metric_kwargs = metric_kwargs or {}
     
-    pairs = []
-    with open(loadpath, "r") as f:
-        trials = [json.loads(line) for line in f]
+#     pairs = []
+#     with open(loadpath, "r") as f:
+#         trials = [json.loads(line) for line in f]
     
-    for trial in trials:
-        if metric == 'similarity_score':
-            guide = np.array(trial["guide"])
-            if len(guide) == 0:
-                continue
-            pred_traj = np.asarray(trial["pred_traj"], dtype=float)
-            samples, scores = maze_env.similarity_score(pred_traj, guide)
-        elif metric == 'collision_rate':
-            xy_traj = np.array([[maze_env.gui2xy(p) for p in traj] for traj in trial["pred_traj"]])
-            collisions = maze_env.check_collision(xy_traj)  # (B,) bool
-            scores = (~collisions).astype(float)  # 1.0 if no collision, 0.0 if collision
-            samples = np.asarray(trial["pred_traj"], dtype=float)
-            guide = None
-        else:
-            raise NotImplementedError(f"Metric '{metric}' is not implemented.")
+#     for trial in trials:
+#         if metric == 'similarity_score':
+#             guide = np.array(trial["guide"])
+#             if len(guide) == 0:
+#                 continue
+#             pred_traj = np.asarray(trial["pred_traj"], dtype=float)
+#             samples, scores = maze_env.similarity_score(pred_traj, guide)
+#         elif metric == 'collision_rate':
+#             xy_traj = np.array([[maze_env.gui2xy(p) for p in traj] for traj in trial["pred_traj"]])
+#             collisions = maze_env.check_collision(xy_traj)  # (B,) bool
+#             scores = (~collisions).astype(float)  # 1.0 if no collision, 0.0 if collision
+#             samples = np.asarray(trial["pred_traj"], dtype=float)
+#             guide = None
+#         else:
+#             raise NotImplementedError(f"Metric '{metric}' is not implemented.")
         
-        trial_pairs = []
-        for i in range(len(scores)):
-            for j in range(i + 1, len(scores)):
-                if abs(scores[i] - scores[j]) >= score_threshold:
-                    winner, loser = (i, j) if scores[i] > scores[j] else (j, i)
-                    trial_pairs.append({
-                        "metric": metric,
-                        "metric_kwargs": metric_kwargs,
-                        "obs_idx":      trial["trial_idx"],
-                        "agent_pos":    trial["agent_pos"],
-                        "winner_traj":  samples[winner].tolist(),
-                        "loser_traj":   samples[loser].tolist(),
-                        "winner_score": float(scores[winner]),
-                        "loser_score":  float(scores[loser]),
-                         **({"guide": guide.tolist()} if guide is not None else {}),
-                    })
-                    #print(samples[winner].tolist()[5])
-                    #print(samples[loser].tolist()[0])
-        pairs.extend(trial_pairs)
+#         trial_pairs = []
+#         for i in range(len(scores)):
+#             for j in range(i + 1, len(scores)):
+#                 if abs(scores[i] - scores[j]) >= score_threshold:
+#                     winner, loser = (i, j) if scores[i] > scores[j] else (j, i)
+#                     trial_pairs.append({
+#                         "metric": metric,
+#                         "metric_kwargs": metric_kwargs,
+#                         "obs_idx":      trial["trial_idx"],
+#                         "agent_pos":    trial["agent_pos"],
+#                         "winner_traj":  samples[winner].tolist(),
+#                         "loser_traj":   samples[loser].tolist(),
+#                         "winner_score": float(scores[winner]),
+#                         "loser_score":  float(scores[loser]),
+#                          **({"guide": guide.tolist()} if guide is not None else {}),
+#                     })
+#                     #print(samples[winner].tolist()[5])
+#                     #print(samples[loser].tolist()[0])
+#         pairs.extend(trial_pairs)
 
-    print(f"Generated {len(pairs)} total preference pairs.")
-    if viz and len(pairs) > 0:
-        pair_idx = 0
-        running = True
+#     print(f"Generated {len(pairs)} total preference pairs.")
+#     if viz and len(pairs) > 0:
+#         pair_idx = 0
+#         running = True
 
-        while running and pair_idx < len(pairs):
-            pair = pairs[pair_idx]
-            print(f"Visualizing pair {pair_idx + 1}/{len(pairs)}")
+#         while running and pair_idx < len(pairs):
+#             pair = pairs[pair_idx]
+#             print(f"Visualizing pair {pair_idx + 1}/{len(pairs)}")
 
-            winner_traj = np.asarray(pair["winner_traj"], dtype=float)[None]
-            loser_traj = np.asarray(pair["loser_traj"], dtype=float)[None]
-            viz_traj = np.concatenate([winner_traj, loser_traj], axis=0)
+#             winner_traj = np.asarray(pair["winner_traj"], dtype=float)[None]
+#             loser_traj = np.asarray(pair["loser_traj"], dtype=float)[None]
+#             viz_traj = np.concatenate([winner_traj, loser_traj], axis=0)
 
-            maze_env.draw_traj = np.asarray(pair["guide"], dtype=float) if "guide" in pair else []
-            maze_env.agent_gui_pos = np.asarray(pair["agent_pos"], dtype=float)
+#             maze_env.draw_traj = np.asarray(pair["guide"], dtype=float) if "guide" in pair else []
+#             maze_env.agent_gui_pos = np.asarray(pair["agent_pos"], dtype=float)
 
-            maze_env.update_screen(
-                xy_pred=viz_traj,
-                collisions=np.array([False, True]),
-                keep_drawing=("guide" in pair),
-                traj_in_gui_space=True,
-            )
+#             maze_env.update_screen(
+#                 xy_pred=viz_traj,
+#                 collisions=np.array([False, True]),
+#                 keep_drawing=("guide" in pair),
+#                 traj_in_gui_space=True,
+#             )
 
-            waiting = True
-            while waiting:
-                for event in pygame.event.get():
-                    if event.type == pygame.QUIT:
-                        waiting = False
-                        running = False
-                    elif event.type == pygame.KEYDOWN:
-                        if event.key == pygame.K_n:
-                            pair_idx += 1
-                            waiting = False
-                        elif event.key == pygame.K_q:
-                            waiting = False
-                            running = False
-                maze_env.clock.tick(10)
+#             waiting = True
+#             while waiting:
+#                 for event in pygame.event.get():
+#                     if event.type == pygame.QUIT:
+#                         waiting = False
+#                         running = False
+#                     elif event.type == pygame.KEYDOWN:
+#                         if event.key == pygame.K_n:
+#                             pair_idx += 1
+#                             waiting = False
+#                         elif event.key == pygame.K_q:
+#                             waiting = False
+#                             running = False
+#                 maze_env.clock.tick(10)
 
-    if viz:
-        pygame.quit()
+#     if viz:
+#         pygame.quit()
 
-    # savefile.write(json.dumps(pairs) + "\n")
-    if not pairs:
-        print("No pairs to save.")
-        return []
+#     # savefile.write(json.dumps(pairs) + "\n")
+#     if not pairs:
+#         print("No pairs to save.")
+#         return []
     
 
-# ── build flat observations + timeouts arrays ──────────────────────────
-    # Each preference pair is treated as one "episode" of length (1 + T):
-    #   step 0  → agent start position
-    #   steps 1…T → predicted trajectory
-    #
-    # load_hf_dataset (maze branch) expects:
-    #   observations : (N * (1+T), 2)   — all episodes concatenated
-    #   timeouts     : (N * (1+T),)     — True at the last step of every
-    #                                     episode *except* the final one
-    #                                     (the last episode length is inferred
-    #                                     as len(timeouts) - last_ending - 1)
+# # ── build flat observations + timeouts arrays ──────────────────────────
+#     # Each preference pair is treated as one "episode" of length (1 + T):
+#     #   step 0  → agent start position
+#     #   steps 1…T → predicted trajectory
+#     #
+#     # load_hf_dataset (maze branch) expects:
+#     #   observations : (N * (1+T), 2)   — all episodes concatenated
+#     #   timeouts     : (N * (1+T),)     — True at the last step of every
+#     #                                     episode *except* the final one
+#     #                                     (the last episode length is inferred
+#     #                                     as len(timeouts) - last_ending - 1)
 
-    T = len(pairs[0]['winner_traj'])
-    N = len(pairs)
-    winners = np.zeros((N, 2 + T, 2), dtype=np.float32)
-    losers  = np.zeros((N, 2 + T, 2), dtype=np.float32)
-    meta    = []
+#     T = len(pairs[0]['winner_traj'])
+#     N = len(pairs)
+#     winners = np.zeros((N, 2 + T, 2), dtype=np.float32)
+#     losers  = np.zeros((N, 2 + T, 2), dtype=np.float32)
+#     meta    = []
 
-    for i, pair in enumerate(pairs):
-        agent_xy = maze_env.gui2xy(np.array(pair['agent_pos'], dtype=float))
-        w_xy = np.array([maze_env.gui2xy(np.array(p, dtype=float))
-                         for p in pair['winner_traj']], dtype=np.float32)
-        l_xy = np.array([maze_env.gui2xy(np.array(p, dtype=float))
-                         for p in pair['loser_traj']], dtype=np.float32)
-        # winners[i, 0]  = agent_xy;  winners[i, 1:] = w_xy
-        # losers[i, 0]   = agent_xy;  losers[i, 1:]  = l_xy
-        winners[i, 0:2] = agent_xy   # repeat start pos for both obs steps
-        winners[i, 2:]  = w_xy
-        losers[i, 0:2]  = agent_xy
-        losers[i, 2:]   = l_xy
-        entry = {
-            'obs_idx':      pair['obs_idx'],
-            'winner_score': float(pair['winner_score']),
-            'loser_score':  float(pair['loser_score']),
-        }
-        if 'guide' in pair:
-            entry['guide'] = [maze_env.gui2xy(np.array(p, dtype=float)).tolist()
-                                  for p in pair['guide']]
-        meta.append(entry)
+#     for i, pair in enumerate(pairs):
+#         agent_xy = maze_env.gui2xy(np.array(pair['agent_pos'], dtype=float))
+#         w_xy = np.array([maze_env.gui2xy(np.array(p, dtype=float))
+#                          for p in pair['winner_traj']], dtype=np.float32)
+#         l_xy = np.array([maze_env.gui2xy(np.array(p, dtype=float))
+#                          for p in pair['loser_traj']], dtype=np.float32)
+#         # winners[i, 0]  = agent_xy;  winners[i, 1:] = w_xy
+#         # losers[i, 0]   = agent_xy;  losers[i, 1:]  = l_xy
+#         winners[i, 0:2] = agent_xy   # repeat start pos for both obs steps
+#         winners[i, 2:]  = w_xy
+#         losers[i, 0:2]  = agent_xy
+#         losers[i, 2:]   = l_xy
+#         entry = {
+#             'obs_idx':      pair['obs_idx'],
+#             'winner_score': float(pair['winner_score']),
+#             'loser_score':  float(pair['loser_score']),
+#         }
+#         if 'guide' in pair:
+#             entry['guide'] = [maze_env.gui2xy(np.array(p, dtype=float)).tolist()
+#                                   for p in pair['guide']]
+#         meta.append(entry)
 
-    step_size = 2 + T                                      # frames per episode
-    timeouts  = np.zeros(N * step_size, dtype=bool)
-    # mark the closing frame of every episode but the last
-    timeouts[np.arange(1, N) * step_size - 1] = True
+#     step_size = 2 + T                                      # frames per episode
+#     timeouts  = np.zeros(N * step_size, dtype=bool)
+#     # mark the closing frame of every episode but the last
+#     timeouts[np.arange(1, N) * step_size - 1] = True
 
-    #print("agent_xy:", agent_xy)
-    #print("winners[i,0]:", winners[i,0])
-    #print("losers[i,0]:", losers[i,0])
-    assert np.all(losers[:,0]==winners[:,0])
+#     #print("agent_xy:", agent_xy)
+#     #print("winners[i,0]:", winners[i,0])
+#     #print("losers[i,0]:", losers[i,0])
+#     assert np.all(losers[:,0]==winners[:,0])
 
-    np.savez(
-        os.path.join(savepath, f"{prefix}_winners.npz"),
-        observations=winners.reshape(-1, 2),
-        timeouts=timeouts,
-    )
-    np.savez(
-        os.path.join(savepath, f"{prefix}_losers.npz"),
-        observations=losers.reshape(-1, 2),
-        timeouts=timeouts,
-    )
-    with open(os.path.join(savepath, f"{prefix}_meta.json"), "w") as f:
-        json.dump(meta, f, indent=2)
+#     np.savez(
+#         os.path.join(savepath, f"{prefix}_winners.npz"),
+#         observations=winners.reshape(-1, 2),
+#         timeouts=timeouts,
+#     )
+#     np.savez(
+#         os.path.join(savepath, f"{prefix}_losers.npz"),
+#         observations=losers.reshape(-1, 2),
+#         timeouts=timeouts,
+#     )
+#     with open(os.path.join(savepath, f"{prefix}_meta.json"), "w") as f:
+#         json.dump(meta, f, indent=2)
 
-    print(f"Saved {N} pairs → {prefix}_{{winners,losers}}.npz + _meta.json")
-    print(f"  observations shape: {winners.reshape(-1, 2).shape}  "
-          f"(N*(1+T)={N}*{step_size}, 2)")
+#     print(f"Saved {N} pairs → {prefix}_{{winners,losers}}.npz + _meta.json")
+#     print(f"  observations shape: {winners.reshape(-1, 2).shape}  "
+#           f"(N*(1+T)={N}*{step_size}, 2)")
 
     # np.save(os.path.join(savepath, f"{prefix}_winners.npy"), winners)
     # np.save(os.path.join(savepath, f"{prefix}_losers.npy"),  losers)
@@ -934,97 +830,191 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
     # print(f"  winners/losers shape: {winners.shape}  (N, 1+T, action_dim)")
     # return pairs
 
-def pick_start_positions(maze_type='large', n_positions=None, savepath=None):
-    """
-    Display the maze and let the user click valid (non-collision) starting
-    positions.  Each accepted click is printed and optionally saved.
+# def pick_start_positions(maze_type='large', n_positions=None, savepath=None):
+#     """
+#     Display the maze and let the user click valid (non-collision) starting
+#     positions.  Each accepted click is printed and optionally saved.
 
-    Controls
-    --------
-    Left-click       : accept position (skipped silently if in collision)
-    U (undo)         : remove last accepted position
-    Q / Enter / ×    : finish and return
+#     Controls
+#     --------
+#     Left-click       : accept position (skipped silently if in collision)
+#     U (undo)         : remove last accepted position
+#     Q / Enter / ×    : finish and return
 
-    Parameters
-    ----------
-    maze_type    : 'open' | 'sparse' | 'large'
-    n_positions  : stop automatically after this many valid picks (None = unlimited)
-    savepath     : if given, write the list as JSON to this path
+#     Parameters
+#     ----------
+#     maze_type    : 'open' | 'sparse' | 'large'
+#     n_positions  : stop automatically after this many valid picks (None = unlimited)
+#     savepath     : if given, write the list as JSON to this path
 
-    Returns
-    -------
-    list of [x, y] positions in maze XY space (NOT gui space)
-    """
-    env = MazeEnv(maze_type)
-    pygame.font.init()
-    font = pygame.font.SysFont(None, 30)
-    positions = []
-    running = True
+#     Returns
+#     -------
+#     list of [x, y] positions in maze XY space (NOT gui space)
+#     """
+#     env = MazeEnv(maze_type)
+#     pygame.font.init()
+#     font = pygame.font.SysFont(None, 30)
+#     positions = []
+#     running = True
 
-    while running:
-        mouse_pos   = np.array(pygame.mouse.get_pos())
-        mouse_xy    = env.gui2xy(mouse_pos)
-        in_collision = env.check_collision(mouse_xy.reshape(1, 1, 2))[0]
+#     while running:
+#         mouse_pos   = np.array(pygame.mouse.get_pos())
+#         mouse_xy    = env.gui2xy(mouse_pos)
+#         in_collision = env.check_collision(mouse_xy.reshape(1, 1, 2))[0]
 
-        # ── draw ──────────────────────────────────────────────
-        env.draw_maze_background()
+#         # ── draw ──────────────────────────────────────────────
+#         env.draw_maze_background()
 
-        # already-accepted positions (green dots)
-        for xy in positions:
-            gui = env.xy2gui(np.array(xy))
-            pygame.draw.circle(env.screen, env.GREEN, (int(gui[0]), int(gui[1])), 12)
-            pygame.draw.circle(env.screen, (0, 180, 0), (int(gui[0]), int(gui[1])), 12, 2)
+#         # already-accepted positions (green dots)
+#         for xy in positions:
+#             gui = env.xy2gui(np.array(xy))
+#             pygame.draw.circle(env.screen, env.GREEN, (int(gui[0]), int(gui[1])), 12)
+#             pygame.draw.circle(env.screen, (0, 180, 0), (int(gui[0]), int(gui[1])), 12, 2)
 
-        # live cursor — blue = valid, faded red = collision
-        cursor_color = (180, 180, 180) if in_collision else env.BLUE
-        pygame.draw.circle(env.screen, cursor_color,
-                           (int(mouse_pos[0]), int(mouse_pos[1])), 12)
+#         # live cursor — blue = valid, faded red = collision
+#         cursor_color = (180, 180, 180) if in_collision else env.BLUE
+#         pygame.draw.circle(env.screen, cursor_color,
+#                            (int(mouse_pos[0]), int(mouse_pos[1])), 12)
 
-        # HUD
-        status  = "COLLISION — move away" if in_collision else "valid"
-        caption = (f"Picked: {len(positions)}"
-                   + (f"/{n_positions}" if n_positions else "")
-                   + f"   [{status}]   U=undo  Q=done")
-        surf = font.render(caption, True, (30, 30, 30), (220, 220, 220))
-        env.screen.blit(surf, (8, 8))
-        pygame.display.flip()
+#         # HUD
+#         status  = "COLLISION — move away" if in_collision else "valid"
+#         caption = (f"Picked: {len(positions)}"
+#                    + (f"/{n_positions}" if n_positions else "")
+#                    + f"   [{status}]   U=undo  Q=done")
+#         surf = font.render(caption, True, (30, 30, 30), (220, 220, 220))
+#         env.screen.blit(surf, (8, 8))
+#         pygame.display.flip()
 
-        # ── events ────────────────────────────────────────────
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
+#         # ── events ────────────────────────────────────────────
+#         for event in pygame.event.get():
+#             if event.type == pygame.QUIT:
+#                 running = False
 
-            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                if in_collision:
-                    print(f"  ✗ ({mouse_xy[0]:.2f}, {mouse_xy[1]:.2f}) — in collision, skipped")
-                else:
-                    positions.append(mouse_xy.tolist())
-                    print(f"  ✓ #{len(positions):02d}  xy = {mouse_xy.round(3).tolist()}")
-                    if n_positions and len(positions) >= n_positions:
-                        running = False
+#             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+#                 if in_collision:
+#                     print(f"  ✗ ({mouse_xy[0]:.2f}, {mouse_xy[1]:.2f}) — in collision, skipped")
+#                 else:
+#                     positions.append(mouse_xy.tolist())
+#                     print(f"  ✓ #{len(positions):02d}  xy = {mouse_xy.round(3).tolist()}")
+#                     if n_positions and len(positions) >= n_positions:
+#                         running = False
 
-            elif event.type == pygame.KEYDOWN:
-                if event.key in (pygame.K_q, pygame.K_RETURN, pygame.K_ESCAPE):
-                    running = False
-                elif event.key == pygame.K_u and positions:
-                    removed = positions.pop()
-                    print(f"  ↩ removed {removed}")
+#             elif event.type == pygame.KEYDOWN:
+#                 if event.key in (pygame.K_q, pygame.K_RETURN, pygame.K_ESCAPE):
+#                     running = False
+#                 elif event.key == pygame.K_u and positions:
+#                     removed = positions.pop()
+#                     print(f"  ↩ removed {removed}")
 
-        env.clock.tick(30)
+#         env.clock.tick(30)
 
-    pygame.quit()
+#     pygame.quit()
 
-    print(f"\nCollected {len(positions)} start positions:")
-    for i, p in enumerate(positions):
-        print(f"  [{i:02d}]  {p}")
+#     print(f"\nCollected {len(positions)} start positions:")
+#     for i, p in enumerate(positions):
+#         print(f"  [{i:02d}]  {p}")
 
-    if savepath:
-        filename = f"set_obs_{len(positions)}_"+time.strftime("%Y%m%d_%H%M%S")
-        with open(os.path.join(savepath,filename), "w") as f:
-            json.dump(positions, f, indent=2)
-        print(f"Saved to {os.path.join(savepath,filename)}")
+#     if savepath:
+#         filename = f"set_obs_{len(positions)}_"+time.strftime("%Y%m%d_%H%M%S")
+#         with open(os.path.join(savepath,filename), "w") as f:
+#             json.dump(positions, f, indent=2)
+#         print(f"Saved to {os.path.join(savepath,filename)}")
 
-    return positions   # list of [x, y]  — maze XY space
+#     return positions   # list of [x, y]  — maze XY space
+
+# def generate_random_observations(maze_type='large', n=10, include_goals=False,
+#                                 min_goal_steps=None, max_goal_steps=None,                                                                                      
+#                                 savepath=None):                                                                                                                
+#     env = MazeEnv(maze_type)                                                                                                                                     
+#     maze = env.maze                                                                                                                                              
+#     free_cells = np.argwhere(~maze)  # all non-wall cells, shape (N_free, 2)
+#     rng = np.random.default_rng()                                                                                                                                
+
+#     replace = n > len(free_cells)                                                                                                                                
+#     starts = free_cells[rng.choice(len(free_cells), size=n, replace=replace)]
+                                                                                                                                                                
+#     positions = []
+#     for start in starts:
+#         x, y = float(start[0]), float(start[1])
+#         if include_goals:                                                                                                                                        
+#             goal = _bfs_sample_goal(maze, start, min_goal_steps, max_goal_steps, rng)
+#             assert goal is not None, f"No goal found for location: {x,y}"                                                                                                                                    
+#             positions.append([x, y, float(goal[0]), float(goal[1])])                                                                                             
+#         else: 
+#             positions.append([x, y])  
+                                                                                                                                                                
+#     if savepath:
+#         prefix = 'set_obs_gc' if include_goals else 'set_obs'
+#         filename = f"{prefix}_{n}_" + time.strftime("%Y%m%d_%H%M%S")
+#         with open(os.path.join(savepath, filename), 'w') as f:                                                                                                   
+#             json.dump(positions, f, indent=2)                                                                                                                    
+#         print(f"Saved to {os.path.join(savepath, filename)}")                                                                                                    
+                                                                                                                                                                
+#     return positions
+
+# def _bfs_sample_goal(maze, start, min_steps, max_steps, rng):
+#     from collections import deque                            
+#     rows, cols = maze.shape      
+#     visited = np.zeros((rows, cols), dtype=bool)
+#     visited[start[0], start[1]] = True          
+#     queue = deque([(int(start[0]), int(start[1]), 0)])                                                                                                           
+#     candidates = []                                   
+                                                                                                                                                                
+#     while queue:
+#         r, c, dist = queue.popleft()
+#         if (min_steps is None or dist >= min_steps) and (max_steps is None or dist <= max_steps):
+#             if not (r == start[0] and c == start[1]):                                                                                                            
+#                 candidates.append((r, c))            
+#         if max_steps is not None and dist >= max_steps:                                                                                                          
+#             continue                                   
+#         for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:                                                                                                               
+#             nr, nc = r+dr, c+dc                                                                                                                                  
+#             if 0 <= nr < rows and 0 <= nc < cols and not maze[nr, nc] and not visited[nr, nc]:
+#                 visited[nr, nc] = True                                                                                                                           
+#                 queue.append((nr, nc, dist+1))                                                                                                                   
+                                            
+#     if not candidates:                                                                                                                                           
+#         return None   
+#     return candidates[rng.integers(len(candidates))]
+
+# def visualize_observations(positions, maze_type='large'):                                                                                                        
+#     env = MazeEnv(maze_type)                             
+#     pygame.font.init()      
+#     font = pygame.font.SysFont(None, 28)
+#     has_goals = len(positions[0]) == 4  
+#     running = True                                                                                                                                               
+                
+#     while running:                                                                                                                                               
+#         env.draw_maze_background()
+                                
+#         for i, pos in enumerate(positions):                                                                                                                      
+#             start_gui = env.xy2gui(np.array(pos[:2]))
+#             pygame.draw.circle(env.screen, env.GREEN,                                                                                                            
+#                                 (int(start_gui[0]), int(start_gui[1])), 12)
+#             if has_goals:                                                 
+#                 goal_gui = env.xy2gui(np.array(pos[2:]))                                                                                                         
+#                 pygame.draw.circle(env.screen, env.goal_color,
+#                                     (int(goal_gui[0]), int(goal_gui[1])), 12)                                                                                     
+#                 pygame.draw.line(env.screen, (180, 180, 180),               
+#                                 (int(start_gui[0]), int(start_gui[1])),                                                                                         
+#                                 (int(goal_gui[0]), int(goal_gui[1])), 1)
+#             label = font.render(str(i), True, (255, 255, 255))                                                                                                   
+#             env.screen.blit(label, (int(start_gui[0]) + 8, int(start_gui[1]) - 8))
+                                                                                                                                                                
+#         caption = f"{len(positions)} obs" + (" + goals" if has_goals else "") + "   Q=quit"                                                                      
+#         surf = font.render(caption, True, (30, 30, 30), (220, 220, 220))                                                                                         
+#         env.screen.blit(surf, (8, 8))                                                                                                                            
+#         pygame.display.flip()                                                                                                                                    
+                            
+#         for event in pygame.event.get():                                                                                                                         
+#             if event.type == pygame.QUIT:
+#                 running = False                                                                                                                                  
+#             elif event.type == pygame.KEYDOWN:
+#                 if event.key in (pygame.K_q, pygame.K_RETURN, pygame.K_ESCAPE):
+#                     running = False
+#         env.clock.tick(30)                                                                                                                                       
+
+#     pygame.quit()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -1042,24 +1032,33 @@ if __name__ == "__main__":
     parser.add_argument('-e', '--vis_energy', action='store_true', help="Visualize energy")
     parser.add_argument('-mt',  '--maze_type', default="large", type=str, help="Maze Type")
     parser.add_argument('-gc', '--goal_conditioned', action='store_true', help="Condition on goal")
-    parser.add_argument('-gp', '--gen_pref', action='store_true', help="Generate preferences from passed in file")
-    parser.add_argument('-po', '--pick-obs', action='store_true', help="Pass in to select observations")
     parser.add_argument('-of', '--obs-file', default=None, help="Path to loaded observations")
+    parser.add_argument('-d', '--ddim', action='store_true')
+    parser.add_argument('--opt_steps', type=int, default=1)
+    parser.add_argument('--t_subset', type=int, default=None)
+    parser.add_argument('--denoise', action='store_true')
     args = parser.parse_args()
 
     # Create and load the policy
     device = torch.device("cuda")
 
-    if args.pick_obs:
-        positions = pick_start_positions(maze_type=args.maze_type, savepath=args.savepath)
-        sys.exit(0)
+    # If selecting observations
+    # if args.pick_obs:
+    #     positions = pick_start_positions(maze_type=args.maze_type, savepath=args.savepath)
+    #     sys.exit(0)
+    # # If generating preferences from user input 
+    # if args.gen_pref:
+    #     pairs = extract_preference_pairs(args.loadpath, args.savepath, maze_type=args.maze_type, score_threshold=0.3, metric='similarity_score', metric_kwargs=None, viz=False)
+    #     sys.exit(0)
 
+    # Load input observations
     if args.obs_file is not None:
         with open(args.obs_file) as f:
             obs_list = json.load(f)
     else:
         obs_list = None
 
+    # Set alignment type 
     alignment_strategy = 'post-hoc'
     if args.post_hoc:
         alignment_strategy = 'post-hoc'
@@ -1072,6 +1071,7 @@ if __name__ == "__main__":
     elif args.stochastic_sampling:
         alignment_strategy = 'stochastic-sampling'
 
+    # Set policy type 
     if args.policy in ["diffusion", "dp"]:
         if args.checkpoint is not None:
              checkpoint_path = args.checkpoint
@@ -1084,10 +1084,12 @@ if __name__ == "__main__":
         policy = None
         #raise NotImplementedError(f"Policy with name {args.policy} is not implemented.")
 
+    # Load pretrained policy  
     if args.policy is not None:
         # Load policy
         pretrained_policy_path = Path(os.path.join(checkpoint_path, "pretrained_model"))
 
+    # Set policy parameters
     if args.policy in ["diffusion", "dp"]:
         policy = DiffusionPolicy.from_pretrained(pretrained_policy_path, alignment_strategy=alignment_strategy)
         policy.config.noise_scheduler_type = "DDIM"
@@ -1104,11 +1106,13 @@ if __name__ == "__main__":
     else:
         policy = None
         policy_tag = None
-    if args.gen_pref:
-        pairs = extract_preference_pairs(args.loadpath, args.savepath, maze_type=args.maze_type, score_threshold=0.3, metric='similarity_score', metric_kwargs=None, viz=False)
-        sys.exit(0)
+
+    # Set sampling specific parameters
+    opt_params = [{'n_opt': args.opt_steps, 't_subset': args.t_subset, 'denoise': args.denoise}]
+    ddim = args.ddim
+    
     if args.unconditional:
-        interactiveMaze = UnconditionalMaze(policy, policy_tag=policy_tag, vis_energy=args.vis_energy, maze_type=args.maze_type, obs_list=obs_list)
+        interactiveMaze = UnconditionalMaze(policy, policy_tag=policy_tag, vis_energy=args.vis_energy, maze_type=args.maze_type, obs_list=obs_list, opt_params=opt_params, ddim=ddim)
     elif args.loadpath is not None:
         if args.savepath is None:
             savepath = None
@@ -1125,7 +1129,7 @@ if __name__ == "__main__":
             savepath = f"{args.loadpath[:-5]}_{policy_tag}_{alignment_tag}{args.savepath}"
         interactiveMaze = MazeExp(policy, args.vis_dp_dynamics, savepath, alignment_strategy, policy_tag=policy_tag, loadpath=args.loadpath, maze_type=args.maze_type)
     else:
-        interactiveMaze = ConditionalMaze(policy, args.vis_dp_dynamics, args.savepath, alignment_strategy, policy_tag=policy_tag, maze_type=args.maze_type, obs_list=obs_list)
+        interactiveMaze = ConditionalMaze(policy, args.vis_dp_dynamics, args.savepath, alignment_strategy, policy_tag=policy_tag, maze_type=args.maze_type, obs_list=obs_list, opt_params=opt_params, ddim=ddim)
     if args.goal_conditioned:
         interactiveMaze.run_gc()
     else:
