@@ -34,7 +34,7 @@ def run_inference(policy, N=100, conditional=False, opt_params=[1]):
 
     for o in obs:
         #start = time.perf_counter()
-        actions = policy.run_inference(o, both=True, opt_params=opt_params)
+        actions = policy.run_inference(o, methods=['ired', 'ddim'], opt_params=opt_params)
         #torch.cuda.synchronize()
         # elapsed = time.perf_counter() - start
 
@@ -57,7 +57,7 @@ def run_inference_with_grad_steps(policy, N=50, conditional=False, opt_params=[1
     grad_histories_per_opt = [[] for _ in opt_params]
     
     for o in obs:
-        _, grad_histories = policy.run_inference(o, both=False, opt_params=opt_params, return_grad_steps=True)
+        _, grad_histories = policy.run_inference(o, methods=['ired'], opt_params=opt_params, return_grad_steps=True)
         for i in range(len(opt_params)):
             grad_histories_per_opt[i].append(grad_histories[i])
 
@@ -511,7 +511,13 @@ def eval_maze(policy, cfg, split='test'):
         positions = json.load(f)  # [[x0,y0], [x1,y1], ...]                                                           
     obs_data = np.array(positions, dtype=np.float32)  # (N_obs, 2)                                                    
     N_obs = len(obs_data)  
-    states = np.repeat(obs_data, n_samples, axis=0)
+    if policy.use_goal_cond: 
+        start_pos = obs_data[:, :2]
+        goal_pos = obs_data[:, 2:]
+    else:
+        start_pos = obs_data
+
+    states = np.repeat(start_pos, n_samples, axis=0)
     state_t = torch.tensor(states, dtype=torch.float32, device=device)  
 
     # (N_obs*n_samples, n_obs_steps, 2) — repeat starting pos for all history steps
@@ -522,8 +528,13 @@ def eval_maze(policy, cfg, split='test'):
             state_t.unsqueeze(1).expand(-1, n_obs_steps, -1).clone(),
     }
 
+    if policy.use_goal_cond:
+        goals = np.repeat(goal_pos, n_samples, axis=0)
+        goal_t = torch.tensor(goals, dtype=torch.float32, device=device)
+        obs['episode_goal'] = goal_t.unsqueeze(1).clone()
+
     with torch.no_grad():
-        actions_list = policy.run_inference(obs, both=True, opt_params=opt_params)
+        actions_list = policy.run_inference(obs, methods=['ired', 'ddim'], opt_params=opt_params)
 
     # run infernece unnormalizes --> trajectories are in coordinate space
     # actions_list: [IRED_opt0, ..., DDIM] each (N_obs * n_samples, horizon, 2)
@@ -538,9 +549,33 @@ def eval_maze(policy, cfg, split='test'):
             if m == 'collision_rate':
                 collisions = check_maze_collision(traj, maze)
                 per_obs[m] = collisions.reshape(N_obs, n_samples).mean(axis=1).tolist() 
-            elif m == 'goal_dist':
-                dists = np.linalg.norm(traj[:, -1, :] - np.array(cfg.eval.goal), axis=1)
+            elif m == 'obs_goal_dist':
+                assert policy.use_goal_cond, "obs_goal_dist requires a goal-conditioned policy"
+                goals_repeated = np.repeat(goal_pos, n_samples, axis=0)
+                dists = np.linalg.norm(traj[:, -1, :]- goals_repeated, axis=1)
                 per_obs[m] = dists.reshape(N_obs, n_samples).mean(axis=1).tolist()
+            elif m == 'finetune_goal_dist':
+                assert cfg.eval.goal is not None, "finetune_goal_dist requires cfg.eval.goal to be set"
+                goal = np.array(cfg.eval.goal, dtype=np.float32)
+                dists = np.linalg.norm(traj[:, -1, :] - goal, axis=1)
+                per_obs[m] = dists.reshape(N_obs, n_samples).mean(axis=1).tolist()
+            #Outer edge preference — mean normalized distance from maze center over all trajectory steps:
+            elif m == 'outer_edge_rate':
+                rows, cols = maze.shape
+                x_center = (rows - 1) / 2.0
+                y_center = (cols - 1) / 2.0
+                max_dist = np.sqrt(x_center**2 + y_center**2)
+                dx = traj[:, :, 0] - x_center  # (N_obs*n_samples, horizon)
+                dy = traj[:, :, 1] - y_center
+                scores = np.sqrt(dx**2 + dy**2).mean(axis=1) / max_dist  # (N_obs*n_samples,)
+                per_obs[m] = scores.reshape(N_obs, n_samples).mean(axis=1).tolist()
+            #Top half preference — fraction of trajectory steps with x < x_mid (lower row index = top of maze):
+            elif m == 'top_half_rate':
+                rows, cols = maze.shape
+                x_mid = (rows - 1) / 2.0
+                scores = (traj[:, :, 0] < x_mid).astype(float).mean(axis=1)  # (N_obs*n_samples,)
+                per_obs[m] = scores.reshape(N_obs, n_samples).mean(axis=1).tolist()
+
             else:
                 raise NotImplementedError(f"Metric '{m}' not implemented") 
 

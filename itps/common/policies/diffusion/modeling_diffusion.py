@@ -105,7 +105,7 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
         return set(self.config.input_shapes)
 
     @torch.no_grad 
-    def run_inference(self, observation_batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, return_full=False, return_energy=False, both=False, opt_params=[1], return_grad_steps=False) -> Tensor:
+    def run_inference(self, observation_batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, return_full=False, return_energy=False, methods=['ired', 'ddim'], opt_params=[1], return_grad_steps=False) -> Tensor:
         observation_batch = self.normalize_inputs(observation_batch)
         if guide is not None:
             guide = self.normalize_targets({"action": guide})["action"]
@@ -116,12 +116,13 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
 
         # default: use optimization-based sampling
         gen_actions = []
-        for p in opt_params: 
-            n, subset, denoise = (p["n_opt"], p["t_subset"], p["denoise"]) if isinstance(p, dict) else (p, None, False)
-            gen_actions.append(self.diffusion.generate_actions(observation_batch, guide=guide, visualizer=visualizer, normalizer=self,return_full=return_full, steps_per_timestep=n, opt_subset=subset, denoise = denoise, return_grad_steps=return_grad_steps))
+        if 'ired' in methods:
+            for p in opt_params: 
+                n, subset, denoise = (p["n_opt"], p["t_subset"], p["denoise"]) if isinstance(p, dict) else (p, None, False)
+                gen_actions.append(self.diffusion.generate_actions(observation_batch, guide=guide, visualizer=visualizer, normalizer=self,return_full=return_full, steps_per_timestep=n, opt_subset=subset, denoise = denoise, return_grad_steps=return_grad_steps))
         
         # if returning both, use denoising-based sampling as well
-        if both: 
+        if 'ddim' in methods: 
             gen_actions_denoise = self.diffusion.generate_actions(observation_batch, guide=guide, visualizer=visualizer, normalizer=self,return_full=return_full, opt_energy=False)
             gen_actions.append(gen_actions_denoise)
 
