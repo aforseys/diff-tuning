@@ -46,7 +46,8 @@ training:
 
 eval:
   n_samples: 200
-  opt_params: [1,2,5]
+  opt_params: [{'n_opt': 1, 't_subset': null, 'denoise': False}, {'n_opt': 2, 't_subset': null, 'denoise': False}, {'n_opt': 5, 't_subset': null, 'denoise': False}]
+  methods: ['ired', 'ddim']
 
 policy:
   name: diffusion
