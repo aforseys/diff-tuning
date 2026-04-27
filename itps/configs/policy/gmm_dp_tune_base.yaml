@@ -15,7 +15,7 @@ hydra:
   run:
     # Set `dir` to where you would like to save all of the run outputs. If you run another training session
     # with the same value for `dir` its contents will be overwritten unless you set `resume` to true.
-    dir: data/gmm/unconditioned/tune/outputs/${now:%Y.%m.%d}/${hydra.job.name}
+    dir: data/gmm/general/tune/${now:%Y.%m.%d}/${hydra.job.name}
   job:
     name: gmm_unconditional_tune_${now:%Y.%m.%d.%H.%M.%S}_${env.name}_${policy.name}
 

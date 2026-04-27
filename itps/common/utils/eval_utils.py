@@ -558,9 +558,9 @@ def eval_maze(policy, cfg, split='test'):
                 label = f'IRED_{opt_params[i]}_steps' 
             else: 
                 label = f'IRED_{opt_params[i]["n_opt"]}steps'
-                if opt_params["t_subset"] is not None:
+                if opt_params[i]["t_subset"] is not None:
                     label+=f'steps_last{opt_params[i]["t_subset"]}'
-                if opt_params["denoise"]:
+                if opt_params[i]["denoise"]:
                     label+='denoise'
 
         metrics_dict[label] ={
