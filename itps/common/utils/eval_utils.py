@@ -30,20 +30,19 @@ def run_inference(policy, N=100, conditional=False, opt_params=[1]):
 
     IRED_inference_output = [[] for _ in opt_params]
     DDIM_inference_output = []
-    #sample_times = []
-    o=obs[0]
+    #sample_times=[]
 
-    #for o in obs:
+    for o in obs:
         #start = time.perf_counter()
-    actions = policy.run_inference(o, both=True, opt_params=opt_params)
-    #torch.cuda.synchronize()
-    # elapsed = time.perf_counter() - start
+        actions = policy.run_inference(o, both=True, opt_params=opt_params)
+        #torch.cuda.synchronize()
+        # elapsed = time.perf_counter() - start
 
-    # sample_times.append(elapsed)
-    # print(f"Sample time: {elapsed*1000:.1f}ms")
-    DDIM_inference_output.append(actions[-1].detach().cpu().squeeze(1).numpy())
-    for i in range(len(opt_params)):
-        IRED_inference_output[i].append(actions[i].detach().cpu().squeeze(1).numpy())
+        # sample_times.append(elapsed)
+        # print(f"Sample time: {elapsed*1000:.1f}ms")
+        DDIM_inference_output.append(actions[-1].detach().cpu().squeeze(1).numpy())
+        for i in range(len(opt_params)):
+            IRED_inference_output[i].append(actions[i].detach().cpu().squeeze(1).numpy())
 
     # print(f"Avg sample time over {len(sample_times)} obs: {np.mean(sample_times)*1000:.1f}ms")
     return IRED_inference_output + [DDIM_inference_output]
@@ -56,19 +55,12 @@ def run_inference_with_grad_steps(policy, N=50, conditional=False, opt_params=[1
     obs = gen_obs(conditional=conditional, N=N, device=device)
 
     grad_histories_per_opt = [[] for _ in opt_params]
-    #sample_times = []
-    o=obs[0]
-
     
-    #start = time.perf_counter()
-    _, grad_histories = policy.run_inference(o, both=False, opt_params=opt_params, return_grad_steps=True)
-    #torch.cuda.synchronize()
-    # elapsed = time.perf_counter() - start
-    for i in range(len(opt_params)):
-        grad_histories_per_opt[i].append(grad_histories[i])
+    for o in obs:
+        _, grad_histories = policy.run_inference(o, both=False, opt_params=opt_params, return_grad_steps=True)
+        for i in range(len(opt_params)):
+            grad_histories_per_opt[i].append(grad_histories[i])
 
-    # sample_times.append(elapsed)
-    # print(f"Sample time: {elapsed*1000:.1f}ms")
     return grad_histories_per_opt
 
 ## -- CALCULATE ENERGY  -- 
@@ -188,7 +180,7 @@ def log_likelihood(policy, conditional, finetune, N=100, samples=None, opt_param
 
 
 ## -- VISUALIZATION FUNCTIONS -- 
-def vis_inference(policy, samples, conditional, learned_contour=True, t=0, x_range=(-10, 10), y_range=(-10,10)):
+def viz_inference(policy, samples, conditional, learned_contour=True, t=0, x_range=(-10, 10), y_range=(-10,10)):
 
     device = next(policy.parameters()).device
     #if plotting over learned energy contour
@@ -231,7 +223,7 @@ def vis_inference(policy, samples, conditional, learned_contour=True, t=0, x_ran
         plt.title(title)
         plt.show()
 
-def vis_energy_landscape(policy, conditional, t=0, x_range=(-8, 8), y_range=(-8,8)):
+def viz_energy_landscape(policy, conditional, t=0, x_range=(-8, 8), y_range=(-8,8)):
 
     device = next(policy.parameters()).device
     trajs = gen_xy_grid(x_range=x_range, y_range=y_range, device=device)
@@ -261,11 +253,11 @@ def vis_energy_landscape(policy, conditional, t=0, x_range=(-8, 8), y_range=(-8,
         plt.title(title)
         plt.show()
 
-def vis_sample_comparison(samples, train_data):
+def viz_sample_comparison(samples, train_data):
 
     for i in range(len(samples)):
         plt.figure(i)
-        plt.scatter(train_data[:,0], train_data[:,1], s=8, alpha=0.6, edgecolor='none')
+        plt.scatter(train_data[i][:,0], train_data[i][:,1], s=8, alpha=0.6, edgecolor='none')
         plt.scatter(samples[i][:,0], samples[i][:,1], s=8, alpha=0.6, edgecolor='none')
         plt.xlabel("X")
         plt.ylabel("Y")
@@ -274,7 +266,7 @@ def vis_sample_comparison(samples, train_data):
         plt.title(f"Samples against training data (Obs:{i})")
         plt.show()
 
-def vis_ired_grad_steps(policy, grad_history, t, conditional, opt_vals, x_range=(-10, 10), y_range=(-10,10)):
+def viz_ired_grad_steps(policy, grad_history, t, conditional, opt_vals, x_range=(-10, 10), y_range=(-10,10)):
  
       """         
       Overlay IRED gradient step arrows on the learned energy landscape at denoising  
@@ -406,18 +398,20 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
     if viz:
         # Visualize training samples if passed in
         if training_samples is not None:
-            train_data = np.load(training_samples)[:, 1:] #remove conditional obs
-            samples = run_inference(policy, N=np.shape(train_data)[0], conditional=conditional, opt_params=opt_params)
+            train_data_raw = np.load(training_samples)
+            train_data_split = filter_samples(train_data_raw, finetune=finetune, conditonal=conditional)
+            N_per_obs = len(train_data_split[0])
+            samples = run_inference(policy, N=N_per_obs, conditional=conditional, opt_params=opt_params)
             DDIM_samples = samples[-1]
             IRED_samples = samples[0:-1]
-            vis_sample_comparison(DDIM_samples, train_data)
+            viz_sample_comparison(DDIM_samples, train_data_split)
             for opt_step_samples in IRED_samples:
-                vis_sample_comparison(opt_step_samples, train_data)
+                viz_sample_comparison(opt_step_samples, train_data_split)
 
-            # Visualize inferred samples over gt distribution 
-            vis_inference(policy, samples=DDIM_samples, conditional=conditional, learned_contour=False)
-            for opt_step_samples in IRED_samples:
-                vis_inference(policy, samples=opt_step_samples, conditional=conditional, learned_contour=False)
+        # Visualize inferred samples over gt distribution 
+        viz_inference(policy, samples=DDIM_samples, conditional=conditional, learned_contour=False)
+        for opt_step_samples in IRED_samples:
+            viz_inference(policy, samples=opt_step_samples, conditional=conditional, learned_contour=False)
 
         # If visualizing the gradient steps
         if viz_opt:
@@ -429,17 +423,17 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
           for t in range(10):
               for step_i, opt_vals in enumerate(opt_params):                            
                     grad_hist = grad_histories_per_opt[step_i][0]
-                    vis_ired_grad_steps(                                            
+                    viz_ired_grad_steps(                                            
                         policy, grad_hist, t=t, conditional=conditional,
                         opt_vals=opt_vals
                     )
         else:
             # Visualize learned distribution at different denoising steps
             for i in range(10):
-                vis_inference(policy, samples=DDIM_samples, conditional=conditional, learned_contour=True, t=i)
+                viz_inference(policy, samples=DDIM_samples, conditional=conditional, learned_contour=True, t=i)
                 for opt_step_samples in IRED_samples:
-                    vis_inference(policy, samples=opt_step_samples, conditional=conditional, learned_contour=True, t=i)
-                vis_energy_landscape(policy, conditional, t=i)
+                    viz_inference(policy, samples=opt_step_samples, conditional=conditional, learned_contour=True, t=i)
+                viz_energy_landscape(policy, conditional, t=i)
 
     return info
 
