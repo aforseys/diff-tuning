@@ -497,7 +497,7 @@ def main(
                 N = hydra_cfg.eval.n_samples,
                 viz = viz,
                 training_samples = training_samples, #used for viz if viz True
-                opt_params=[1,2,5], 
+                opt_params=[{'n_opt':1, 't_subset': None, 'denoise':False},{'n_opt':2, 't_subset': None, 'denoise':False},{'n_opt':5, 't_subset': None, 'denoise':False}], 
                 viz_opt=True
                 )
         

@@ -117,8 +117,8 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
         # default: use optimization-based sampling
         gen_actions = []
         for p in opt_params: 
-            n, subset = (p[0], p[1]) if isinstance(p, (list, tuple)) else (p, None)
-            gen_actions.append(self.diffusion.generate_actions(observation_batch, guide=guide, visualizer=visualizer, normalizer=self,return_full=return_full, steps_per_timestep=n, opt_subset=subset, return_grad_steps=return_grad_steps))
+            n, subset, denoise = (p["n_opt"], p["t_subset"], p["denoise"]) if isinstance(p, dict) else (p, None, False)
+            gen_actions.append(self.diffusion.generate_actions(observation_batch, guide=guide, visualizer=visualizer, normalizer=self,return_full=return_full, steps_per_timestep=n, opt_subset=subset, denoise = denoise, return_grad_steps=return_grad_steps))
         
         # if returning both, use denoising-based sampling as well
         if both: 
@@ -419,7 +419,7 @@ class EBMDiffusionModel(nn.Module):
         #print('returned sample shape:', sample.shape)
         return sample
     
-    def opt_energy(self, batch_size: int, global_cond: Tensor | None = None, generator: torch.Generator | None = None, steps_per_timestep: int = 1, opt_subset: int | None = None, return_grad_steps: bool = False
+    def opt_energy(self, batch_size: int, global_cond: Tensor | None = None, generator: torch.Generator | None = None, steps_per_timestep: int = 1, opt_subset: int | None = None, denoise: bool = False, return_grad_steps: bool = False
     ) -> Tensor:
         device = get_device_from_parameters(self)
         dtype = get_dtype_from_parameters(self)
@@ -433,7 +433,6 @@ class EBMDiffusionModel(nn.Module):
         )
 
         total_timesteps = 10
-        # steps_per_timestep = 2
         self.noise_scheduler.set_timesteps(total_timesteps)
 
         grad_history = {} if return_grad_steps else None
@@ -448,22 +447,21 @@ class EBMDiffusionModel(nn.Module):
                 grad_history[t.item()]=[]
 
             # Repredict sample from denoised estimate
-            #pred_noise = self.model(sample, batched_t, global_cond=global_cond)
-            #x0_hat = (sample - torch.sqrt(1-alpha_bar_t)*pred_noise)/torch.sqrt(alpha_bar_t)
-            #sample = torch.clamp(torch.sqrt(alpha_bar_t) * x0_hat, -max_val, max_val).detach()
+            if denoise:
+                pred_noise = self.model(sample, batched_t, global_cond=global_cond)
+                x0_hat = (sample - torch.sqrt(1-alpha_bar_t)*pred_noise)/torch.sqrt(alpha_bar_t)
+                sample = torch.clamp(torch.sqrt(alpha_bar_t) * x0_hat, -max_val, max_val).detach()
 
             t_idx = (self.noise_scheduler.timesteps == t).nonzero().item()                                                                      
             if opt_subset is None or t_idx >= (total_timesteps - opt_subset): #skip optimization in landscapes if specified 
                 for _ in range(steps_per_timestep):
                     # compute energy gradient
                     energy, grad = self.model(sample, batched_t, global_cond=global_cond, return_both=True)
-                    #grad = torch.autograd.grad(energy.sum(), sample)[0]
 
                     # IRED-style step size: beta_t / sqrt(1 - alpha_bar_t)
-                    #beta_t = self.noise_scheduler.betas[t].to(sample.device)
-                    #alpha_bar_t = self.noise_scheduler.alphas_cumprod[t].to(sample.device)
-
                     opt_step_size = beta_t / torch.sqrt(1 - alpha_bar_t)
+
+                    # SNR-based step size: 1 / SNR
                     #snr = alpha_bar_t / (1 - alpha_bar_t)
                     #opt_step_size = (1 / snr)  # large when noisy, small when clean
 
@@ -485,20 +483,11 @@ class EBMDiffusionModel(nn.Module):
                     
                     sample = sample_new.detach()
             
-            # c1 rescaling to next landscape
-            timesteps = self.noise_scheduler.timesteps
-           # t_prev_idx = (timesteps == t).nonzero().item() + 1
             if t>0:
                 #t_prev = t - 1
-                t_prev_idx = (timesteps == t).nonzero().item() + 1
-                t_prev = timesteps[t_prev_idx]
+                t_prev_idx = (self.noise_scheduler.timesteps == t).nonzero().item() + 1
+                t_prev = self.noise_scheduler.timesteps[t_prev_idx]
                 alpha_bar_t_prev = self.noise_scheduler.alphas_cumprod[t_prev]
-                # if steps_per_timestep==0:
-                #     # clamp to expected scale at this noise level if not done before
-                #     max_val = torch.sqrt(alpha_bar_t)
-                #     sample = torch.clamp(sample, -max_val, max_val)
-
-                # unscale to x_0 estimate then rescale to t-1
                 x0_est = sample / torch.sqrt(alpha_bar_t)
                 sample = torch.sqrt(alpha_bar_t_prev) * x0_est
 
@@ -619,7 +608,7 @@ class EBMDiffusionModel(nn.Module):
         # return energy_sum/ n
 
 
-    def generate_actions(self, batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, normalizer=None,return_full=False, opt_energy=True, steps_per_timestep=1, opt_subset: int | None = None, return_grad_steps=False) -> Tensor:
+    def generate_actions(self, batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, normalizer=None,return_full=False, opt_energy=True, steps_per_timestep=1, opt_subset: int | None = None, denoise=False, return_grad_steps=False) -> Tensor:
         """
         This function expects `batch` to have:
         {
@@ -639,7 +628,7 @@ class EBMDiffusionModel(nn.Module):
 
         # run sampling
         if opt_energy:
-            result = self.opt_energy(batch_size, global_cond=global_cond, steps_per_timestep=steps_per_timestep, opt_subset=opt_subset, return_grad_steps=return_grad_steps)
+            result = self.opt_energy(batch_size, global_cond=global_cond, steps_per_timestep=steps_per_timestep, opt_subset=opt_subset, denoise=denoise, return_grad_steps=return_grad_steps)
             if return_grad_steps:
                 actions, action_dict['grad_history'] = result
             else:

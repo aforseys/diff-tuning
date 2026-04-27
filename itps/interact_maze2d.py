@@ -244,6 +244,7 @@ class MazeEnv:
         return samples, scores
 
 class UnconditionalMaze(MazeEnv):
+
     # for dragging the agent around to explore motion manifold
     def __init__(self, policy, policy_tag=None, vis_energy=False, maze_type="large", obs_list=None):
         super().__init__(maze_type=maze_type)
@@ -260,6 +261,8 @@ class UnconditionalMaze(MazeEnv):
         agent_hist_xy = np.array(agent_hist_xy).reshape(1, 2)
         if self.policy_tag == 'dp':
             agent_hist_xy = agent_hist_xy.repeat(2, axis=0)
+
+        opt_params = [[2, None, False]] #TODO: UPDATE AS DESIRED FOR VISUALIZATION
 
         obs_batch = {
             "observation.state": einops.repeat(
@@ -287,7 +290,7 @@ class UnconditionalMaze(MazeEnv):
                 actions, energy = self.policy.run_inference(obs_batch, guide=guide, visualizer=visualizer, return_energy=True) # directly call the policy in order to visualize the intermediate steps
                 return actions.detach().cpu().numpy(), energy.detach().cpu().numpy().squeeze()
             else:
-                actions = self.policy.run_inference(obs_batch, guide=guide, visualizer=visualizer).cpu().numpy() # directly call the policy in order to visualize the intermediate steps
+                actions = self.policy.run_inference(obs_batch, guide=guide, visualizer=visualizer, opt_params=opt_params)[0].cpu().numpy() # directly call the policy in order to visualize the intermediate steps
         torch.cuda.synchronize()  # important — ensures GPU work is complete before stopping the clock
         elapsed = time.perf_counter() - start
 

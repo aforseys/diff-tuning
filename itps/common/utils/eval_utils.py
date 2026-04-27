@@ -274,7 +274,7 @@ def vis_sample_comparison(samples, train_data):
         plt.title(f"Samples against training data (Obs:{i})")
         plt.show()
 
-def vis_ired_grad_steps(policy, grad_history, t, conditional, n_inner_steps_label="", x_range=(-10, 10), y_range=(-10,10)):
+def vis_ired_grad_steps(policy, grad_history, t, conditional, opt_vals, x_range=(-10, 10), y_range=(-10,10)):
  
       """         
       Overlay IRED gradient step arrows on the learned energy landscape at denoising  
@@ -325,9 +325,20 @@ def vis_ired_grad_steps(policy, grad_history, t, conditional, n_inner_steps_labe
           ax.set_xlabel("X")
           ax.set_ylabel("Y")                                                          
                   
-      title = f"IRED gradient steps at denoising t={t}"                               
-      if n_inner_steps_label:
-          title += f" ({n_inner_steps_label} inner steps/timestep)"                   
+      title = f"IRED gradient steps at denoising t={t}"      
+
+      
+      if isinstance(opt_vals, dict):
+        n_inner_steps_label = opt_vals["n_opt"]
+        t_time_steps_label = opt_vals["t_subset"]
+        denoise = opt_vals["denoise"]
+      else:
+        n_inner_steps_label = int(opt_vals)
+        t_time_steps_label = "All"
+        denoise = "False"
+
+      title += f" ({n_inner_steps_label} inner steps/timestep, {t_time_steps_label} timesteps, denoise = {denoise})"      
+                   
     #   if conditional:
     #       title += f"\nConditioned on obs {obs_i}"                                    
       plt.suptitle(title)                                                             
@@ -375,10 +386,14 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
     }
     for i in range(len(opt_params)):
 
-        if isinstance(opt_params[i], (list, tuple)):
-            label = f'IRED_{opt_params[i][0]}steps_last{opt_params[i][1]}'                                                                                          
-        else:                                     
+        if not isinstance(opt_params[i], dict):
             label = f'IRED_{opt_params[i]}_steps' 
+        else: 
+            label = f'IRED_{opt_params[i]["n_opt"]}steps'
+            if opt_params["t_subset"] is not None:
+                label+=f'steps_last{opt_params[i]["t_subset"]}'
+            if opt_params["denoise"]:
+                label+='denoise'
 
         info["aggregated"][label] = IRED_ll[i]
 
@@ -412,11 +427,11 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
               policy, N=grad_N, conditional=conditional, opt_params=opt_params          
           )                                                                           
           for t in range(10):
-              for step_i, n_steps in enumerate(opt_params):                            
+              for step_i, opt_vals in enumerate(opt_params):                            
                     grad_hist = grad_histories_per_opt[step_i][0]
                     vis_ired_grad_steps(                                            
                         policy, grad_hist, t=t, conditional=conditional,
-                        n_inner_steps_label=str(n_steps)               
+                        opt_vals=opt_vals
                     )
         else:
             # Visualize learned distribution at different denoising steps
@@ -535,10 +550,18 @@ def eval_maze(policy, cfg, split='test'):
             else:
                 raise NotImplementedError(f"Metric '{m}' not implemented") 
 
-        if isinstance(opt_params[i], (list, tuple)):
-            label = f'IRED_{opt_params[i][0]}steps_last{opt_params[i][1]}'                                                                                          
-        else:                                     
-            label = f'IRED_{opt_params[i]}_steps'   
+        if i == len(trajs) - 1:
+            label = "DDIM"
+
+        else: 
+            if not isinstance(opt_params[i], dict):
+                label = f'IRED_{opt_params[i]}_steps' 
+            else: 
+                label = f'IRED_{opt_params[i]["n_opt"]}steps'
+                if opt_params["t_subset"] is not None:
+                    label+=f'steps_last{opt_params[i]["t_subset"]}'
+                if opt_params["denoise"]:
+                    label+='denoise'
 
         metrics_dict[label] ={
             f"{split}_{m}": {"mean": float(np.mean(vals)), "std": float(np.std(vals)), "per_obs": vals}
