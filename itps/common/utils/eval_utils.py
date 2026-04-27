@@ -397,16 +397,18 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
             train_data_split = filter_samples(train_data_raw, finetune=finetune, conditional=conditional)
             N_per_obs = len(train_data_split[0])
             samples = run_inference(policy, N=N_per_obs, conditional=conditional,  methods=methods, opt_params=opt_params)
-            DDIM_samples = samples[-1]
-            IRED_samples = samples[0:len(opt_params)]
-            viz_sample_comparison(DDIM_samples, train_data_split)
-            for opt_step_samples in IRED_samples:
-                viz_sample_comparison(opt_step_samples, train_data_split)
+            if 'ddim' in methods:
+                viz_sample_comparison(DDIM_samples, train_data_split)
+            if 'ired' in methods:
+                for opt_step_samples in IRED_samples:
+                    viz_sample_comparison(opt_step_samples, train_data_split)
 
         # Visualize inferred samples over gt distribution 
-        viz_inference(policy, samples=DDIM_samples, conditional=conditional, learned_contour=False)
-        for opt_step_samples in IRED_samples:
-            viz_inference(policy, samples=opt_step_samples, conditional=conditional, learned_contour=False)
+        if 'ddim' in methods:
+            viz_inference(policy, samples=DDIM_samples, conditional=conditional, learned_contour=False)
+        if 'ired' in methods:
+            for opt_step_samples in IRED_samples:
+                viz_inference(policy, samples=opt_step_samples, conditional=conditional, learned_contour=False)
 
         # If visualizing the gradient steps
         if viz_opt:
@@ -425,9 +427,11 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
         else:
             # Visualize learned distribution at different denoising steps
             for i in range(10):
-                viz_inference(policy, samples=DDIM_samples, conditional=conditional, learned_contour=True, t=i)
-                for opt_step_samples in IRED_samples:
-                    viz_inference(policy, samples=opt_step_samples, conditional=conditional, learned_contour=True, t=i)
+                if 'ddim' in methods:
+                    viz_inference(policy, samples=DDIM_samples, conditional=conditional, learned_contour=True, t=i)
+                if 'ired' in methods:
+                    for opt_step_samples in IRED_samples:
+                        viz_inference(policy, samples=opt_step_samples, conditional=conditional, learned_contour=True, t=i)
                 viz_energy_landscape(policy, conditional, t=i)
 
     return info
