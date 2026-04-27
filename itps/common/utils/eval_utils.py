@@ -363,8 +363,8 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
         DDIM_samples = samples[-1]
         DDIM_ll = ll[-1]
     if 'ired' in methods:
-        IRED_samples = samples[0:-1]
-        IRED_ll = ll[0:-1]
+        IRED_samples = samples[0:len(opt_params)]
+        IRED_ll = ll[0:len(opt_params)]
 
     info ={
         "aggregated":{
@@ -398,7 +398,7 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
             N_per_obs = len(train_data_split[0])
             samples = run_inference(policy, N=N_per_obs, conditional=conditional,  methods=methods, opt_params=opt_params)
             DDIM_samples = samples[-1]
-            IRED_samples = samples[0:-1]
+            IRED_samples = samples[0:len(opt_params)]
             viz_sample_comparison(DDIM_samples, train_data_split)
             for opt_step_samples in IRED_samples:
                 viz_sample_comparison(opt_step_samples, train_data_split)
