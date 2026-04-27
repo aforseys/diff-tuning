@@ -21,7 +21,7 @@ def gen_obs(conditional, N, device):
         observations.append(obs_dict)
     return observations
 
-def run_inference(policy, N=100, conditional=False, opt_params=[{'n_opt': 1, 't_subset': None, 'denoise': False}], methods=['ired', 'ddim']):
+def run_inference(policy, N=100, conditional=False, methods=['ired', 'ddim'], opt_params=[{'n_opt': 1, 't_subset': None, 'denoise': False}]):
 
     device = next(policy.parameters()).device
     obs = gen_obs(conditional=conditional, N=N, device=device)
@@ -45,7 +45,13 @@ def run_inference(policy, N=100, conditional=False, opt_params=[{'n_opt': 1, 't_
             DDIM_inference_output.append(actions[-1].detach().cpu().squeeze(1).numpy())
 
     # print(f"Avg sample time over {len(sample_times)} obs: {np.mean(sample_times)*1000:.1f}ms")
-    return IRED_inference_output + [DDIM_inference_output]
+    results = []
+    if 'ired' in methods: 
+        results += IRED_inference_output
+    if 'ddim' in methods: 
+        results += [DDIM_inference_output]
+
+    return results
 
 def run_inference_with_grad_steps(policy, N=50, conditional=False,opt_params=[{'n_opt': 1, 't_subset': None, 'denoise': False}]):
 
@@ -337,7 +343,7 @@ def filter_samples(samples, finetune, conditional):
     else: 
         return [np.concatenate(samples_by_obs)] #return list with concatenated np array
 
-def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=None, opt_params=[1], methods=['ired', 'ddim'], viz_opt=False):
+def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=None, opt_params=[{'n_opt': 1, 't_subset': None, 'denoise': False}], methods=['ired', 'ddim'], viz_opt=False):
 
     if condition_type == "conditional":
         conditional=True
@@ -353,27 +359,30 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
     samples, ll = log_likelihood(policy, conditional, finetune, N, opt_params=opt_params, methods=methods)
 
     # DDIM samples are last set, all others are IRED sampling 
-    DDIM_samples = samples[-1]
-    IRED_samples = samples[0:-1]
-
-    DDIM_ll = ll[-1]
-    IRED_ll = ll[0:-1]
+    if 'ddim' in methods:
+        DDIM_samples = samples[-1]
+        DDIM_ll = ll[-1]
+    if 'ired' in methods:
+        IRED_samples = samples[0:-1]
+        IRED_ll = ll[0:-1]
 
     info ={
         "aggregated":{
             "kl_div": kl_div, 
-            "DDIM_log_likelihood": DDIM_ll
-            }
-    }
-    for i in range(len(opt_params)):
+    }}
 
-        label = f'IRED_{opt_params[i]["n_opt"]}steps'
-        if opt_params[i]["t_subset"] is not None:
-            label+=f'steps_last{opt_params[i]["t_subset"]}'
-        if opt_params[i]["denoise"]:
-            label+='denoise'
+    if 'ddim' in methods:
+        info["aggregated"]["DDIM_log_likelihood"]=DDIM_ll
 
-        info["aggregated"][label] = IRED_ll[i]
+    if 'ired' in methods:
+        for i in range(len(opt_params)):
+            label = f'IRED_{opt_params[i]["n_opt"]}steps'
+            if opt_params[i]["t_subset"] is not None:
+                label+=f'steps_last{opt_params[i]["t_subset"]}'
+            if opt_params[i]["denoise"]:
+                label+='denoise'
+
+            info["aggregated"][label] = IRED_ll[i]
 
     if training_samples is not None:
         train_data = np.load(training_samples)
@@ -385,7 +394,7 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
         # Visualize training samples if passed in
         if training_samples is not None:
             train_data_raw = np.load(training_samples)
-            train_data_split = filter_samples(train_data_raw, finetune=finetune, conditonal=conditional)
+            train_data_split = filter_samples(train_data_raw, finetune=finetune, conditional=conditional)
             N_per_obs = len(train_data_split[0])
             samples = run_inference(policy, N=N_per_obs, conditional=conditional,  methods=methods, opt_params=opt_params)
             DDIM_samples = samples[-1]
@@ -520,7 +529,7 @@ def eval_maze(policy, cfg, split='test'):
         obs['episode_goal'] = goal_t.unsqueeze(1).clone()
 
     with torch.no_grad():
-        actions_list = policy.run_inference(obs, methods=['ired', 'ddim'], opt_params=opt_params)
+        actions_list = policy.run_inference(obs, methods=list(cfg.eval.methods), opt_params=opt_params)
 
     # run infernece unnormalizes --> trajectories are in coordinate space
     # actions_list: [IRED_opt0, ..., DDIM] each (N_obs * n_samples, horizon, 2)
@@ -565,10 +574,10 @@ def eval_maze(policy, cfg, split='test'):
             else:
                 raise NotImplementedError(f"Metric '{m}' not implemented") 
 
-        if i == len(trajs) - 1:
+        if 'ddim' in list(cfg.eval.methods) and i == len(trajs) - 1:
             label = "DDIM"
 
-        else: 
+        else:
             label = f'IRED_{opt_params[i]["n_opt"]}steps'
             if opt_params[i]["t_subset"] is not None:
                 label+=f'steps_last{opt_params[i]["t_subset"]}'

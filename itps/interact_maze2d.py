@@ -483,6 +483,7 @@ class ConditionalMaze(UnconditionalMaze):
 
             # Fix agent pos from obs_list if provided
             if self.obs_list is not None:
+                self.obs_idx=0
                 if self.obs_idx >= len(self.obs_list):
                     print("All observations complete.")
                     break
