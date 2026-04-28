@@ -385,20 +385,21 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
         step_identifier = f"{step:0{_num_digits}d}"
         if cfg.training.eval_freq > 0 and step % cfg.training.eval_freq == 0:
             logging.info(f"Eval policy at step {step}")
+            policy.eval()
             with torch.no_grad(), torch.autocast(device_type=device.type) if cfg.use_amp else nullcontext():
                 if cfg.dataset_repo_id == 'gmm':
                     eval_info = eval_GMM(
-                        policy, 
-                        condition_type=condition_type, 
+                        policy,
+                        condition_type=condition_type,
                         N = cfg.eval.n_samples,
                         viz = False,
-                        finetune=finetune, 
+                        finetune=finetune,
                         opt_params = list(cfg.eval.opt_params)
                         )
-                
+
                 elif cfg.dataset_repo_id == 'maze2d':
                     eval_info = {'aggregated':{}}
-                    if cfg.eval.get('train_obs') is not None or cfg.eval.get('test_obs') is not None: 
+                    if cfg.eval.get('train_obs') is not None or cfg.eval.get('test_obs') is not None:
                         for split in ('train', 'test'):
                             split_info = eval_maze(policy, cfg, split=split)
                             for label, metrics in split_info.items():
@@ -415,6 +416,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
                         max_episodes_rendered=4,
                         start_seed=cfg.seed,
                     )
+            policy.train()
             log_eval_info(logger, eval_info["aggregated"], step, cfg, offline_dataset, is_online=is_online)
             if cfg.wandb.enable:
                 if cfg.dataset_repo_id not in ('gmm', 'maze2d'):
