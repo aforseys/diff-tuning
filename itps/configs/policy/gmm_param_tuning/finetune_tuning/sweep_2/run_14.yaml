@@ -6,7 +6,7 @@ dataset_root:
   base: data/gmm_unconditional_1000_42_20251204_174604.npy
   pos: data/gmm_unconditional_pref_cluster_0_positive_dataset_20251204_192929.npy
   neg: data/gmm_unconditional_pref_cluster_0_negative_dataset_20251204_192929.npy
-pretrained_policy_path: data/gmm/general/train/2026.04.27/gmm_2026.04.27.23.22.02_gmm_diffusion/checkpoints/last/pretrained_model
+pretrained_policy_path: data/gmm/general/train/pretrained_model_100
 wandb:
   enable: true
 hydra:
