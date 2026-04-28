@@ -534,12 +534,22 @@ def eval_maze(policy, cfg, split='test'):
         goal_t = torch.tensor(goals, dtype=torch.float32, device=device)
         obs['episode_goal'] = goal_t.unsqueeze(1).clone()
 
+    chunk_size = 256
+    total = state_t.shape[0]
+    all_chunks = None
     with torch.no_grad():
-        actions_list = policy.run_inference(obs, methods=list(cfg.eval.methods), opt_params=opt_params)
+        for start in range(0, total, chunk_size):
+            chunk_obs = {k: v[start:start + chunk_size] for k, v in obs.items()}
+            chunk_trajs = policy.run_inference(chunk_obs, methods=list(cfg.eval.methods), opt_params=opt_params)
+            if all_chunks is None:
+                all_chunks = [[t.cpu()] for t in chunk_trajs]
+            else:
+                for i, t in enumerate(chunk_trajs):
+                    all_chunks[i].append(t.cpu())
 
-    # run infernece unnormalizes --> trajectories are in coordinate space
-    # actions_list: [IRED_opt0, ..., DDIM] each (N_obs * n_samples, horizon, 2)
-    trajs = [a.cpu().numpy() for a in actions_list]
+    # run_inference unnormalizes --> trajectories are in coordinate space
+    # each entry: (N_obs * n_samples, horizon, 2)
+    trajs = [torch.cat(chunks).numpy() for chunks in all_chunks]
 
     metrics_dict ={}
     for i, traj in enumerate(trajs):
