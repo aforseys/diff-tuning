@@ -46,7 +46,7 @@ training:
 
 eval:
   n_samples: 200
-  opt_params: [{'n_opt': 1, 't_subset': null, 'denoise': False}, {'n_opt': 2, 't_subset': null, 'denoise': False}, {'n_opt': 5, 't_subset': null, 'denoise': False}]
+  opt_params: [{'n_opt': 1, 't_subset': null, 'denoise': False}, {'n_opt': 2, 't_subset': null, 'denoise': False}, {'n_opt': 5, 't_subset': null, 'denoise': False}, {'n_opt': 1, 't_subset': 5, 'denoise': False}, {'n_opt': 1, 't_subset': 2, 'denoise': False}]
   methods: ['ired', 'ddim']
 
 policy:
@@ -87,7 +87,7 @@ policy:
   use_film_scale_modulation: True
   # Noise scheduler.
   noise_scheduler_type: DDIM
-  num_train_timesteps: 10
+  num_train_timesteps: 100
   beta_schedule: squaredcos_cap_v2
   beta_start: 0.0001
   beta_end: 0.02
