@@ -95,76 +95,121 @@ def pick_start_positions(maze_type='large', n_positions=None, savepath=None):
     return positions
 
 
-def _bfs_sample_goal(maze, start, min_steps, max_steps, rng):
+def _bfs_distance_map(maze, start_cell):
+    """Return dict mapping (r, c) -> BFS path distance from start_cell."""
     rows, cols = maze.shape
-    visited = np.zeros((rows, cols), dtype=bool)
-    visited[start[0], start[1]] = True
-    queue = deque([(int(start[0]), int(start[1]), 0)])
-    candidates = []
-
+    start = (int(start_cell[0]), int(start_cell[1]))
+    dist_map = {start: 0}
+    queue = deque([(start[0], start[1], 0)])
     while queue:
-        r, c, dist = queue.popleft()
-        if (min_steps is None or dist >= min_steps) and (max_steps is None or dist <= max_steps):
-            if not (r == start[0] and c == start[1]):
-                candidates.append((r, c))
-        if max_steps is not None and dist >= max_steps:
-            continue
+        r, c, d = queue.popleft()
         for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
             nr, nc = r + dr, c + dc
-            if 0 <= nr < rows and 0 <= nc < cols and not maze[nr, nc] and not visited[nr, nc]:
-                visited[nr, nc] = True
-                queue.append((nr, nc, dist + 1))
+            if 0 <= nr < rows and 0 <= nc < cols and not maze[nr, nc] and (nr, nc) not in dist_map:
+                dist_map[(nr, nc)] = d + 1
+                queue.append((nr, nc, d + 1))
+    return dist_map
 
-    if not candidates:
-        return None
-    return candidates[rng.integers(len(candidates))]
+
+def _build_candidate_pool(env, clearance=0.8, grid_spacing=0.1):
+    """Precompute all positions on a fine grid that pass collision and clearance checks."""
+    wall_cells = np.argwhere(env.maze).astype(float)
+    xs = np.arange(0.0, env.maze.shape[0], grid_spacing)
+    ys = np.arange(0.0, env.maze.shape[1], grid_spacing)
+    grid = np.array([[x, y] for x in xs for y in ys])
+    collisions = env.check_collision(grid.reshape(-1, 1, 2))
+    grid = grid[~collisions]
+    dists = np.min(np.linalg.norm(grid[:, None, :] - wall_cells[None, :, :], axis=2), axis=1)
+    grid = grid[dists >= clearance]
+    return grid
+
+
+def _sample_free(env, rng, candidates, existing=None, min_sep=1.5):
+    """Sample a position from the candidate pool, at least `min_sep` from all existing positions."""
+    if existing is not None and len(existing) > 0:
+        existing_arr = np.array(existing)
+        dists = np.min(np.linalg.norm(candidates[:, None, :] - existing_arr[None, :, :], axis=2), axis=1)
+        valid = candidates[dists >= min_sep]
+    else:
+        valid = candidates
+    if len(valid) == 0:
+        print(f"  Warning: no position found with min_sep={min_sep}, relaxing to min_sep=1.0")
+        dists = np.min(np.linalg.norm(candidates[:, None, :] - existing_arr[None, :, :], axis=2), axis=1)
+        valid = candidates[dists >= 1.0]
+    if len(valid) == 0:
+        print(f"  Warning: still no position found, using full candidate pool")
+        valid = candidates
+    return valid[rng.integers(len(valid))]
 
 
 def generate_random_observations(maze_type='large', n=10, include_goals=False,
-                                  min_goal_steps=None, max_goal_steps=None,
-                                  savepath=None):
+                                  min_goal_dist=5, max_goal_dist=7,
+                                  savepath=None, seed=0, split=None):
     """
     Generate N random legal observations in the maze, optionally with goals.
 
     Parameters
     ----------
-    maze_type       : 'open' | 'sparse' | 'large'
-    n               : number of observations to generate
-    include_goals   : if True, also generate a goal for each obs
-    min_goal_steps  : minimum BFS steps from obs to goal
-    max_goal_steps  : maximum BFS steps from obs to goal
-    savepath        : directory to save JSON file
+    maze_type      : 'open' | 'sparse' | 'large'
+    n              : number of observations to generate
+    include_goals  : if True, also generate a goal for each obs (each entry is [x, y, goal_x, goal_y])
+    min_goal_dist  : minimum BFS path distance (in cells) from obs to goal (default 5)
+    max_goal_dist  : maximum BFS path distance (in cells) from obs to goal (default 15)
+    savepath       : directory to save JSON file
+    seed           : random seed for reproducibility (default 0)
+    split          : if provided (e.g. 0.8), fraction used for train; saves separate train/test files
 
     Returns
     -------
-    list of [x, y] or [x, y, goal_x, goal_y] in maze XY space
+    list of [x, y] or [x, y, goal_x, goal_y], or (train_list, test_list) if split is set
     """
     env = MazeEnv(maze_type)
-    maze = env.maze
-    free_cells = np.argwhere(~maze)
-    rng = np.random.default_rng()
-
-    replace = n > len(free_cells)
-    starts = free_cells[rng.choice(len(free_cells), size=n, replace=replace)]
+    rng = np.random.default_rng(seed)
+    candidates = _build_candidate_pool(env)
 
     positions = []
-    for start in starts:
-        x, y = float(start[0]), float(start[1])
+    starts_so_far = []
+    for _ in range(n):
+        start = _sample_free(env, rng, candidates, existing=starts_so_far)
+        starts_so_far.append(start)
         if include_goals:
-            goal = _bfs_sample_goal(maze, start, min_goal_steps, max_goal_steps, rng)
-            if goal is None:
-                goal = free_cells[rng.integers(len(free_cells))]
-            positions.append([x, y, float(goal[0]), float(goal[1])])
+            start_cell = tuple(np.round(start).astype(int))
+            dist_map = _bfs_distance_map(env.maze, start_cell)
+            for _ in range(10000):
+                goal = _sample_free(env, rng, candidates)
+                goal_cell = tuple(np.round(goal).astype(int))
+                d = dist_map.get(goal_cell)
+                if d is not None and min_goal_dist <= d <= max_goal_dist:
+                    break
+            else:
+                print(f"  Warning: no goal found in path distance [{min_goal_dist}, {max_goal_dist}] from {start.tolist()}, using random free position")
+                goal = _sample_free(env, rng)
+            positions.append(start.tolist() + goal.tolist())
         else:
-            positions.append([x, y])
+            positions.append(start.tolist())
 
     prefix = 'set_obs_gc' if include_goals else 'set_obs'
-    filename = f"{prefix}_{n}_" + time.strftime("%Y%m%d_%H%M%S")
-    with open(os.path.join(savepath, filename), 'w') as f:
-        json.dump(positions, f, indent=2)
-    print(f"Saved {n} observations to {os.path.join(savepath, filename)}")
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    if include_goals:
+        base_filename = f"{prefix}_{n}_min{min_goal_dist}_max{max_goal_dist}_seed{seed}_{timestamp}"
+    else:
+        base_filename = f"{prefix}_{n}_seed{seed}_{timestamp}"
 
-    return positions
+    if split is not None:
+        rng.shuffle(positions)
+        n_train = int(len(positions) * split)
+        train, test = positions[:n_train], positions[n_train:]
+        for subset, tag in [(train, 'train'), (test, 'test')]:
+            fname = f"{base_filename}_{tag}"
+            with open(os.path.join(savepath, fname), 'w') as f:
+                json.dump(subset, f, indent=2)
+            print(f"Saved {len(subset)} {tag} observations to {os.path.join(savepath, fname)}")
+        return train, test
+    else:
+        with open(os.path.join(savepath, base_filename), 'w') as f:
+            json.dump(positions, f, indent=2)
+        print(f"Saved {n} observations{'  (with goals)' if include_goals else ''} to {os.path.join(savepath, base_filename)}")
+        return positions
 
 
 def visualize_observations(positions, maze_type='large'):
@@ -187,7 +232,7 @@ def visualize_observations(positions, maze_type='large'):
 
         for i, pos in enumerate(positions):
             start_gui = env.xy2gui(np.array(pos[:2]))
-            pygame.draw.circle(env.screen, env.GREEN,
+            pygame.draw.circle(env.screen, env.agent_color,
                                (int(start_gui[0]), int(start_gui[1])), 12)
             if has_goals:
                 goal_gui = env.xy2gui(np.array(pos[2:]))
@@ -196,8 +241,6 @@ def visualize_observations(positions, maze_type='large'):
                 pygame.draw.line(env.screen, (180, 180, 180),
                                  (int(start_gui[0]), int(start_gui[1])),
                                  (int(goal_gui[0]), int(goal_gui[1])), 1)
-            label = font.render(str(i), True, (255, 255, 255))
-            env.screen.blit(label, (int(start_gui[0]) + 8, int(start_gui[1]) - 8))
 
         caption = f"{len(positions)} obs" + (" + goals" if has_goals else "") + "   Q=quit"
         surf = font.render(caption, True, (30, 30, 30), (220, 220, 220))
@@ -346,13 +389,13 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-mt', '--maze_type', default='large', type=str, help="Maze type: open | sparse | large")
-    parser.add_argument('-s', '--savepath', type=str, required=True, help="Directory to save output files")
+    parser.add_argument('-s', '--savepath', type=str, default=None, help="Directory to save output files")
     parser.add_argument('--pick-obs', action='store_true', help="Manually pick start positions")
     parser.add_argument('--gen-obs', action='store_true', help="Generate random observations")
     parser.add_argument('--n-obs', type=int, default=10, help="Number of observations to generate")
     parser.add_argument('--include-goals', action='store_true', help="Generate goal for each observation")
-    parser.add_argument('--min-goal-steps', type=int, default=20, help="Min BFS steps from obs to goal")
-    parser.add_argument('--max-goal-steps', type=int, default=40, help="Max BFS steps from obs to goal")
+    parser.add_argument('--min-goal-dist', type=int, default=5, help="Min BFS path distance (cells) from obs to goal")
+    parser.add_argument('--max-goal-dist', type=int, default=7, help="Max BFS path distance (cells) from obs to goal")
     parser.add_argument('--viz-obs', action='store_true', help="Visualize observations from file")
     parser.add_argument('--obs-file', type=str, default=None, help="Path to obs JSON file for visualization")
     parser.add_argument('--gen-pref', action='store_true', help="Generate preference pairs from saved trials")
@@ -360,6 +403,8 @@ if __name__ == "__main__":
     parser.add_argument('--score-threshold', type=float, default=0.3)
     parser.add_argument('--metric', type=str, default='similarity_score')
     parser.add_argument('--viz-pref', action='store_true', help="Visualize preference pairs during generation")
+    parser.add_argument('--seed', type=int, default=0, help="Random seed for reproducibility (used by --gen-obs)")
+    parser.add_argument('--split', type=float, default=None, help="Train fraction for train/test split (e.g. 0.8 for 80/20)")
     args = parser.parse_args()
 
     if args.pick_obs:
@@ -369,16 +414,20 @@ if __name__ == "__main__":
         sys.exit(0)
 
     if args.gen_obs:
+        assert args.savepath is not None, "Pass --savepath to save generated observations"
         positions = generate_random_observations(
             maze_type=args.maze_type,
             n=args.n_obs,
             include_goals=args.include_goals,
-            min_goal_steps=args.min_goal_steps if args.include_goals else None,
-            max_goal_steps=args.max_goal_steps if args.include_goals else None,
+            min_goal_dist=args.min_goal_dist if args.include_goals else None,
+            max_goal_dist=args.max_goal_dist if args.include_goals else None,
             savepath=args.savepath,
+            seed=args.seed,
+            split=args.split,
         )
         if args.viz_obs:
-            visualize_observations(positions, maze_type=args.maze_type)
+            all_positions = positions[0] + positions[1] if args.split is not None else positions
+            visualize_observations(all_positions, maze_type=args.maze_type)
         sys.exit(0)
 
     if args.viz_obs:
