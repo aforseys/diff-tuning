@@ -47,11 +47,11 @@ training:
 
 eval:
   n_samples: 32             # trajectory samples per starting observation
-  opt_params: [1, 2, 5]            # IRED inner step counts; DDIM always included
-  goal: null                # [gx, gy] in maze coords, required for goal_dist metric
-  metrics: ['collision_rate']
-  train_obs: data/maze_obs/set_obs_10_20260324_222648  # path to JSON file of starting positions
-  test_obs: null            # path to JSON file of starting positions
+  opt_params: [{'n_opt': 1, 't_subset': null, 'denoise': False}, {'n_opt': 2, 't_subset': null, 'denoise': False}, {'n_opt': 1, 't_subset': 5, 'denoise': False}, {'n_opt': 1, 't_subset': 5, 'denoise': True} {'n_opt': 2, 't_subset': 5, 'denoise': True}]
+  goal: null
+  metrics: [collision_rate]
+  train_obs: data/maze_obs/set_obs_40_seed0_20260427_231422_train
+  test_obs: data/maze_obs/set_obs_40_seed0_20260427_231422_test           
 
 policy:
   name: diffusion
