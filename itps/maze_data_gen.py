@@ -154,7 +154,7 @@ def generate_random_observations(maze_type='large', n=10, include_goals=False,
     n              : number of observations to generate
     include_goals  : if True, also generate a goal for each obs (each entry is [x, y, goal_x, goal_y])
     min_goal_dist  : minimum BFS path distance (in cells) from obs to goal (default 5)
-    max_goal_dist  : maximum BFS path distance (in cells) from obs to goal (default 15)
+    max_goal_dist  : maximum BFS path distance (in cells) from obs to goal (default 7)
     savepath       : directory to save JSON file
     seed           : random seed for reproducibility (default 0)
     split          : if provided (e.g. 0.8), fraction used for train; saves separate train/test files
@@ -183,7 +183,7 @@ def generate_random_observations(maze_type='large', n=10, include_goals=False,
                     break
             else:
                 print(f"  Warning: no goal found in path distance [{min_goal_dist}, {max_goal_dist}] from {start.tolist()}, using random free position")
-                goal = _sample_free(env, rng)
+                goal = _sample_free(env, rng, candidates)
             positions.append(start.tolist() + goal.tolist())
         else:
             positions.append(start.tolist())
