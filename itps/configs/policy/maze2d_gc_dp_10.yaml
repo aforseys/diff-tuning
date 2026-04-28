@@ -3,7 +3,7 @@
 seed: 100000
 dataset_repo_id: maze2d
 condition_type: conditional
-env_type: dense
+env_type: large
 dataset_root: 'data/maze2d-large-sparse-v1.hdf5'
 
 wandb:
@@ -16,7 +16,7 @@ hydra:
   job:
     name: ${now:%H.%M.%S}_${env.name}_${policy.name}
 
-device: "cuda:0"  # cpu
+device: "cuda"  # cpu
 
 training:
   offline_steps: 100000
