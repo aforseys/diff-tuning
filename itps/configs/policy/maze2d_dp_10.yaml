@@ -50,6 +50,7 @@ eval:
   opt_params: [{'n_opt': 1, 't_subset': null, 'denoise': False}, {'n_opt': 2, 't_subset': null, 'denoise': False}, {'n_opt': 1, 't_subset': 5, 'denoise': False}, {'n_opt': 1, 't_subset': 5, 'denoise': True}, {'n_opt': 2, 't_subset': 5, 'denoise': True}]
   goal: null
   metrics: [collision_rate]
+  methods: ['ired', 'ddim']
   train_obs: data/maze_obs/set_obs_40_seed0_20260427_231422_train
   test_obs: data/maze_obs/set_obs_40_seed0_20260427_231422_test           
 
