@@ -471,7 +471,7 @@ def main(
 
     log_output_dir(out_dir)
 
-    if hydra_cfg.env.name == 'maze2d':
+    if hydra_cfg.env.name not in ('gmm', 'maze2d'):  
         logging.info("Making environment.")
         env = make_env(hydra_cfg)
 
@@ -528,7 +528,7 @@ def main(
     with open(Path(out_dir) / "eval_info.json", "w") as f:
         json.dump(info, f, indent=2)
 
-    if not hydra_cfg.env.name == 'gmm':
+    if hydra_cfg.env.name not in ('gmm', 'maze2d'):  
          env.close()
 
     logging.info("End of eval")
