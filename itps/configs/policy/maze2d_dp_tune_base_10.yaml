@@ -6,9 +6,9 @@ condition_type: unconditional
 env_type: large
 dataset_root:
   base: 'data/maze2d-large-sparse-v1.hdf5'
-  pos: data/maze_comparisons/landscape_100_seed_0_maze_20260429_233131_winners.npz
-  neg: data/maze_comparisons/landscape_100_seed_0_maze_20260429_233131_winners.npz
-pretrained_policy_path: data/maze2d_dp/large/general/train/2026.04.28/16.25.20_maze2d_diffusion/checkpoints/last/pretrained_model
+  pos: data/maze_comparisons/landscape_10_seed_0_maze_20260429_233201_winners.npz
+  neg: data/maze_comparisons/landscape_10_seed_0_maze_20260429_233201_losers.npz
+pretrained_policy_path: data/maze2d_dp/large/general/train/2026.04.28/22.36.12_maze2d_diffusion/checkpoints/last/pretrained_model
 
 wandb:
   enable: true
@@ -52,7 +52,7 @@ training:
 eval:
   n_samples: 32     # trajectory samples per starting observation
   opt_params: [{'n_opt': 1, 't_subset': null, 'denoise': False}, {'n_opt': 2, 't_subset': null, 'denoise': False}, {'n_opt': 1, 't_subset': 5, 'denoise': False}, {'n_opt': 1, 't_subset': 5, 'denoise': True}, {'n_opt': 2, 't_subset': 5, 'denoise': True}]
-  goal: [0.98, 9.95]
+  goal: [0.87, 10.0]
   metrics: [collision_rate, finetune_goal_dist]
   methods: ['ired', 'ddim']
   train_obs: data/maze_obs/set_obs_40_seed0_20260427_231422_train
@@ -96,7 +96,7 @@ policy:
   use_film_scale_modulation: True
   # Noise scheduler.
   noise_scheduler_type: DDIM
-  num_train_timesteps: 100
+  num_train_timesteps: 10
   beta_schedule: squaredcos_cap_v2
   beta_start: 0.0001
   beta_end: 0.02
