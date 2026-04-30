@@ -14,7 +14,7 @@ env_type: large
 dataset_root:
   base: 'data/maze2d-large-sparse-v1.hdf5'
   pos: data/maze_comparisons/landscape_100_seed_0_maze_20260429_233131_winners.npz
-  neg: data/maze_comparisons/landscape_100_seed_0_maze_20260429_233131_winners.npz
+  neg: data/maze_comparisons/landscape_100_seed_0_maze_20260429_233131_losers.npz
 pretrained_policy_path: data/maze2d_dp/large/general/train/pretrained_maze_100
 
 wandb:
