@@ -217,8 +217,12 @@ class MazeEnv:
 
         pygame.draw.circle(self.screen, self.agent_color, (int(self.agent_gui_pos[0]), int(self.agent_gui_pos[1])), 20)
         if keep_drawing: # visualize the human drawing input
-            for i in range(len(self.draw_traj) - 1):
-                pygame.draw.line(self.screen, self.GRAY, self.draw_traj[i], self.draw_traj[i + 1], 10)
+            if len(self.draw_traj) == 1:
+                pt = self.draw_traj[0]
+                pygame.draw.circle(self.screen, self.GRAY, (int(pt[0]), int(pt[1])), 12)
+            else:
+                for i in range(len(self.draw_traj) - 1):
+                    pygame.draw.line(self.screen, self.GRAY, self.draw_traj[i], self.draw_traj[i + 1], 10)
   
         pygame.display.flip()
 
@@ -396,7 +400,7 @@ class UnconditionalMaze(MazeEnv):
 
 class ConditionalMaze(UnconditionalMaze):
     # for interactive guidance dataset collection
-    def __init__(self, policy, vis_dp_dynamics=False, savepath=None, alignment_strategy=None, policy_tag=None,  maze_type='large', obs_list=None, opt_params=None, ddim=False):
+    def __init__(self, policy, vis_dp_dynamics=False, savepath=None, alignment_strategy=None, policy_tag=None,  maze_type='large', obs_list=None, opt_params=None, ddim=False, point_guide=False):
         super().__init__(policy, policy_tag=policy_tag,  maze_type=maze_type, obs_list=obs_list, opt_params=opt_params, ddim=ddim)
         self.drawing = False
         self.keep_drawing = False
@@ -407,6 +411,7 @@ class ConditionalMaze(UnconditionalMaze):
         self.collisions = None # boolean array
         self.scores = None # numpy array
         self.alignment_strategy = alignment_strategy
+        self.point_guide = point_guide
 
     def run(self):
         if self.savepath is not None:
@@ -427,21 +432,29 @@ class ConditionalMaze(UnconditionalMaze):
                 if event.type == pygame.QUIT:
                     self.running = False
                     break
-                if any(pygame.mouse.get_pressed()):  # Check if mouse button is pressed
-                    if not self.drawing:
-                        self.drawing = True
-                        self.draw_traj = []
-                    self.draw_traj.append(self.mouse_pos)
-                else: # mouse released
-                    if self.drawing: 
-                        self.drawing = False # finish drawing action
-                        self.keep_drawing = True # keep visualizing the drawing
-                if event.type == pygame.KEYDOWN: 
+                if self.point_guide:
+                    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                        self.draw_traj = [self.mouse_pos.copy()]
+                        goal_xy = self.gui2xy(self.mouse_pos)
+                        print(f"Guide point set at GUI: {self.mouse_pos.tolist()}, XY: {goal_xy.tolist()}")
+                        self.drawing = False
+                        self.keep_drawing = True
+                else:
+                    if any(pygame.mouse.get_pressed()):  # Check if mouse button is pressed
+                        if not self.drawing:
+                            self.drawing = True
+                            self.draw_traj = []
+                        self.draw_traj.append(self.mouse_pos)
+                    else: # mouse released
+                        if self.drawing:
+                            self.drawing = False # finish drawing action
+                            self.keep_drawing = True # keep visualizing the drawing
+                if event.type == pygame.KEYDOWN:
                     # press s to save the trial
                     if event.key == pygame.K_s and self.savefile is not None:
-                        self.save_trials()             
+                        self.save_trials()
 
-            if self.keep_drawing: # visualize the human drawing input
+            if self.keep_drawing and not self.point_guide: # visualize the human drawing input
                 # Check if mouse returns to the agent's location
                 if np.linalg.norm(self.mouse_pos - self.agent_gui_pos) < 20:  # Threshold distance to reactivate the agent
                     self.keep_drawing = False # delete the drawing
@@ -1038,6 +1051,7 @@ if __name__ == "__main__":
     parser.add_argument('--opt_steps', type=int, default=1)
     parser.add_argument('--t_subset', type=int, default=None)
     parser.add_argument('--denoise', action='store_true')
+    parser.add_argument('--point-guide', action='store_true', help="Use a single clicked point as guide instead of drawn line")
     args = parser.parse_args()
 
     # Create and load the policy
@@ -1130,7 +1144,7 @@ if __name__ == "__main__":
             savepath = f"{args.loadpath[:-5]}_{policy_tag}_{alignment_tag}{args.savepath}"
         interactiveMaze = MazeExp(policy, args.vis_dp_dynamics, savepath, alignment_strategy, policy_tag=policy_tag, loadpath=args.loadpath, maze_type=args.maze_type)
     else:
-        interactiveMaze = ConditionalMaze(policy, args.vis_dp_dynamics, args.savepath, alignment_strategy, policy_tag=policy_tag, maze_type=args.maze_type, obs_list=obs_list, opt_params=opt_params, ddim=ddim)
+        interactiveMaze = ConditionalMaze(policy, args.vis_dp_dynamics, args.savepath, alignment_strategy, policy_tag=policy_tag, maze_type=args.maze_type, obs_list=obs_list, opt_params=opt_params, ddim=ddim, point_guide=args.point_guide)
     if args.goal_conditioned:
         interactiveMaze.run_gc()
     else:

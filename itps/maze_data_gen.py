@@ -258,8 +258,8 @@ def visualize_observations(positions, maze_type='large'):
     pygame.quit()
 
 
-def extract_preference_pairs(loadpath, savepath, maze_type='large', score_threshold=0.3, metric='similarity_score', metric_kwargs=None, viz=False):
-    prefix = 'maze_' + time.strftime("%Y%m%d_%H%M%S")
+def extract_preference_pairs(loadpath, savepath, maze_type='large', score_threshold=0.3, metric='similarity_score', metric_kwargs=None, viz=False, prefix=None):
+    prefix = (prefix + '_' if prefix else '') + 'maze_' + time.strftime("%Y%m%d_%H%M%S")
 
     maze_env = MazeEnv(maze_type)
     metric_kwargs = metric_kwargs or {}
@@ -281,6 +281,15 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
             scores = (~collisions).astype(float)
             samples = np.asarray(trial["pred_traj"], dtype=float)
             guide = None
+        elif metric == 'endpoint_distance':
+            guide = np.array(trial["guide"])
+            if len(guide) == 0:
+                continue
+            goal_gui = guide[0]  # GUI space, consistent with similarity_score
+            pred_traj = np.asarray(trial["pred_traj"], dtype=float)  # (B, T, 2) GUI space
+            dists = np.linalg.norm(pred_traj[:, -1, :] - goal_gui, axis=1)
+            scores = 1.0 - dists / (dists.max() + 1e-6)  # closer endpoint = higher score
+            samples = pred_traj
         else:
             raise NotImplementedError(f"Metric '{metric}' is not implemented.")
 
@@ -403,6 +412,7 @@ if __name__ == "__main__":
     parser.add_argument('--score-threshold', type=float, default=0.3)
     parser.add_argument('--metric', type=str, default='similarity_score')
     parser.add_argument('--viz-pref', action='store_true', help="Visualize preference pairs during generation")
+    parser.add_argument('--prefix', type=str, default=None, help="Optional prefix to prepend to output filenames")
     parser.add_argument('--seed', type=int, default=0, help="Random seed for reproducibility (used by --gen-obs)")
     parser.add_argument('--split', type=float, default=None, help="Train fraction for train/test split (e.g. 0.8 for 80/20)")
     args = parser.parse_args()
@@ -446,5 +456,6 @@ if __name__ == "__main__":
             score_threshold=args.score_threshold,
             metric=args.metric,
             viz=args.viz_pref,
+            prefix=args.prefix,
         )
         sys.exit(0)
