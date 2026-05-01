@@ -3,8 +3,8 @@
 seed: 100000
 dataset_repo_id: maze2d
 condition_type: unconditional
-env_type: open
-dataset_root: data/maze2d-open.hdf5
+env_type: sparse
+dataset_root: data/maze2d-sparse.hdf5
 
 wandb:
   enable: true
@@ -51,8 +51,8 @@ eval:
   goal: null
   metrics: [collision_rate]
   methods: ['ired', 'ddim']
-  train_obs: data/maze_obs/set_obs_40_seed0_20260430_031121_train
-  test_obs: data/maze_obs/set_obs_40_seed0_20260430_031121_test
+  train_obs: data/maze_obs/set_obs_40_seed0_20260430_031144_train
+  test_obs: data/maze_obs/set_obs_40_seed0_20260430_031144_test
 
 policy:
   name: diffusion
