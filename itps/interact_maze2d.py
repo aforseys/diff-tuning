@@ -51,6 +51,7 @@ from common.policies.diffusion.modeling_diffusion import DiffusionPolicy
 from common.policies.act.modeling_act import ACTPolicy
 from common.policies.rollout_wrapper import PolicyRolloutWrapper
 from common.utils.utils import seeded_context, init_hydra_config
+from common.utils.maze_maps import MAZE_MAPS
 from common.policies.factory import make_policy
 from common.datasets.factory import make_dataset
 from scipy.special import softmax
@@ -70,38 +71,9 @@ class MazeEnv:
         #         |
         #         v
         #       maze_shape[0] #9
-        open_maze = np.array([[1, 1, 1, 1, 1, 1, 1],
-                                [1, 0, 0, 0, 0, 0, 1],
-                                [1, 0, 0, 0, 0, 0, 1],
-                                [1, 0, 0, 0, 0, 0, 1],
-                                [1, 1, 1, 1, 1, 1, 1]]).astype(bool)
-        sparse_maze = np.array([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-                            [1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1],
-                            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-                            [1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1],
-                            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-                            [1, 0, 1, 1, 0, 0, 0, 0, 1, 1, 0, 1],
-                            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-                            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]]).astype(bool)
-        large_maze = np.array([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                            [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1],
-                            [1, 0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1],
-                            [1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1],
-                            [1, 0, 1, 1, 1, 1, 0, 1, 1, 1, 0, 1],
-                            [1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1],
-                            [1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 1],
-                            [1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
-                            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]]).astype(bool)
-        
-        if maze_type == "sparse":
-            self.maze = sparse_maze
-        elif maze_type=="open": 
-            self.maze = open_maze
-        elif maze_type=="large": 
-            self.maze = large_maze
-        else:
+        if maze_type not in MAZE_MAPS:
             raise NotImplementedError("Maze type does not exist!")
+        self.maze = MAZE_MAPS[maze_type]
 
         self.gui_size = (1200, 900)
         self.fps = 10
