@@ -352,7 +352,8 @@ def generate_dataset(maze, n_episodes, episode_length, scale=5, clearance=0.3,
                                   lookahead=lookahead)
         start = ep * episode_length
         observations[start: start + episode_length] = ep_obs
-        timeouts[start + episode_length - 1] = True
+        last_raw = start + episode_length - 1
+        timeouts[last_raw - (last_raw % 4)] = True  # align to 4x downsampling grid
 
         if (ep + 1) % log_every == 0:
             elapsed = time.time() - t0
