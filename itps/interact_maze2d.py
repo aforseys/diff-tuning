@@ -363,8 +363,8 @@ class UnconditionalMaze(MazeEnv):
                 if self.vis_energy: 
                     xy_pred, energy = self.infer_target(goal_pos = goal_pos, return_energy=True)
                     self.update_screen(xy_pred, scores=energy, goal=goal_gui_pos)
-                else: 
-                    xy_pred = self.infer_target()
+                else:
+                    xy_pred = self.infer_target(goal_pos=goal_pos)
                     self.update_screen(xy_pred, goal=goal_gui_pos)
                 self.clock.tick(30)
 
