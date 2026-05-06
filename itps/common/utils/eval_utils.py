@@ -516,11 +516,11 @@ def eval_maze(policy, cfg, split='test'):
     with torch.no_grad():
         for start in range(0, total, chunk_size):
             chunk_obs = {k: v[start:start + chunk_size] for k, v in obs.items()}
-            chunk_trajs = policy.run_inference(chunk_obs, methods=list(cfg.eval.methods), opt_params=opt_params)
+            _, chunk_full_trajs = policy.run_inference(chunk_obs, methods=list(cfg.eval.methods), opt_params=opt_params, return_full=True)
             if all_chunks is None:
-                all_chunks = [[t.cpu()] for t in chunk_trajs]
+                all_chunks = [[t.cpu()] for t in chunk_full_trajs]
             else:
-                for i, t in enumerate(chunk_trajs):
+                for i, t in enumerate(chunk_full_trajs):
                     all_chunks[i].append(t.cpu())
 
     # run_inference unnormalizes --> trajectories are in coordinate space
