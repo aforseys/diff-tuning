@@ -395,6 +395,119 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
     return pairs
 
 
+def visualize_preference_pairs(winners_path, losers_path, meta_path=None, maze_type='large', goal=None):
+    """
+    Load saved preference pair .npz files and replay them in a pygame window.
+
+    Winner trajectory is shown in full color; loser is tinted white (same as
+    the collision rendering used elsewhere).  The guide sketch is drawn in gray
+    when a meta .json file is provided.
+
+    Controls: N = next pair,  P = previous pair,  Q / Esc = quit
+    """
+    winners_obs = np.load(winners_path)['observations']   # (N*(2+T), 2)
+    losers_obs  = np.load(losers_path)['observations']
+
+    meta = None
+    if meta_path is not None:
+        with open(meta_path) as f:
+            meta = json.load(f)
+
+    # Infer N and step_size (step_size = 2 obs steps + T action steps)
+    if meta is not None:
+        N = len(meta)
+        step_size = len(winners_obs) // N
+    else:
+        timeouts = np.load(winners_path)['timeouts']
+        if timeouts.any():
+            step_size = int(np.argmax(timeouts)) + 1
+        else:
+            step_size = len(winners_obs)   # single pair
+        N = len(winners_obs) // step_size
+
+    T = step_size - 2
+    print(f"Loaded {N} pairs  (T={T} trajectory steps each)")
+
+    winners_eps = winners_obs.reshape(N, step_size, 2)
+    losers_eps  = losers_obs.reshape(N, step_size, 2)
+
+    env = MazeEnv(maze_type)
+    pygame.font.init()
+    font = pygame.font.SysFont(None, 28)
+
+    pair_idx = 0
+    running  = True
+
+    while running:
+        pair_idx = max(0, min(pair_idx, N - 1))
+
+        agent_xy    = winners_eps[pair_idx, 0]          # maze XY
+        winner_traj = winners_eps[pair_idx, 2:]         # (T, 2) maze XY
+        loser_traj  = losers_eps[pair_idx, 2:]          # (T, 2) maze XY
+
+        env.agent_gui_pos = env.xy2gui(agent_xy)
+
+        # Stack into (2, T, 2); winner first so it's drawn on top
+        combined   = np.stack([loser_traj, winner_traj], axis=0)
+        collisions = np.array([True, False])   # loser tinted, winner full color
+
+        # Guide from meta (stored as XY, convert to GUI for draw_traj)
+        goal_dist_winner = goal_dist_loser = None
+        if meta is not None and meta[pair_idx].get('guide'):
+            guide_xy = np.array(meta[pair_idx]['guide'])
+            env.draw_traj = [env.xy2gui(p) for p in guide_xy]
+            keep_drawing  = True
+        else:
+            env.draw_traj = []
+            keep_drawing  = False
+
+        # finetune_goal_dist: L2 from trajectory endpoint to goal (maze XY)
+        # --goal takes priority (matches cfg.eval.goal exactly); falls back to guide endpoint
+        if goal is not None:
+            goal_xy = goal
+            goal_dist_winner = float(np.linalg.norm(winner_traj[-1] - goal_xy))
+            goal_dist_loser  = float(np.linalg.norm(loser_traj[-1]  - goal_xy))
+            print(f"Pair {pair_idx + 1}/{N}  |  goal_dist  winner={goal_dist_winner:.4f}  loser={goal_dist_loser:.4f}  (eval goal)")
+        elif meta is not None and meta[pair_idx].get('guide'):
+            goal_xy = np.array(meta[pair_idx]['guide'])[-1]
+            goal_dist_winner = float(np.linalg.norm(winner_traj[-1] - goal_xy))
+            goal_dist_loser  = float(np.linalg.norm(loser_traj[-1]  - goal_xy))
+            print(f"Pair {pair_idx + 1}/{N}  |  goal_dist  winner={goal_dist_winner:.4f}  loser={goal_dist_loser:.4f}  (guide endpoint)")
+
+        env.update_screen(combined, collisions, keep_drawing=keep_drawing)
+
+        # HUD
+        caption = f"Pair {pair_idx + 1}/{N}"
+        if meta is not None:
+            caption += (f"  |  winner={meta[pair_idx]['winner_score']:.3f}"
+                        f"  loser={meta[pair_idx]['loser_score']:.3f}")
+        if goal_dist_winner is not None:
+            caption += f"  |  goal_dist W={goal_dist_winner:.3f} L={goal_dist_loser:.3f}"
+        caption += "   N=next  P=prev  Q=quit"
+        surf = font.render(caption, True, (30, 30, 30), (220, 220, 220))
+        env.screen.blit(surf, (8, 8))
+        pygame.display.flip()
+
+        # Block until a navigation key is pressed
+        waiting = True
+        while waiting and running:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    waiting = running = False
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_n:
+                        pair_idx += 1
+                        waiting = False
+                    elif event.key == pygame.K_p:
+                        pair_idx -= 1
+                        waiting = False
+                    elif event.key in (pygame.K_q, pygame.K_ESCAPE):
+                        waiting = running = False
+            env.clock.tick(10)
+
+    pygame.quit()
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-mt', '--maze_type', default='large', type=str, help="Maze type: open | sparse | large")
@@ -415,7 +528,26 @@ if __name__ == "__main__":
     parser.add_argument('--prefix', type=str, default=None, help="Optional prefix to prepend to output filenames")
     parser.add_argument('--seed', type=int, default=0, help="Random seed for reproducibility (used by --gen-obs)")
     parser.add_argument('--split', type=float, default=None, help="Train fraction for train/test split (e.g. 0.8 for 80/20)")
+    parser.add_argument('--viz-pairs', action='store_true', help="Visualize saved preference pairs from .npz files")
+    parser.add_argument('--winners-file', type=str, default=None, help="Path to winners .npz file")
+    parser.add_argument('--losers-file', type=str, default=None, help="Path to losers .npz file")
+    parser.add_argument('--meta-file', type=str, default=None, help="Path to meta .json file (optional, enables guide overlay)")
+    parser.add_argument('--goal', type=float, nargs=2, default=None, metavar=('X', 'Y'),
+                        help="Fixed eval goal in maze XY space (matches cfg.eval.goal). "
+                             "If omitted, falls back to the guide's last point.")
     args = parser.parse_args()
+
+    if args.viz_pairs:
+        assert args.winners_file is not None and args.losers_file is not None, \
+            "Pass --winners-file and --losers-file to visualize pairs"
+        visualize_preference_pairs(
+            winners_path=args.winners_file,
+            losers_path=args.losers_file,
+            meta_path=args.meta_file,
+            maze_type=args.maze_type,
+            goal=np.array(args.goal, dtype=np.float32) if args.goal is not None else None,
+        )
+        sys.exit(0)
 
     if args.pick_obs:
         positions = pick_start_positions(maze_type=args.maze_type, savepath=args.savepath)
