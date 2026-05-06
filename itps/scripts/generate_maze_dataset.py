@@ -192,6 +192,91 @@ class MazePlanner:
         return self.node_positions[path_nodes]   # (L, 2)
 
 
+# ── Grid planner (d4rl-style: 4-connected BFS on integer cell centres) ────────
+
+class GridMazePlanner:
+    """
+    Routes through integer cell centres using 4-connected BFS on the original
+    maze grid (no fine-grid inflation, no diagonal moves).  Waypoints are exact
+    cell-centre positions (r, c), so the PD controller produces axis-aligned,
+    grid-following motion that matches the d4rl maze2d dataset style.
+    """
+
+    def __init__(self, maze: np.ndarray):
+        self.maze = maze
+        rows, cols = maze.shape
+
+        free = np.argwhere(~maze)                          # (n_free, 2)
+        self.cell_to_node = np.full(maze.shape, -1, dtype=np.int32)
+        for idx, (r, c) in enumerate(free):
+            self.cell_to_node[r, c] = idx
+        self.node_positions = free.astype(float)           # cell (r,c) → pos (r,c)
+        self.n_nodes = len(free)
+
+        print("  [1/2] Building 4-connected grid graph...")
+        graph = self._build_graph(free, rows, cols)
+
+        print("  [2/2] Precomputing all-pairs shortest paths (one-time cost)...")
+        t0 = time.time()
+        self.dist_matrix, self.predecessors = csgraph_sp(
+            graph, directed=False, return_predecessors=True
+        )
+        print(f"  [2/2] Done in {time.time() - t0:.1f}s.")
+
+        reachable = np.isfinite(self.dist_matrix[0])
+        if not reachable.all():
+            labels = np.full(self.n_nodes, -1, dtype=int)
+            comp_id = 0
+            for seed in range(self.n_nodes):
+                if labels[seed] != -1:
+                    continue
+                members = np.isfinite(self.dist_matrix[seed])
+                labels[members] = comp_id
+                comp_id += 1
+            sizes = np.bincount(labels[labels >= 0])
+            best = int(np.argmax(sizes))
+            self._main = labels == best
+            print(f"  Warning: {comp_id} components; using largest ({sizes[best]} nodes).")
+        else:
+            self._main = np.ones(self.n_nodes, dtype=bool)
+
+    def _build_graph(self, free, rows, cols):
+        src, dst, data = [], [], []
+        for idx, (r, c) in enumerate(free):
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < rows and 0 <= nc < cols:
+                    nb = self.cell_to_node[nr, nc]
+                    if nb >= 0:
+                        src.append(idx)
+                        dst.append(nb)
+                        data.append(1.0)
+        return csr_matrix((data, (src, dst)), shape=(self.n_nodes, self.n_nodes))
+
+    def sample_node(self, rng: np.random.Generator) -> int:
+        candidates = np.where(self._main)[0]
+        return int(candidates[rng.integers(len(candidates))])
+
+    def nearest_node(self, pos_xy: np.ndarray) -> int:
+        dists = np.linalg.norm(self.node_positions - pos_xy, axis=1)
+        dists[~self._main] = np.inf
+        return int(np.argmin(dists))
+
+    def get_path_xy(self, start_node: int, goal_node: int):
+        if not np.isfinite(self.dist_matrix[start_node, goal_node]):
+            return None
+        path = []
+        cur = goal_node
+        while cur != start_node:
+            path.append(cur)
+            cur = self.predecessors[start_node, cur]
+            if cur < 0:
+                return None
+        path.append(start_node)
+        path.reverse()
+        return self.node_positions[path]   # (L, 2) — integer cell centres
+
+
 # ── Path shortcutting ─────────────────────────────────────────────────────────
 
 def _line_free(p1, p2, valid_mask, scale, n_checks=20):
@@ -226,7 +311,7 @@ def shortcut_path(path_xy, valid_mask, scale):
 # ── PD controller ─────────────────────────────────────────────────────────────
 
 def follow_waypoints(waypoints, planner, n_steps, dt, kp, kd, noise_std,
-                     max_speed, wp_thresh, rng, lookahead=2):
+                     max_speed, wp_thresh, rng, lookahead=2, use_shortcut=True):
     """
     Track `waypoints` with a noisy PD controller for exactly `n_steps` steps.
     When the last waypoint is reached, a new goal is automatically planned so
@@ -262,7 +347,7 @@ def follow_waypoints(waypoints, planner, n_steps, dt, kp, kd, noise_std,
                 attempts += 1
             path_xy = planner.get_path_xy(cur_node, goal_node)
             if path_xy is not None:
-                new_wps = shortcut_path(path_xy, planner.valid_mask, planner.scale)
+                new_wps = shortcut_path(path_xy, planner.valid_mask, planner.scale) if use_shortcut else path_xy
                 waypoints.extend(new_wps[1:].tolist())   # skip duplicate current pos
 
         target = np.array(waypoints[min(wp_idx + lookahead, len(waypoints) - 1)])
@@ -289,12 +374,13 @@ def follow_waypoints(waypoints, planner, n_steps, dt, kp, kd, noise_std,
 # ── Episode generation ────────────────────────────────────────────────────────
 
 def generate_episode(planner, n_steps, dt, kp, kd, noise_std, max_speed,
-                     wp_thresh, n_goals, rng, lookahead=2):
+                     wp_thresh, n_goals, rng, lookahead=2, use_shortcut=True, start_node=None):
     """
     Chain `n_goals` A*-planned, shortcutted paths and follow them for n_steps.
     If the chain is exhausted before n_steps the agent rests near the last goal.
     """
-    start_node = planner.sample_node(rng)
+    if start_node is None:
+        start_node = planner.sample_node(rng)
     waypoints   = [planner.node_positions[start_node]]
     cur_node    = start_node
 
@@ -314,7 +400,7 @@ def generate_episode(planner, n_steps, dt, kp, kd, noise_std, max_speed,
         if path_xy is None:
             continue
 
-        shortcut = shortcut_path(path_xy, planner.valid_mask, planner.scale)
+        shortcut = shortcut_path(path_xy, planner.valid_mask, planner.scale) if use_shortcut else path_xy
         waypoints.extend(shortcut[1:].tolist())   # skip duplicate start
         cur_node = goal_node
 
@@ -323,7 +409,8 @@ def generate_episode(planner, n_steps, dt, kp, kd, noise_std, max_speed,
 
     return follow_waypoints(
         np.array(waypoints), planner, n_steps,
-        dt, kp, kd, noise_std, max_speed, wp_thresh, rng, lookahead=lookahead
+        dt, kp, kd, noise_std, max_speed, wp_thresh, rng,
+        lookahead=lookahead, use_shortcut=use_shortcut
     )
 
 
@@ -354,6 +441,54 @@ def generate_dataset(maze, n_episodes, episode_length, scale=5, clearance=0.3,
         observations[start: start + episode_length] = ep_obs
         last_raw = start + episode_length - 1
         timeouts[last_raw - (last_raw % 4)] = True  # align to 4x downsampling grid
+
+        if (ep + 1) % log_every == 0:
+            elapsed = time.time() - t0
+            eta     = elapsed / (ep + 1) * (n_episodes - ep - 1)
+            print(f"  Episode {ep+1:>6}/{n_episodes}  |  "
+                  f"{elapsed:.1f}s elapsed  |  ETA {eta:.1f}s")
+
+    print(f"  Done — {N:,} total frames in {time.time()-t0:.1f}s")
+    return observations, timeouts
+
+
+def generate_dataset_grid(maze, n_episodes, episode_length,
+                          dt=0.025, kp=5.0, kd=3.0, noise_std=0.05, max_speed=2.5,
+                          wp_thresh=0.25, n_goals=4, seed=42):
+    """
+    Like generate_dataset but routes through integer cell centres (4-connected BFS).
+    No fine-grid inflation, no path shortcutting — the PD controller follows each
+    cell centre in sequence, producing axis-aligned grid-following motion that
+    matches the d4rl maze2d dataset style.
+
+    Returns:
+        observations : (N, 4) float32  [x, y, vx, vy]
+        timeouts     : (N,)   bool     True at last step of each episode
+    """
+    rng = np.random.default_rng(seed)
+    planner = GridMazePlanner(maze)
+
+    N = n_episodes * episode_length
+    observations = np.empty((N, 4), dtype=np.float32)
+    timeouts     = np.zeros(N, dtype=bool)
+
+    t0 = time.time()
+    log_every = max(1, n_episodes // 10)
+    last_node = None
+    for ep in range(n_episodes):
+        ep_obs = generate_episode(
+            planner, episode_length, dt, kp, kd,
+            noise_std, max_speed,
+            wp_thresh=0.05,
+            n_goals=n_goals, rng=rng,
+            lookahead=0, use_shortcut=False,
+            start_node=last_node,
+        )
+        last_node = planner.nearest_node(ep_obs[-1, :2])
+        start = ep * episode_length
+        observations[start: start + episode_length] = ep_obs
+        last_raw = start + episode_length - 1
+        timeouts[last_raw - (last_raw % 4)] = True
 
         if (ep + 1) % log_every == 0:
             elapsed = time.time() - t0
@@ -452,6 +587,11 @@ def main():
                              "Max useful value is 0.5 for mazes with 1-cell-wide corridors.")
     parser.add_argument('--scale',          type=int,   default=5,
                         help="Fine grid cells per maze unit (default 5 → 0.2-unit spacing).")
+    parser.add_argument('--style',          choices=['continuous', 'grid'],
+                        default='continuous',
+                        help="'continuous': fine-grid A* + shortcutting (default). "
+                             "'grid': 4-connected BFS on integer cell centres, "
+                             "no shortcutting — produces d4rl-style axis-aligned motion.")
     parser.add_argument('--seed',           type=int,   default=0)
     parser.add_argument('--viz',            action='store_true',
                         help="Show a trajectory plot after generation.")
@@ -489,22 +629,39 @@ def main():
     print(f"\nGenerating {args.n_episodes} episodes × {args.episode_length} raw steps "
           f"= {total:,} raw frames  →  ~{effective:,} effective after 4x downsample{cap_note}\n")
 
-    observations, timeouts = generate_dataset(
-        maze            = maze,
-        n_episodes      = args.n_episodes,
-        episode_length  = args.episode_length,
-        scale           = args.scale,
-        clearance       = args.clearance,
-        dt              = args.dt,
-        kp              = args.kp,
-        kd              = args.kd,
-        noise_std       = args.noise_std,
-        max_speed       = args.max_speed,
-        wp_thresh       = 0.25,
-        n_goals         = args.n_goals,
-        lookahead       = args.lookahead,
-        seed            = args.seed,
-    )
+    if args.style == 'grid':
+        print(f"Style: grid (4-connected BFS on integer cell centres, no shortcutting)")
+        observations, timeouts = generate_dataset_grid(
+            maze           = maze,
+            n_episodes     = args.n_episodes,
+            episode_length = args.episode_length,
+            dt             = args.dt,
+            kp             = args.kp,
+            kd             = args.kd,
+            noise_std      = args.noise_std,
+            max_speed      = args.max_speed,
+            wp_thresh      = 0.25,
+            n_goals        = args.n_goals,
+            seed           = args.seed,
+        )
+    else:
+        print(f"Style: continuous (fine-grid A* + shortcutting)")
+        observations, timeouts = generate_dataset(
+            maze            = maze,
+            n_episodes      = args.n_episodes,
+            episode_length  = args.episode_length,
+            scale           = args.scale,
+            clearance       = args.clearance,
+            dt              = args.dt,
+            kp              = args.kp,
+            kd              = args.kd,
+            noise_std       = args.noise_std,
+            max_speed       = args.max_speed,
+            wp_thresh       = 0.25,
+            n_goals         = args.n_goals,
+            lookahead       = args.lookahead,
+            seed            = args.seed,
+        )
 
     # ── Sanity checks ──
     print(f"\nSanity checks:")
