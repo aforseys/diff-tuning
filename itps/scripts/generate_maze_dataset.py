@@ -279,8 +279,14 @@ class GridMazePlanner:
 
 # ── Path shortcutting ─────────────────────────────────────────────────────────
 
-def _line_free(p1, p2, valid_mask, scale, n_checks=20):
-    """True if the straight line p1→p2 stays within the inflated valid mask."""
+def _line_free(p1, p2, valid_mask, scale):
+    """True if the straight line p1→p2 stays within the inflated valid mask.
+
+    Uses enough sample points to guarantee no fine-grid cell is skipped:
+    spacing = 1/(sqrt(2)*scale) ensures coverage even for diagonal traversal.
+    """
+    dist = np.linalg.norm(p2 - p1)
+    n_checks = max(2, int(np.ceil(dist * scale * 1.5)) + 1)
     pts = p1 + np.outer(np.linspace(0, 1, n_checks), (p2 - p1))
     # Inverse of node_positions formula: fi = (pos + 0.5) * scale - 0.5
     half = (scale - 1) / 2
@@ -311,7 +317,8 @@ def shortcut_path(path_xy, valid_mask, scale):
 # ── PD controller ─────────────────────────────────────────────────────────────
 
 def follow_waypoints(waypoints, planner, n_steps, dt, kp, kd, noise_std,
-                     max_speed, wp_thresh, rng, lookahead=2, use_shortcut=True):
+                     max_speed, wp_thresh, rng, lookahead=2, use_shortcut=True,
+                     init_vel=None):
     """
     Track `waypoints` with a noisy PD controller for exactly `n_steps` steps.
     When the last waypoint is reached, a new goal is automatically planned so
@@ -321,11 +328,11 @@ def follow_waypoints(waypoints, planner, n_steps, dt, kp, kd, noise_std,
     lookahead: target this many waypoints ahead of the current one, which
                smooths corners by making the agent start turning early.
 
-    Returns (n_steps, 4) float32 array of [x, y, vx, vy].
+    Returns ((n_steps, 4) float32 array of [x, y, vx, vy], final_pos, final_vel).
     """
     waypoints = list(waypoints)
     pos = np.array(waypoints[0], dtype=float)
-    vel = np.zeros(2)
+    vel = np.zeros(2) if init_vel is None else np.array(init_vel, dtype=float)
     wp_idx = 1
     obs = np.empty((n_steps, 4), dtype=np.float32)
 
@@ -368,21 +375,30 @@ def follow_waypoints(waypoints, planner, n_steps, dt, kp, kd, noise_std,
         else:
             vel = np.zeros(2)   # stop; noise will push away next step
 
-    return obs
+    return obs, pos.copy(), vel.copy()
 
 
 # ── Episode generation ────────────────────────────────────────────────────────
 
 def generate_episode(planner, n_steps, dt, kp, kd, noise_std, max_speed,
-                     wp_thresh, n_goals, rng, lookahead=2, use_shortcut=True, start_node=None):
+                     wp_thresh, n_goals, rng, lookahead=2, use_shortcut=True,
+                     start_node=None, init_pos=None, init_vel=None):
     """
     Chain `n_goals` A*-planned, shortcutted paths and follow them for n_steps.
     If the chain is exhausted before n_steps the agent rests near the last goal.
+
+    init_pos/init_vel: exact starting position and velocity carried over from
+    the previous episode so episodes chain without discontinuities.
     """
-    if start_node is None:
-        start_node = planner.sample_node(rng)
-    waypoints   = [planner.node_positions[start_node]]
-    cur_node    = start_node
+    if init_pos is not None:
+        cur_node = planner.nearest_node(np.asarray(init_pos))
+    else:
+        if start_node is None:
+            start_node = planner.sample_node(rng)
+        cur_node = start_node
+    # Always start from a valid (clearance-compliant) node position so that
+    # episode starts are never placed inside or directly against obstacle walls.
+    waypoints = [planner.node_positions[cur_node]]
 
     for _ in range(n_goals):
         goal_node = planner.sample_node(rng)
@@ -410,7 +426,8 @@ def generate_episode(planner, n_steps, dt, kp, kd, noise_std, max_speed,
     return follow_waypoints(
         np.array(waypoints), planner, n_steps,
         dt, kp, kd, noise_std, max_speed, wp_thresh, rng,
-        lookahead=lookahead, use_shortcut=use_shortcut
+        lookahead=lookahead, use_shortcut=use_shortcut,
+        init_vel=init_vel,
     )
 
 
@@ -433,10 +450,15 @@ def generate_dataset(maze, n_episodes, episode_length, scale=5, clearance=0.3,
 
     t0 = time.time()
     log_every = max(1, n_episodes // 10)
+    last_pos = None
+    last_vel = None
     for ep in range(n_episodes):
-        ep_obs = generate_episode(planner, episode_length, dt, kp, kd,
-                                  noise_std, max_speed, wp_thresh, n_goals, rng,
-                                  lookahead=lookahead)
+        ep_obs, last_pos, last_vel = generate_episode(
+            planner, episode_length, dt, kp, kd,
+            noise_std, max_speed, wp_thresh, n_goals, rng,
+            lookahead=lookahead,
+            init_pos=last_pos, init_vel=last_vel,
+        )
         start = ep * episode_length
         observations[start: start + episode_length] = ep_obs
         last_raw = start + episode_length - 1
@@ -474,17 +496,17 @@ def generate_dataset_grid(maze, n_episodes, episode_length,
 
     t0 = time.time()
     log_every = max(1, n_episodes // 10)
-    last_node = None
+    last_pos = None
+    last_vel = None
     for ep in range(n_episodes):
-        ep_obs = generate_episode(
+        ep_obs, last_pos, last_vel = generate_episode(
             planner, episode_length, dt, kp, kd,
             noise_std, max_speed,
             wp_thresh=0.05,
             n_goals=n_goals, rng=rng,
             lookahead=0, use_shortcut=False,
-            start_node=last_node,
+            init_pos=last_pos, init_vel=last_vel,
         )
-        last_node = planner.nearest_node(ep_obs[-1, :2])
         start = ep * episode_length
         observations[start: start + episode_length] = ep_obs
         last_raw = start + episode_length - 1
@@ -583,7 +605,7 @@ def main():
     parser.add_argument('--max-speed',      type=float, default=2.5,
                         help="Speed cap in maze units/s (default 2.5).")
     parser.add_argument('--clearance',      type=float, default=0.3,
-                        help="Wall clearance for A* grid in maze units (default 0.5). "
+                        help="Wall clearance for A* grid in maze units (default 0.3). "
                              "Max useful value is 0.5 for mazes with 1-cell-wide corridors.")
     parser.add_argument('--scale',          type=int,   default=5,
                         help="Fine grid cells per maze unit (default 5 → 0.2-unit spacing).")
