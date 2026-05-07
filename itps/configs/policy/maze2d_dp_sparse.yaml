@@ -19,7 +19,7 @@ hydra:
 device: "cuda"  # cpu
 
 training:
-  offline_steps: 100000
+  offline_steps: 200000
   online_steps: 0
   eval_freq: 5000
   save_freq: 5000
@@ -47,10 +47,10 @@ training:
 
 eval:
   n_samples: 32     # trajectory samples per starting observation
-  opt_params: [{'n_opt': 1, 't_subset': null, 'denoise': False}, {'n_opt': 2, 't_subset': null, 'denoise': False}, {'n_opt': 1, 't_subset': 5, 'denoise': False}, {'n_opt': 1, 't_subset': 5, 'denoise': True}, {'n_opt': 2, 't_subset': 5, 'denoise': True}]
+  opt_params: [] #[{'n_opt': 1, 't_subset': null, 'denoise': False}, {'n_opt': 2, 't_subset': null, 'denoise': False}, {'n_opt': 1, 't_subset': 5, 'denoise': False}, {'n_opt': 1, 't_subset': 5, 'denoise': True}, {'n_opt': 2, 't_subset': 5, 'denoise': True}]
   goal: null
   metrics: [collision_rate]
-  methods: ['ired', 'ddim']
+  methods: ['ddim']
   train_obs: data/maze_obs/set_obs_40_seed0_20260430_031144_train
   test_obs: data/maze_obs/set_obs_40_seed0_20260430_031144_test
 
