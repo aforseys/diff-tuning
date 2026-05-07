@@ -378,9 +378,9 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
         for i in range(len(opt_params)):
             label = f'IRED_{opt_params[i]["n_opt"]}steps'
             if opt_params[i]["t_subset"] is not None:
-                label+=f'steps_last{opt_params[i]["t_subset"]}'
+                label+=f'_last{opt_params[i]["t_subset"]}'
             if opt_params[i]["denoise"]:
-                label+='denoise'
+                label+='_denoise'
 
             info["aggregated"][label] = IRED_ll[i]
 
@@ -572,9 +572,9 @@ def eval_maze(policy, cfg, split='test'):
         else:
             label = f'IRED_{opt_params[i]["n_opt"]}steps'
             if opt_params[i]["t_subset"] is not None:
-                label+=f'steps_last{opt_params[i]["t_subset"]}'
+                label+=f'_last{opt_params[i]["t_subset"]}'
             if opt_params[i]["denoise"]:
-                label+='denoise'
+                label+='_denoise'
 
         metrics_dict[label] ={
             f"{split}_{m}": {"mean": float(np.mean(vals)), "std": float(np.std(vals)), "per_obs": vals}
