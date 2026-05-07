@@ -452,10 +452,13 @@ def check_maze_collision(xy_traj, maze):
     """
     batch_size, num_steps, _ = xy_traj.shape
     xy_flat = xy_traj.reshape(-1, 2)
+    nan_mask = np.any(np.isnan(xy_flat), axis=1)
+    xy_flat = np.nan_to_num(xy_flat, nan=0.0)
     xy_flat = np.clip(xy_flat, [0, 0], [maze.shape[0] - 1, maze.shape[1] - 1])
     mx = np.round(xy_flat[:, 0]).astype(int)
     my = np.round(xy_flat[:, 1]).astype(int)
     collisions = maze[mx, my].reshape(batch_size, num_steps)
+    collisions |= nan_mask.reshape(batch_size, num_steps)
     return np.any(collisions, axis=1)
 
 
@@ -530,6 +533,10 @@ def eval_maze(policy, cfg, split='test'):
     metrics_dict ={}
     for i, traj in enumerate(trajs):
         per_obs ={}
+
+        nan_steps = np.isnan(traj).any(axis=-1)  # (N_obs*n_samples, horizon)
+        nan_traj = nan_steps.any(axis=-1)         # (N_obs*n_samples,)
+        per_obs['nan_rate'] = nan_traj.reshape(N_obs, n_samples).mean(axis=1).tolist()
 
         #TODO: check all this math with numpy and the batches etc. executes / lines up correctly
         for m in metrics:
