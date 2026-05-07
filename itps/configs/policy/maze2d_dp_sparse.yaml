@@ -4,7 +4,7 @@ seed: 100000
 dataset_repo_id: maze2d
 condition_type: unconditional
 env_type: sparse
-dataset_root: data/maze2d-sparse-grid.hdf5
+dataset_root: data/maze2d-sparse-v2.hdf5
 
 wandb:
   enable: true
@@ -19,7 +19,7 @@ hydra:
 device: "cuda"  # cpu
 
 training:
-  offline_steps: 200000
+  offline_steps: 100000
   online_steps: 0
   eval_freq: 5000
   save_freq: 5000
