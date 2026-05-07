@@ -33,7 +33,7 @@ export WANDB_MODE=offline
 #export WANDB_DIR=/home/gridsan/aforsey/wandb_logs/gmm/conditional/fine_tuning/param_tuning
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-CONFIGS_DIR="/home/gridsan/aforsey/diff-tuning/itps/configs/policy/maze2d_param_tuning/finetune_tuning/sweep_1_10"    # Directory containing generated run_*.yaml files
+CONFIGS_DIR="/home/gridsan/aforsey/diff-tuning/itps/configs/policy/maze2d_param_tuning/finetune_tuning/sweep_1"    # Directory containing generated run_*.yaml files
 SCRIPT="scripts/train.py"             # The python training script
 ENV_NAME="maze2d"                # env={ENV_NAME} passed to the script
 # ──────────────────────────────────────────────────────────────────────────────
