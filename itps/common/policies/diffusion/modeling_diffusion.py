@@ -164,18 +164,24 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
     def forward(self, batch: dict[str, Tensor], tune_batch: dict[str, Tensor]= None) -> dict[str, Tensor]:
         """Run the batch through the model and compute the loss for training or validation."""
         batch = self.normalize_inputs(batch)
-        if tune_batch is not None:
-            pos_batch, neg_batch = tune_batch
-            pos_batch = self.normalize_inputs(pos_batch)
-            pos_batch = self.normalize_targets(pos_batch)
-            neg_batch = self.normalize_inputs(neg_batch)
-            neg_batch = self.normalize_targets(neg_batch)
-            tune_batch = (pos_batch, neg_batch) 
-        if len(self.expected_image_keys) > 0: #TODO: Need to make shallow copy here? (Done in Irene's code)
-            batch["observation.images"] = torch.stack([batch[k] for k in self.expected_image_keys], dim=-4)
+        # if len(self.expected_image_keys) > 0: #TODO: Need to make shallow copy here? (Done in Irene's code) #TODO: where would I need this
+        #     batch["observation.images"] = torch.stack([batch[k] for k in self.expected_image_keys], dim=-4)
         batch = self.normalize_targets(batch)
-        loss, (loss_denoise, loss_energy, loss_finetune) = self.diffusion.compute_loss(batch, tune_batch)
-        return {"loss": loss, "MSE_loss": loss_denoise, "contrastive_loss": loss_energy, "pref_tuning_loss": loss_finetune}
+        if tune_batch is not None:
+            if 'demo' in tune_batch:
+                demo_batch = tune_batch['demo']
+                demo_batch = self.normalize_inputs(demo_batch)
+                demo_batch = self.normalize_targets(demo_batch)
+                tune_batch['demo'] = demo_batch
+            if 'pref' in tune_batch:
+                pos_batch, neg_batch = tune_batch['pref']
+                pos_batch = self.normalize_inputs(pos_batch)
+                pos_batch = self.normalize_targets(pos_batch)
+                neg_batch = self.normalize_inputs(neg_batch)
+                neg_batch = self.normalize_targets(neg_batch)
+                tune_batch['pref'] = (pos_batch, neg_batch) 
+        loss, (loss_denoise, loss_energy, loss_finetune_pref, loss_finetune_demo) = self.diffusion.compute_loss(batch, tune_batch)
+        return {"loss": loss, "MSE_loss": loss_denoise, "contrastive_loss": loss_energy, "pref_tuning_loss": loss_finetune_pref, "MSE_tuning_loss": loss_finetune_demo}
    
     def freeze_nonFiLM(self):
 
@@ -312,7 +318,7 @@ class EBMDiffusionModel(nn.Module):
         assert alginment_strategy in ['post-hoc', 'guided-diffusion', 'stochastic-sampling', 'biased-initialization', 'output-perturb'], 'Invalid alignment strategy: ' + str(alginment_strategy)
         self.alignment_strategy = alginment_strategy
 
-    # ========= inference  ============ #TODO: Update to generate based on energy minimums (IRED)? Or leave same as typical diffusion? Think I do need to because min is shifted?
+    # ========= inference  ============
     def conditional_sample(
         self, batch_size: int, global_cond: Tensor | None = None, generator: torch.Generator | None = None, guide: Tensor | None = None, visualizer=None, normalizer=None
     ) -> Tensor:
@@ -571,43 +577,6 @@ class EBMDiffusionModel(nn.Module):
 
         return energies 
 
-        #TODO: Check shape of trajectories (?) and pad as necessary 
-        
-        #TODO: Test different values of these settings
-        # n = 20 #number of energies averaging over
-        # timestep_min = 10 #min possible value 0
-        # timestep_max = 30 #self.noise_scheduler.config.num_train_timesteps #max possible value self.noise_scheduler.config.num_train_timesteps
-
-        # energy_sum = torch.zeros((trajectories.shape[0],1), device=trajectories.device)
-
-        # #t_range = torch.linspace(timestep_min, timestep_max, steps=n)
-
-        # # average over energy calculated at varying noise levels
-        # for i in range(n):
-
-        #     #add the same noise to all trajectories in batch 
-        #     eps=torch.randn(trajectories.shape[1:], device=trajectories.device) 
-        #     eps = einops.repeat(eps, 'l t -> b l t', b=trajectories.shape[0])
-        #     t = torch.randint(
-        #         low=timestep_min,
-        #         high=timestep_max,
-        #         size=(1,),
-        #         device=trajectories.device,
-        #     ).long()
-        #     #t = t_range[i]
-
-        #     #timesteps = torch.full((trajectories.shape[0],), 0, device=trajectories.device).long()
-        #     timesteps = t.repeat(trajectories.shape[0])
-
-        #     noisy_trajectories = self.noise_scheduler.add_noise(trajectories, eps, timesteps)
-
-        #     e = self.model(noisy_trajectories, timesteps, global_cond=global_cond, return_energy=True, mask=mask)
-        #     #sigma_t_sqr = 1 - self.noise_scheduler.alphas_cumprod[t]
-
-        #     energy_sum += e #/sigma_t_sqr
-
-        # return energy_sum/ n
-
 
     def generate_actions(self, batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, normalizer=None,return_full=False, opt_energy=True, steps_per_timestep=1, opt_subset: int | None = None, denoise=False, return_grad_steps=False) -> Tensor:
         """
@@ -665,12 +634,14 @@ class EBMDiffusionModel(nn.Module):
             "action_is_pad": (B, horizon)
         }
         """
+
+        ## DENOISING MSE LOSS ## 
+
         # Input validation.
         assert set(batch).issuperset({"observation.state", "action"}) #, "action_is_pad"})
         assert "observation.images" in batch or "observation.environment_state" in batch
         n_obs_steps = batch["observation.state"].shape[1]
         horizon = batch["action"].shape[1]
-        # print(horizon)
         assert horizon == self.config.horizon
         assert n_obs_steps == self.config.n_obs_steps
 
@@ -704,7 +675,6 @@ class EBMDiffusionModel(nn.Module):
 
         # Run the denoising network (that might denoise the trajectory, or attempt to predict the noise).
         pred = self.model(noisy_trajectory, timesteps, global_cond=global_cond, mask=mask)
-        #print('MODEL OUTPUT SHAPE:', pred.shape)
         # Compute the MSE loss.
         # The target is either the original trajectory, or the noise.
         if self.config.prediction_type == "epsilon":
@@ -724,11 +694,11 @@ class EBMDiffusionModel(nn.Module):
         loss = loss * extract(self.loss_weight, timesteps, loss.shape)
         loss_mse = loss.clone()  # SNR-weighted MSE, before gradient_loss_weight scaling
         loss = loss * self.config.gradient_loss_weight
-        #mse_grad = torch.autograd.grad([loss_mse.sum()], [noisy_trajectory], create_graph=True)[0]
-        #print("mean mse_grad:", [mse_grad.min(), mse_grad.max(), mse_grad.mean()])
-        #print('loss mse:', loss_mse)
 
-        # Compute contrastive loss
+
+        ## CONTRASTIVE ENERGY LOSS ## 
+        # Slightly perturb samples and supervise energy gradient #
+
         loss_energy=torch.tensor(-1, dtype=torch.float32)
         if self.config.supervise_energy_landscape:
 
@@ -754,47 +724,37 @@ class EBMDiffusionModel(nn.Module):
             energy_stack = torch.cat([energy_positive, energy_negative], dim=-1)
             target = torch.zeros(energy_positive.size(0)).to(energy_stack.device)
             loss_energy = F.cross_entropy(-1 * energy_stack, target.long(), reduction='none')[:, None]
-            #energy_grad = torch.autograd.grad([loss_energy.sum()], [traj_concat], create_graph=True)[0]
-            #print('Grad of contrastive loss:', [energy_grad.min(), energy_grad.max(), energy_grad.mean()])
+
             loss += self.config.energy_landscape_loss_weight*loss_energy
-            # loss = loss_mse + loss_scale * loss_energy 
-            # return loss.mean(), (loss_mse.mean(), loss_energy.mean())
-        #print('energy landscape loss:', loss_energy)
-        #print('loss:', loss)
+
+
+        ## PREFERENCE-BASED ENERGY LOSS ## 
+        # Slightly perturb samples and supervise energy gradient #
+
         loss_energy_finetune=torch.tensor(-1, dtype=torch.float32)
         if self.config.finetune_energy_landscape:
             assert tune_batch is not None, "Batch for tuning must be passed in"
+            assert 'pref' in tune_batch, "Tuning batch must contain pairwise preferences"
 
             # extract from finetune batch:
-            pos_batch, neg_batch = tune_batch
+            pos_batch, neg_batch = tune_batch['pref']
             global_cond_pos = self._prepare_global_conditioning(pos_batch)
             global_cond_neg = self._prepare_global_conditioning(neg_batch)
             assert torch.equal(global_cond_pos, global_cond_neg), "Global conditions of pref comparisons must match"
 
-            # Get batch mask for energy calculation (don't use repeated actions)
-            #if self.config.do_mask_loss_for_padding:
-            #    if ("action_is_pad" not in pos_batch)("action_is_pad" not in neg_batch):
-            #        raise ValueError(
-            #            "You need to provide 'action_is_pad' in the batch when "
-            #            f"{self.config.do_mask_loss_for_padding=}."
-            #        )
-            #    pos_batch_mask = ~pos_batch["action_is_pad"]
-            #    neg_batch_mask = ~neg_batch["action_is_pad"]
-            #else:
+            # Don't need to mask since loading full trajectories
             pos_batch_mask = None
             neg_batch_mask = None
 
             # resample noise trajectory (apply same noise to positive and negative trajectory)
             positive_trajs = pos_batch["action"]
             negative_trajs = neg_batch["action"]
-            # print(positive_trajs.shape)
-            # print(negative_trajs.shape)
+
             # add same amount of noise to both positive and negative comparisons
             eps = torch.randn(positive_trajs.shape, device=trajectory.device)
             positive_sample = self.noise_scheduler.add_noise(positive_trajs, eps, timesteps)
             negative_sample = self.noise_scheduler.add_noise(negative_trajs, eps, timesteps)
-            # print(positive_sample.shape)
-            # print(negative_sample.shape)
+
             # Compute energy of both samples (positive and negative)
             global_cond_concat = torch.cat([global_cond_pos, global_cond_neg], dim=0) #comparisons must have same global cond
             traj_concat = torch.cat([positive_sample, negative_sample], dim=0)
@@ -803,10 +763,7 @@ class EBMDiffusionModel(nn.Module):
                 mask_concat = torch.cat([pos_batch_mask, neg_batch_mask], dim=0)
             else:
                 mask_concat = None
-            # print(traj_concat.shape)
-            # print(t_concat.shape)
-            # print(global_cond_concat.shape)
-            # print(mask_concat)
+
             energy = self.model(traj_concat, t_concat, global_cond=global_cond_concat, return_energy=True, mask=mask_concat)
 
             # Compute contrastive loss
@@ -824,7 +781,6 @@ class EBMDiffusionModel(nn.Module):
         #     loss = loss_mse
         return loss.mean(), (loss_mse.mean(), loss_energy.mean(), loss_energy_finetune.mean())
         # return loss.mean()
-
 
 class SpatialSoftmax(nn.Module):
     """
