@@ -51,7 +51,7 @@ from itps.common.utils.utils import (
 from itps.scripts.eval import eval_policy, eval_GMM
 from itps.common.utils.eval_utils import eval_maze
 
-def make_optimizer_and_scheduler(cfg, policy, finetune=False):
+def make_optimizer_and_scheduler(cfg, policy, train_FiLM_only=False):
     if cfg.policy.name == "act":
         optimizer_params_dicts = [
             {
@@ -75,23 +75,34 @@ def make_optimizer_and_scheduler(cfg, policy, finetune=False):
         )
         lr_scheduler = None
     elif cfg.policy.name == "diffusion":
-        if not finetune:
-            optimizer = torch.optim.Adam(
-                policy.diffusion.parameters(),
-                cfg.training.lr,
-                cfg.training.adam_betas,
-                cfg.training.adam_eps,
-                cfg.training.adam_weight_decay,
-            )
+        if train_FiLM_only:
+            trainable_params = policy.freeze_nonFiLM()
         else:
-                trainable_params = policy.freeze_nonFiLM()
-                optimizer = torch.optim.Adam(
-                trainable_params,
-                cfg.training.lr,
-                cfg.training.adam_betas,
-                cfg.training.adam_eps,
-                cfg.training.adam_weight_decay,
-            )
+            trainable_params = policy.diffusion.parameters()
+        optimizer = torch.optim.Adam(
+                    trainable_params,
+                    cfg.training.lr,
+                    cfg.training.adam_betas,
+                    cfg.training.adam_eps,
+                    cfg.training.adam_weight_decay,
+                )
+        # if not finetune:
+        #     optimizer = torch.optim.Adam(
+        #         policy.diffusion.parameters(),
+        #         cfg.training.lr,
+        #         cfg.training.adam_betas,
+        #         cfg.training.adam_eps,
+        #         cfg.training.adam_weight_decay,
+        #     )
+        # else:
+        #         trainable_params = policy.freeze_nonFiLM()
+        #         optimizer = torch.optim.Adam(
+        #         trainable_params,
+        #         cfg.training.lr,
+        #         cfg.training.adam_betas,
+        #         cfg.training.adam_eps,
+        #         cfg.training.adam_weight_decay,
+        #     )
 
         from diffusers.optimization import get_scheduler
 
@@ -124,14 +135,15 @@ def update_policy(
     lr_scheduler=None,
     use_amp: bool = False,
     lock=None,
-    tune_batch = None
+    tune_batch = None, 
+    ref_policy = None
 ):
     """Returns a dictionary of items for logging."""
     start_time = time.perf_counter()
     device = get_device_from_parameters(policy)
     policy.train()
     with torch.autocast(device_type=device.type) if use_amp else nullcontext():
-        output_dict = policy.forward(batch, tune_batch=tune_batch)
+        output_dict = policy.forward(batch, tune_batch=tune_batch, ref_policy=ref_policy)
         # TODO(rcadene): policy.unnormalize_outputs(out_dict)
         loss = output_dict["loss"]
     grad_scaler.scale(loss).backward()
@@ -314,18 +326,33 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     torch.backends.cudnn.benchmark = True
     torch.backends.cuda.matmul.allow_tf32 = True
 
-    # Checks to see if policy is conditioned and if finetuning
-    finetune=isinstance(cfg.dataset_root, DictConfig)
+    # Checks to see if policy is goal-conditioned
     condition_type=cfg.condition_type.lower()
 
-    logging.info("make_dataset")
-    offline_dataset = make_dataset(cfg)
-    pref_dataset = None
+    # Establish finetuning type 
+    finetune=isinstance(cfg.dataset_root, DictConfig)
+    if not finetune:
+        finetune_type=None
+    else:
+        finetune_type=cfg.get("finetune_type", None)
+        if finetune_type is None:
+            finetune_type='energy'
+        finetune_type=finetune_type.lower()
 
-    #if finetuning, multiple datasets will be returned
+    logging.info("make_dataset")
+    offline_dataset = make_dataset(cfg) # If dictionary, makes dataset for each item in dictionary
+
+    #If finetuning, multiple datasets will be returned
+    pref_tune_dataset = None
+    demo_tune_dataset = None
     if finetune:
-        pref_dataset = PreferencePairDataset(offline_dataset['pos'], offline_dataset['neg'])
         offline_dataset = offline_dataset['base']
+        if finetune_type in ["energy", "dpo"]:
+            pref_tune_dataset = PreferencePairDataset(offline_dataset['pos'], offline_dataset['neg'])
+        elif finetune_type=='demo': 
+            demo_tune_dataset = offline_dataset['demo']
+        else:
+            raise NotImplementedError("Unsupported finetuning type")
 
     if isinstance(offline_dataset, MultiLeRobotDataset):
         logging.info(
@@ -349,17 +376,32 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     elif finetune:
         pretrained_path = str(cfg.pretrained_policy_path)
 
-    # init with original dataset statistics unless loading pretrained policy (to resume or finetune)
+    # Init with original dataset statistics unless loading pretrained policy (to resume or finetune)
     policy = make_policy(
         hydra_cfg=cfg,
         dataset_stats=offline_dataset.stats if not (cfg.resume or finetune) else None,
         pretrained_policy_name_or_path=pretrained_path,
     )
-
     assert isinstance(policy, nn.Module)
+
+    # Make frozen refrence policy required for DPO
+    ref_policy = None
+    if finetune_type=='dpo':
+        ref_policy = deepcopy(policy)
+        assert isinstance(policy, nn.Module)
+        ref_policy.eval()
+        ref_policy.requires_grad_(False)
+
     # Create optimizer and scheduler
-    # Temporary hack to move optimizer out of policy
-    optimizer, lr_scheduler = make_optimizer_and_scheduler(cfg, policy, finetune)
+    # Check to see if only finetuning FiLM layers:
+    train_FiLM_only = False
+    if finetune: 
+        if finetune_type=="energy": # Only finetune FiLM layers for energy finetuning 
+            train_FiLM_only=True
+        elif cfg.train_only_FiLM: # Otherewise read config file (for DPO or demonstration finetuning)
+            train_FiLM_only=True
+
+    optimizer, lr_scheduler = make_optimizer_and_scheduler(cfg, policy, train_FiLM_only=train_FiLM_only)
     grad_scaler = GradScaler(enabled=cfg.use_amp)
 
     step = 0  # number of policy updates (forward + backward + optim)
@@ -439,7 +481,9 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
             )
             logging.info("Resume training")
 
-    # create dataloader for offline training
+    # Create dataloaders for offline training
+
+    # Make base dataset
     if cfg.training.get("drop_n_last_frames"):
         shuffle = False
         sampler = EpisodeAwareSampler(
@@ -461,21 +505,21 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     )
     dl_iter = cycle(dataloader)
 
-    # create same dataloader for offline pref training
-    if pref_dataset is not None:
-        #if cfg.training.get("drop_n_last_frames"):
-        #    shuffle = False
-        #    sampler = EpisodeAwareSampler(
-        #        pref_dataset.episode_data_index,
-        #        drop_n_last_frames=cfg.training.drop_n_last_frames,
-        #        shuffle=True,
-        #    )
-        #else:
-        shuffle = True
-        sampler = None
-            
-        pref_dataloader = torch.utils.data.DataLoader(
-            pref_dataset,
+    # Make finetuning datasets.
+    # Create same dataloader for demo tuning:
+    if demo_tune_dataset is not None:
+        if cfg.training.get("drop_n_last_frames"):
+            shuffle = False
+            sampler = EpisodeAwareSampler(
+                demo_tune_dataset.episode_data_index,
+                drop_n_last_frames=cfg.training.drop_n_last_frames,
+                shuffle=True,
+            )
+        else:
+            shuffle = True
+            sampler = None
+        demo_tune_dataloader = torch.utils.data.DataLoader(
+            demo_tune_dataset,
             num_workers=cfg.training.num_workers,
             batch_size=cfg.training.batch_size,
             shuffle=shuffle,
@@ -483,10 +527,28 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
             pin_memory=device.type != "cpu",
             drop_last=True,
         )
-        pref_dl_iter = cycle(pref_dataloader)
+        dt_dl_iter = cycle(demo_tune_dataloader)
 
-    # ensure non-film parameters are frozen for finetuning
-    if finetune: 
+
+    # create same dataloader for offline pref training
+    if pref_tune_dataset is not None:
+        # Use full trajectories so don't need to drop samples (#TODO: MAKE SURE CORRECT, LOADED CORRECTLY)
+        shuffle = True
+        sampler = None
+            
+        pref_tune_dataloader = torch.utils.data.DataLoader(
+            pref_tune_dataset,
+            num_workers=cfg.training.num_workers,
+            batch_size=cfg.training.batch_size,
+            shuffle=shuffle,
+            sampler=sampler,
+            pin_memory=device.type != "cpu",
+            drop_last=False, #TODO: WHY WAS THIS TRUE BEFORE, WHAT DID THAT MEAN
+        )
+        pt_dl_iter = cycle(pref_tune_dataloader)
+
+    # Ensure non-film parameters are frozen if desired
+    if train_FiLM_only: 
         non_cond_encoder_trainable = [ n for n, p in policy.named_parameters() if p.requires_grad and "cond_encoder" not in n ] 
         assert len(non_cond_encoder_trainable) == 0, f"Unexpected trainable params: {non_cond_encoder_trainable}" 
         
@@ -497,7 +559,6 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     offline_step = 0
     for _ in range(step, cfg.training.offline_steps):
 
-        #print('ON OFFLINE STEP:', offline_step)
         if offline_step == 0:
             logging.info("Start offline training on a fixed dataset")
 
@@ -510,15 +571,20 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
 
         # handle possibility of finetuning
         tune_batch = None
-        if pref_dataset is not None:
-            pref_batch = next(pref_dl_iter)
-            pos_batch = {k: v.to(device, non_blocking=True) for k, v in pref_batch["pos"].items()}
-            neg_batch = {k: v.to(device, non_blocking=True) for k, v in pref_batch["neg"].items()}
-            tune_batch=(pos_batch, neg_batch)
 
-        #print('Batches gathered')
-        #print(tune_batch[0].shape)
-        #print(batch[0].shape)
+        if finetune:
+            tune_batch = {}
+            if demo_tune_dataset is not None:
+                demo_batch = next(dt_dl_iter)
+                for key in demo_batch:
+                    demo_batch[key] = demo_batch[key].to(device, non_blocking=True)
+                tune_batch['demo']=demo_batch
+
+            if pref_tune_dataset is not None:
+                pref_batch = next(pt_dl_iter)
+                pos_batch = {k: v.to(device, non_blocking=True) for k, v in pref_batch["pos"].items()}
+                neg_batch = {k: v.to(device, non_blocking=True) for k, v in pref_batch["neg"].items()}
+                tune_batch['pref']=(pos_batch, neg_batch)
 
         train_info = update_policy(
             policy,
@@ -528,10 +594,9 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
             grad_scaler=grad_scaler,
             lr_scheduler=lr_scheduler,
             use_amp=cfg.use_amp,
-            tune_batch = tune_batch
+            tune_batch = tune_batch, 
+            ref_policy=ref_policy #None for everything except DPO
         )
-
-        #print('Policy updated')
 
         train_info["dataloading_s"] = dataloading_s
 
@@ -551,7 +616,9 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
         logging.info("End of training")
         return
 
-    # Online training.
+
+
+    #### ONLINE TRAINING ####
 
     # Create an env dedicated to online episodes collection from policy rollout.
     online_env = make_env(cfg, n_envs=cfg.training.online_rollout_batch_size)
