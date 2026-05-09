@@ -131,14 +131,12 @@ def load_hf_dataset(repo_id: str, version: str, root: Path, split: str, goal_hor
                 observations = observations[:state_index][::4]
                 timeouts = timeouts[:state_index-4][::4]
 
-            else: #Otherwise preference dataset, don't downsample
+            else: #Otherwise preference dataset, don't downsample. Assume exact horizon length (Generated from rollouts)
                 np_file = np.load(root)
                 observations = np.array(np_file['observations'])
                 timeouts = np.array(np_file['timeouts'])
                 timeouts = timeouts[:len(observations)-1]
-            # print('OBSERVATIONS SHAPE:', observations.shape)
-            # print('TIMEOUTS SHAPE:', timeouts.shape)
-
+                
             def create_episode_and_frame_indices(timeouts, observations, goal_horizon):
                 episode_endings = np.where(timeouts)[0]  # Indices where episodes end
                 episode_lengths = np.diff(np.concatenate(([0], episode_endings + 1)))  # Lengths of episodes
