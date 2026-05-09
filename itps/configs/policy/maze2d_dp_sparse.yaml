@@ -4,7 +4,7 @@ seed: 100000
 dataset_repo_id: maze2d
 condition_type: unconditional
 env_type: sparse
-dataset_root: data/maze2d-sparse-v2.hdf5
+dataset_root: data/maze2d-sparse-v3.hdf5
 
 wandb:
   enable: true
