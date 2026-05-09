@@ -331,13 +331,13 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
 
     # Establish finetuning type 
     finetune=isinstance(cfg.dataset_root, DictConfig)
-    if not finetune:
-        finetune_type=None
-    else:
-        finetune_type=cfg.get("finetune_type", None)
+    finetune_type=None
+    if finetune:
+        finetune_type=cfg.get("finetune_type", None) #if no type listed, earlier config and energy
         if finetune_type is None:
             finetune_type='energy'
         finetune_type=finetune_type.lower()
+        assert finetune_type in ["energy", "dpo", "demo"], NotImplementedError("Unsupported finetuning type. Supported types are: energy, dpo, or demo")
 
     logging.info("make_dataset")
     offline_dataset = make_dataset(cfg) # If dictionary, makes dataset for each item in dictionary
@@ -346,13 +346,11 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     pref_tune_dataset = None
     demo_tune_dataset = None
     if finetune:
-        offline_dataset = offline_dataset['base']
         if finetune_type in ["energy", "dpo"]:
             pref_tune_dataset = PreferencePairDataset(offline_dataset['pos'], offline_dataset['neg'])
         elif finetune_type=='demo': 
             demo_tune_dataset = offline_dataset['demo']
-        else:
-            raise NotImplementedError("Unsupported finetuning type")
+        offline_dataset = offline_dataset['base']
 
     if isinstance(offline_dataset, MultiLeRobotDataset):
         logging.info(
@@ -388,7 +386,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     ref_policy = None
     if finetune_type=='dpo':
         ref_policy = deepcopy(policy)
-        assert isinstance(policy, nn.Module)
+        assert isinstance(ref_policy, nn.Module)
         ref_policy.eval()
         ref_policy.requires_grad_(False)
 
@@ -398,8 +396,13 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     if finetune: 
         if finetune_type=="energy": # Only finetune FiLM layers for energy finetuning 
             train_FiLM_only=True
-        elif cfg.train_only_FiLM: # Otherewise read config file (for DPO or demonstration finetuning)
-            train_FiLM_only=True
+        elif finetune_type in ['dpo', 'demo']:                                                                            
+            try:                                                                                                          
+                train_FiLM_only = cfg.train_only_FiLM                                                                     
+            except:
+                raise ValueError(                                                                                         
+                    f"finetune_type='{finetune_type}' requires 'train_only_FiLM' to be explicitly set in the config."
+                )  
 
     optimizer, lr_scheduler = make_optimizer_and_scheduler(cfg, policy, train_FiLM_only=train_FiLM_only)
     grad_scaler = GradScaler(enabled=cfg.use_amp)
@@ -543,7 +546,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
             shuffle=shuffle,
             sampler=sampler,
             pin_memory=device.type != "cpu",
-            drop_last=False, #TODO: WHY WAS THIS TRUE BEFORE, WHAT DID THAT MEAN
+            drop_last=True,
         )
         pt_dl_iter = cycle(pref_tune_dataloader)
 
