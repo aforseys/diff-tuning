@@ -337,7 +337,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
         if finetune_type is None:
             finetune_type='energy'
         finetune_type=finetune_type.lower()
-        assert finetune_type in ["energy", "dpo", "demo"], NotImplementedError("Unsupported finetuning type. Supported types are: energy, dpo, or demo")
+        assert finetune_type in ["energy", "dpo", "demo"], f"Unsupported finetuning type: {finetune_type}. Supported types are: energy, dpo, demo"
 
     logging.info("make_dataset")
     offline_dataset = make_dataset(cfg) # If dictionary, makes dataset for each item in dictionary
@@ -399,7 +399,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
         elif finetune_type in ['dpo', 'demo']:                                                                            
             try:                                                                                                          
                 train_FiLM_only = cfg.train_only_FiLM                                                                     
-            except:
+            except Exception:
                 raise ValueError(                                                                                         
                     f"finetune_type='{finetune_type}' requires 'train_only_FiLM' to be explicitly set in the config."
                 )  
