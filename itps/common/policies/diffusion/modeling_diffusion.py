@@ -161,7 +161,7 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
 
         return actions
 
-    def forward(self, batch: dict[str, Tensor], tune_batch: dict[str, Tensor]= None, ref_model=None) -> dict[str, Tensor]:
+    def forward(self, batch: dict[str, Tensor], tune_batch: dict[str, Tensor]= None) -> dict[str, Tensor]:
         """Run the batch through the model and compute the loss for training or validation."""
         batch = self.normalize_inputs(batch)
         # if len(self.expected_image_keys) > 0: #TODO: Need to make shallow copy here? (Done in Irene's code) #TODO: where would I need this
@@ -180,7 +180,7 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
                 neg_batch = self.normalize_inputs(neg_batch)
                 neg_batch = self.normalize_targets(neg_batch)
                 tune_batch['pref'] = (pos_batch, neg_batch) 
-        loss, loss_components = self.diffusion.compute_loss(batch, tune_batch, ref_model=ref_model)
+        loss, loss_components = self.diffusion.compute_loss(batch, tune_batch)
         return {"loss": loss, **loss_components}
    
     def freeze_nonFiLM(self):
@@ -782,7 +782,7 @@ class EBMDiffusionModel(nn.Module):
     #     return loss.mean(), (loss_mse.mean(), loss_energy.mean(), loss_energy_finetune.mean())
     #     # return loss.mean()
 
-    def compute_loss(self, batch: dict[str, Tensor], tune_batch: dict[str, Tensor] = None, ref_model=None) -> Tensor:
+    def compute_loss(self, batch: dict[str, Tensor], tune_batch: dict[str, Tensor] = None) -> Tensor:
         #     """
         #     This function expects `batch` to have (at least):
         #     {
@@ -855,7 +855,7 @@ class EBMDiffusionModel(nn.Module):
         else:
             mask = None
 
-        batch_mse_loss = self._compute_denoising_mse_loss(batch, timesteps, eps, mask=mask, model=ref_model)
+        batch_mse_loss = self._compute_denoising_mse_loss(batch, timesteps, eps, mask=mask)
         
 
         ## Contrastive Energy Loss ##
@@ -919,8 +919,7 @@ class EBMDiffusionModel(nn.Module):
         ## DPO Finetuning Loss ##
         elif getattr(self.config, 'finetune_dpo', False):
             
-            assert ref_model is not None, "DPO loss requires reference model"
-            assert not getattr(self.config, 'supervise_energy_landscape', False), "DPO does not assume access to energy landscape for supervision"
+            assert not getattr(self.config, 'supervise_energy_landscape', False), "DPO does not assume access to energy landscape"
             
             assert 'pref' in tune_batch, "Tuning batch must contain pairwise preferences"
             pos_batch, neg_batch = tune_batch['pref']
@@ -934,14 +933,15 @@ class EBMDiffusionModel(nn.Module):
             eps = torch.randn(trajectory.shape, device=trajectory.device)
             mask = None # No mask needed when working with pref dataset
 
-            finetune_pos_mse_loss = self._compute_denoising_mse_loss(pos_batch, timesteps, eps, mask=mask, model=None)
-            finetune_neg_mse_loss = self._compute_denoising_mse_loss(neg_batch, timesteps, eps, mask=mask, model=None)
+            finetune_pos_mse_loss = self._compute_denoising_mse_loss(pos_batch, timesteps, eps, mask=mask)
+            finetune_neg_mse_loss = self._compute_denoising_mse_loss(neg_batch, timesteps, eps, mask=mask)
 
             # Process and return: 
 
         ## Demonstration Finetuning Loss ##
         elif getattr(self.config, 'finetune_demos', False):
 
+            assert not getattr(self.config, 'finetune_demos', False), "Demonstration finetuning does not assume access to energy landscape"
             assert 'demo' in tune_batch, "Tuning batch must contain new demonstrations"
             demo_batch = tune_batch['demo']
 
@@ -985,15 +985,11 @@ class EBMDiffusionModel(nn.Module):
         }
 
         
-    def _compute_denoising_mse_loss(self, batch, timesteps, eps, mask=None, model=None):
+    def _compute_denoising_mse_loss(self, batch, timesteps, eps, mask=None):
 
         # Assuming noise prediction
         assert self.config.prediction_type == "epsilon", "Assumes target prediction is noise."
         target = eps
-
-        # Use base model if none passed in
-        if model is None: 
-            model = self.model
 
         # Forward diffusion
         global_cond = self._prepare_global_conditioning(batch)
@@ -1001,7 +997,7 @@ class EBMDiffusionModel(nn.Module):
         noisy_trajectory = self.noise_scheduler.add_noise(trajectory, eps, timesteps)
 
         # Predict noise and compare to target
-        pred = model(noisy_trajectory, timesteps, global_cond=global_cond, mask=mask)
+        pred = self.model(noisy_trajectory, timesteps, global_cond=global_cond, mask=mask)
         loss = F.mse_loss(pred, target, reduction="none")
 
         # Mask loss wherever the action is padded with copies (edges of the dataset trajectory).
