@@ -86,23 +86,6 @@ def make_optimizer_and_scheduler(cfg, policy, train_FiLM_only=False):
                     cfg.training.adam_eps,
                     cfg.training.adam_weight_decay,
                 )
-        # if not finetune:
-        #     optimizer = torch.optim.Adam(
-        #         policy.diffusion.parameters(),
-        #         cfg.training.lr,
-        #         cfg.training.adam_betas,
-        #         cfg.training.adam_eps,
-        #         cfg.training.adam_weight_decay,
-        #     )
-        # else:
-        #         trainable_params = policy.freeze_nonFiLM()
-        #         optimizer = torch.optim.Adam(
-        #         trainable_params,
-        #         cfg.training.lr,
-        #         cfg.training.adam_betas,
-        #         cfg.training.adam_eps,
-        #         cfg.training.adam_weight_decay,
-        #     )
 
         from diffusers.optimization import get_scheduler
 
@@ -180,7 +163,6 @@ def update_policy(
         "update_s": time.perf_counter() - start_time,
         **{k: v.item() for k, v in output_dict.items() if k != "loss"},
     }
-    #info.update({k: v for k, v in output_dict.items() if k not in info}) (redundant?)
 
     return info
 
@@ -329,16 +311,14 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     # Checks to see if policy is goal-conditioned
     condition_type=cfg.condition_type.lower()
 
-    # Establish finetuning type 
-    finetune=isinstance(cfg.dataset_root, DictConfig)
-    finetune_type=None
+    # Establish finetuning type
+    finetune = isinstance(cfg.dataset_root, DictConfig)
+    finetune_type = None
     if finetune:
-        #TODO: INSTEAD BASE ON THE LOSS COMPUTATION PART OF CONFIG !!
-        finetune_type=cfg.get("finetune_type", None) #if no type listed, earlier config and energy
-        if finetune_type is None:
-            finetune_type='energy'
-        finetune_type=finetune_type.lower()
-        assert finetune_type in ["energy", "dpo", "demo"], f"Unsupported finetuning type: {finetune_type}. Supported types are: energy, dpo, demo"
+        finetune_config_flags = ["finetune_energy_landscape", "finetune_dpo", "finetune_demos"]
+        finetune_flags = [cfg.get(flag, False) for flag in finetune_config_flags]
+        assert sum(finetune_flags) == 1, f"Exactly one of {finetune_config_flags} must be True when finetuning."
+        finetune_type = finetune_config_flags[finetune_flags.index(True)]
 
     logging.info("make_dataset")
     offline_dataset = make_dataset(cfg) # If dictionary, makes dataset for each item in dictionary
@@ -347,9 +327,9 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     pref_tune_dataset = None
     demo_tune_dataset = None
     if finetune:
-        if finetune_type in ["energy", "dpo"]:
+        if finetune_type in ["finetune_energy_landscape", "finetune_dpo"]:
             pref_tune_dataset = PreferencePairDataset(offline_dataset['pos'], offline_dataset['neg'])
-        elif finetune_type=='demo': 
+        elif finetune_type == 'finetune_demos':
             demo_tune_dataset = offline_dataset['demo']
         offline_dataset = offline_dataset['base']
 
@@ -385,7 +365,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
 
     # Make frozen refrence policy required for DPO
     ref_policy = None
-    if finetune_type=='dpo':
+    if finetune_type == 'finetune_dpo':
         ref_policy = deepcopy(policy)
         assert isinstance(ref_policy, nn.Module)
         ref_policy.eval()
@@ -395,15 +375,14 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     # Check to see if only finetuning FiLM layers:
     train_FiLM_only = False
     if finetune: 
-        if finetune_type=="energy": # Only finetune FiLM layers for energy finetuning 
-            train_FiLM_only=True
-        elif finetune_type in ['dpo', 'demo']:                                                                            
-            try:                                                                                                          
-                train_FiLM_only = cfg.train_only_FiLM                                                                     
-            except Exception:
-                raise ValueError(                                                                                         
+        if finetune_type == "finetune_energy_landscape": # Only finetune FiLM layers for energy finetuning
+            train_FiLM_only = True
+        elif finetune_type in ['finetune_dpo', 'finetune_demos']:
+            train_FiLM_only = cfg.get("train_only_FiLM", None)
+            if train_FiLM_only is None:
+                raise ValueError(
                     f"finetune_type='{finetune_type}' requires 'train_only_FiLM' to be explicitly set in the config."
-                )  
+                )
 
     optimizer, lr_scheduler = make_optimizer_and_scheduler(cfg, policy, train_FiLM_only=train_FiLM_only)
     grad_scaler = GradScaler(enabled=cfg.use_amp)
@@ -525,7 +504,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
         demo_tune_dataloader = torch.utils.data.DataLoader(
             demo_tune_dataset,
             num_workers=cfg.training.num_workers,
-            batch_size=cfg.training.batch_size, #TODO: MAKE MIN OF BATCH SIZE AND TOTAL???
+            batch_size=min(cfg.training.batch_size, len(demo_tune_dataset)),
             shuffle=shuffle,
             sampler=sampler,
             pin_memory=device.type != "cpu",
