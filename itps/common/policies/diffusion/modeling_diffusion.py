@@ -845,7 +845,7 @@ class EBMDiffusionModel(nn.Module):
         
 
         ## Contrastive Energy Supervision Loss ##
-        if self.config.supervise_energy_landscape:
+        if getattr(self.config, 'supervise_energy_landscape', False): 
 
             # Resample trajectory noise, keep same timesteps (same as in IRED)
             eps = torch.randn(trajectory.shape, device=trajectory.device)
@@ -857,7 +857,7 @@ class EBMDiffusionModel(nn.Module):
                 mask_concat = None
 
             neg_eps_weight=2.0 # Negative batch will just be corrupted version of positive. Can test various ways (here 2x noise). Starting point in IRED and used in itps was 3x.
-            batch_comparison_loss = self._compute_comparison_energy_loss(batch, batch, eps, timesteps, mask=mask_concat, neg_eps_weight=neg_eps_weight)
+            loss_energy = self._compute_comparison_energy_loss(batch, batch, eps, timesteps, mask=mask_concat, neg_eps_weight=neg_eps_weight)
 
 
         # Return loss if not finetuning
@@ -893,9 +893,6 @@ class EBMDiffusionModel(nn.Module):
             loss = loss_mse * self.config.gradient_loss_weight + loss_energy_finetune * self.config.finetune_loss_weight
             if self.config.supervise_energy_landscape: 
                 loss += loss_energy * self.config.energy_landscape_loss_weight
-            
-            #return loss.mean(), (loss_mse.mean(), loss_energy.mean(), loss_energy_finetune.mean(), loss_dpo_finetune.mean(), loss_demo_finetune.mean())
-
 
         elif getattr(self.config, 'finetune_dpo', False):
             
@@ -915,8 +912,9 @@ class EBMDiffusionModel(nn.Module):
             finetune_pos_mse_loss = self._compute_denoising_mse_loss(pos_batch, timesteps, eps, mask=mask, model=None)
             finetune_neg_mse_loss = self._compute_denoising_mse_loss(neg_batch, timesteps, eps, mask=mask, model=None)
 
-            #TODO: combine into sigmoid with appropriate timestep weighting and beta.
-            #TODO: assert not self.config.supervise_energy_landscape?
+            # Process and return: 
+
+            assert not getattr(self.config, 'supervise_energy_landscape', False), "DPO does not assume access to energy landscape for supervision"
 
         elif getattr(self.config, 'finetune_demos', False):
 
