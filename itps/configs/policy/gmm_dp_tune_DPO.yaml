@@ -1,0 +1,122 @@
+# @package _global_
+
+seed: 100000
+dataset_repo_id: gmm
+condition_type: unconditional
+dataset_root:
+  base: 'data/gmm_unconditional_1000_42_20251204_174604.npy'
+  pos: 'data/gmm_unconditional_pref_cluster_0_positive_dataset_20251204_192929.npy'
+  neg: 'data/gmm_unconditional_pref_cluster_0_negative_dataset_20251204_192929.npy'
+pretrained_policy_path: "data/gmm/unconditioned/train/outputs/2026.04.20/gmm_2026.04.20.19.54.33_gmm_diffusion/checkpoints/last/pretrained_model" #"outputs/train/gmm/run_unconditional_2025-12-04_18-29-47/"
+
+wandb:
+  enable: true
+hydra:
+  run:
+    # Set `dir` to where you would like to save all of the run outputs. If you run another training session
+    # with the same value for `dir` its contents will be overwritten unless you set `resume` to true.
+    dir: data/gmm/general/tune/${now:%Y.%m.%d}/${hydra.job.name}
+  job:
+    name: gmm_unconditional_tune_${now:%Y.%m.%d.%H.%M.%S}_${env.name}_${policy.name}
+
+device: "cuda:1"  # cpu
+
+training:
+  offline_steps: 100
+  online_steps: 0
+  eval_freq: 10
+  save_freq: 10
+  log_freq: 10
+  save_checkpoint: True
+  batch_size: 256
+  grad_clip_norm: 10
+  lr: 1.0e-4
+  lr_scheduler: cosine
+  lr_warmup_steps: 50
+  adam_betas: [0.95, 0.999]
+  adam_eps: 1.0e-8
+  adam_weight_decay: 1.0e-6
+  online_steps_between_rollouts: 1
+
+  delta_timestamps:
+    observation.environment_state: "[0]"
+    observation.state: "[0]"
+    action: "[0]"
+
+  # The original implementation doesn't sample frames for the last 7 steps,
+  # which avoids excessive padding and leads to improved training results.
+  drop_n_last_frames: false #7  # ${policy.horizon} - ${policy.n_action_steps} - ${policy.n_obs_steps} + 1
+
+eval:
+  n_samples: 200
+  opt_params: [{'n_opt': 1, 't_subset': null, 'denoise': False}, {'n_opt': 2, 't_subset': null, 'denoise': False}, {'n_opt': 5, 't_subset': null, 'denoise': False}]
+  methods: ['ired', 'ddim']
+
+policy:
+  name: diffusion
+
+  # Input / output structure.
+  n_obs_steps: 1
+  horizon: 1
+  n_action_steps: 1
+
+  input_shapes:
+    # TODO(rcadene, alexander-soare): add variables for height and width from the dataset/env?
+    observation.environment_state: [1]
+    observation.state: ["${env.state_dim}"]
+  output_shapes:
+    action: ["${env.action_dim}"]
+
+  # Normalization / Unnormalization
+  input_normalization_modes:
+    observation.environment_state: min_max
+    observation.state: min_max
+  output_normalization_modes:
+    action: min_max
+
+  # Architecture / modeling.
+  # Vision backbone.
+  vision_backbone: resnet18
+  crop_shape: [84, 84]
+  crop_is_random: True
+  pretrained_backbone_weights: null
+  use_group_norm: True
+  spatial_softmax_num_keypoints: 32
+  # Unet.
+  down_dims: [128, 256, 512]
+  kernel_size: 5
+  n_groups: 8
+  diffusion_step_embed_dim: 128
+  use_film_scale_modulation: True
+  # Noise scheduler.
+  noise_scheduler_type: DDIM
+  num_train_timesteps: 10
+  beta_schedule: squaredcos_cap_v2
+  beta_start: 0.0001
+  beta_end: 0.02
+  prediction_type: epsilon # epsilon / sample
+  clip_sample: True
+  clip_sample_range: 1.0
+
+  # Inference
+  num_inference_steps: 10  # if not provided, defaults to `num_train_timesteps`
+
+  # Loss computation
+  do_mask_loss_for_padding: false
+
+  gradient_loss_weight: 1.0 #unused with DPO
+
+  supervise_energy_landscape: false
+  energy_landscape_loss_weight: 0.0
+
+  finetune_energy_landscape: false
+  finetune_loss_weight: 0.0
+
+  finetune_demos: false
+  demo_finetune_loss_weight: 0.0
+
+  finetune_dpo: True
+  dpo_params: 
+    rho: 500
+    mu: 0.2
+    b: 0
