@@ -118,15 +118,14 @@ def update_policy(
     lr_scheduler=None,
     use_amp: bool = False,
     lock=None,
-    tune_batch = None, 
-    ref_policy = None
+    tune_batch = None
 ):
     """Returns a dictionary of items for logging."""
     start_time = time.perf_counter()
     device = get_device_from_parameters(policy)
     policy.train()
     with torch.autocast(device_type=device.type) if use_amp else nullcontext():
-        output_dict = policy.forward(batch, tune_batch=tune_batch, ref_policy=ref_policy)
+        output_dict = policy.forward(batch, tune_batch=tune_batch)
         # TODO(rcadene): policy.unnormalize_outputs(out_dict)
         loss = output_dict["loss"]
     grad_scaler.scale(loss).backward()
@@ -363,14 +362,6 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     )
     assert isinstance(policy, nn.Module)
 
-    # Make frozen refrence policy required for DPO
-    ref_policy = None
-    if finetune_type == 'finetune_dpo':
-        ref_policy = deepcopy(policy)
-        assert isinstance(ref_policy, nn.Module)
-        ref_policy.eval()
-        ref_policy.requires_grad_(False)
-
     # Create optimizer and scheduler
     # Check to see if only finetuning FiLM layers:
     train_FiLM_only = False
@@ -574,8 +565,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
             grad_scaler=grad_scaler,
             lr_scheduler=lr_scheduler,
             use_amp=cfg.use_amp,
-            tune_batch = tune_batch, 
-            ref_policy=ref_policy #None for everything except DPO
+            tune_batch = tune_batch
         )
 
         train_info["dataloading_s"] = dataloading_s
