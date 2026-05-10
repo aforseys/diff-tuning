@@ -855,7 +855,9 @@ class EBMDiffusionModel(nn.Module):
         else:
             mask = None
 
-        batch_mse_loss = self._compute_denoising_mse_loss(batch, timesteps, eps, mask=mask)
+        # Compute loss 
+        loss_mse = self._compute_denoising_mse_loss(batch, timesteps, eps, mask=mask)
+        loss_mse = loss_mse * extract(self.loss_weight, timesteps, loss_mse.shape) # weight MSE loss by timestep
         
 
         ## Contrastive Energy Loss ##
@@ -870,13 +872,13 @@ class EBMDiffusionModel(nn.Module):
             else:
                 mask_concat = None
 
+            # Compute loss 
             neg_eps_weight=2.0 # Negative batch will just be corrupted version of positive. Can test various ways (here 2x noise). Starting point in IRED and used in itps was 3x.
             loss_energy = self._compute_comparison_energy_loss(batch, batch, eps, timesteps, mask=mask_concat, neg_eps_weight=neg_eps_weight)
 
 
         #### RETURN LOSS IF NO TUNING LOSSES ####
         if tune_batch is None:
-            loss_mse = batch_mse_loss * extract(self.loss_weight, timesteps, batch_mse_loss.shape)
             loss = loss_mse * self.config.gradient_loss_weight
             if getattr(self.config, 'supervise_energy_landscape', False):
                 loss += loss_energy * self.config.energy_landscape_loss_weight
@@ -907,11 +909,11 @@ class EBMDiffusionModel(nn.Module):
             eps = torch.randn(trajectory.shape, device=trajectory.device)
             mask = None # No mask needed when working with pref dataset
 
-            finetune_comparison_loss = self._compute_comparison_energy_loss(pos_batch, neg_batch, eps, timesteps, mask=mask)
+            # Compute loss 
+            loss_energy_finetune = self._compute_comparison_energy_loss(pos_batch, neg_batch, eps, timesteps, mask=mask)
+            loss_energy_finetune = loss_energy_finetune * extract(self.loss_weight, timesteps, loss_energy_finetune.shape) # weight pref loss by timestep 
             
-            # Process and return: 
-            loss_mse = batch_mse_loss * extract(self.loss_weight, timesteps, batch_mse_loss.shape)
-            loss_energy_finetune = finetune_comparison_loss * extract(self.loss_weight, timesteps, finetune_comparison_loss.shape)
+            # Process loss
             loss = loss_mse * self.config.gradient_loss_weight + loss_energy_finetune * self.config.finetune_loss_weight
             if getattr(self.config, 'supervise_energy_landscape', False): 
                 loss += loss_energy * self.config.energy_landscape_loss_weight
@@ -920,7 +922,6 @@ class EBMDiffusionModel(nn.Module):
         elif getattr(self.config, 'finetune_dpo', False):
             
             assert not getattr(self.config, 'supervise_energy_landscape', False), "DPO does not assume access to energy landscape"
-            
             assert 'pref' in tune_batch, "Tuning batch must contain pairwise preferences"
             pos_batch, neg_batch = tune_batch['pref']
 
@@ -933,10 +934,16 @@ class EBMDiffusionModel(nn.Module):
             eps = torch.randn(trajectory.shape, device=trajectory.device)
             mask = None # No mask needed when working with pref dataset
 
-            finetune_pos_mse_loss = self._compute_denoising_mse_loss(pos_batch, timesteps, eps, mask=mask)
-            finetune_neg_mse_loss = self._compute_denoising_mse_loss(neg_batch, timesteps, eps, mask=mask)
+            # Calculate positive and negative sample MSE 
+            pos_mse_loss = self._compute_denoising_mse_loss(pos_batch, timesteps, eps, mask=mask)
+            neg_mse_loss = self._compute_denoising_mse_loss(neg_batch, timesteps, eps, mask=mask)
+            # Weight MSE according to timestep (as all MSE calculations)
+            pos_mse_loss = pos_mse_loss * extract(self.loss_weight, timesteps, pos_mse_loss.shape)
+            neg_mse_loss = neg_mse_loss * extract(self.loss_weight, timesteps, neg_mse_loss.shape)
 
-            # Process and return: 
+            # Process loss
+            loss_dpo_finetune = pos_mse_loss-neg_mse_loss
+            loss = -torch.sigmoid(-self.config.dpo_params.rho * (loss_dpo_finetune + self.config.dpo_params.mu*loss_energy - self.config.dpo_params.b))
 
         ## Demonstration Finetuning Loss ##
         elif getattr(self.config, 'finetune_demos', False):
@@ -967,14 +974,13 @@ class EBMDiffusionModel(nn.Module):
             else:
                 mask = None
             
-            finetune_demo_mse_loss = self._compute_denoising_mse_loss(demo_batch, demo_timesteps, demo_eps, mask=mask)
+            # Compute loss 
+            loss_demo_finetune = self._compute_denoising_mse_loss(demo_batch, demo_timesteps, demo_eps, mask=mask)
+            loss_demo_finetune = loss_demo_finetune * extract(self.loss_weight, timesteps, loss_demo_finetune.shape) # weight MSE loss by timestep
 
-            # Process
-            loss_mse = batch_mse_loss * extract(self.loss_weight, timesteps, batch_mse_loss.shape)
-            loss_demo_finetune = finetune_demo_mse_loss * extract(self.loss_weight, timesteps, finetune_demo_mse_loss.shape)
+            # Process loss 
             loss = loss_mse * self.config.gradient_loss_weight + loss_demo_finetune * self.config.demo_finetune_loss_weight
-            if getattr(self.config, 'supervise_energy_landscape', False):
-                loss += loss_energy * self.config.energy_landscape_loss_weight
+
 
         return loss.mean(), {
             "loss_mse": loss_mse.mean(),
