@@ -315,7 +315,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     finetune_type = None
     if finetune:
         finetune_config_flags = ["finetune_energy_landscape", "finetune_dpo", "finetune_demos"]
-        finetune_flags = [cfg.get(flag, False) for flag in finetune_config_flags]
+        finetune_flags = [cfg.policy.get(flag, False) for flag in finetune_config_flags]
         assert sum(finetune_flags) == 1, f"Exactly one of {finetune_config_flags} must be True when finetuning."
         finetune_type = finetune_config_flags[finetune_flags.index(True)]
 
@@ -369,7 +369,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
         if finetune_type == "finetune_energy_landscape": # Only finetune FiLM layers for energy finetuning
             train_FiLM_only = True
         elif finetune_type in ['finetune_dpo', 'finetune_demos']:
-            train_FiLM_only = cfg.get("train_only_FiLM", None)
+            train_FiLM_only = cfg.training.get("train_only_FiLM", None)
             if train_FiLM_only is None:
                 raise ValueError(
                     f"finetune_type='{finetune_type}' requires 'train_only_FiLM' to be explicitly set in the config."
