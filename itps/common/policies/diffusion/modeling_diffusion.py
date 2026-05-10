@@ -941,14 +941,14 @@ class EBMDiffusionModel(nn.Module):
             pos_mse_loss = pos_mse_loss * extract(self.loss_weight, timesteps, pos_mse_loss.shape)
             neg_mse_loss = neg_mse_loss * extract(self.loss_weight, timesteps, neg_mse_loss.shape)
 
-            # Process loss
+            # Process loss. Loss is a weighted combination of pos/neg MSE with base samples MSE
             loss_dpo_finetune = pos_mse_loss-neg_mse_loss
-            loss = -F.sigmoid(-self.config.dpo_params.rho * (loss_dpo_finetune + self.config.dpo_params.mu*loss_energy - self.config.dpo_params.b))
+            loss = -F.sigmoid(-self.config.dpo_params.rho * (loss_dpo_finetune + self.config.dpo_params.mu*loss_mse - self.config.dpo_params.b))
 
         ## Demonstration Finetuning Loss ##
         elif getattr(self.config, 'finetune_demos', False):
 
-            assert not getattr(self.config, 'finetune_demos', False), "Demonstration finetuning does not assume access to energy landscape"
+            assert not getattr(self.config, 'supervise_energy_landscape', False), "Demonstration finetuning does not assume access to energy landscape"
             assert 'demo' in tune_batch, "Tuning batch must contain new demonstrations"
             demo_batch = tune_batch['demo']
 
@@ -976,7 +976,7 @@ class EBMDiffusionModel(nn.Module):
             
             # Compute loss 
             loss_demo_finetune = self._compute_denoising_mse_loss(demo_batch, demo_timesteps, demo_eps, mask=mask)
-            loss_demo_finetune = loss_demo_finetune * extract(self.loss_weight, timesteps, loss_demo_finetune.shape) # weight MSE loss by timestep
+            loss_demo_finetune = loss_demo_finetune * extract(self.loss_weight, demo_timesteps, loss_demo_finetune.shape) # weight MSE loss by timestep
 
             # Process loss 
             loss = loss_mse * self.config.gradient_loss_weight + loss_demo_finetune * self.config.demo_finetune_loss_weight
