@@ -180,8 +180,8 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
                 neg_batch = self.normalize_inputs(neg_batch)
                 neg_batch = self.normalize_targets(neg_batch)
                 tune_batch['pref'] = (pos_batch, neg_batch) 
-        loss, (loss_denoise, loss_energy, loss_finetune_pref, loss_finetune_dpo, loss_finetune_demo) = self.diffusion.compute_loss(batch, tune_batch, ref_model=ref_model)
-        return {"loss": loss, "MSE_loss": loss_denoise, "contrastive_loss": loss_energy, "pref_tuning_loss": loss_finetune_pref, "DPO_tuning_loss": loss_finetune_dpo, "MSE_tuning_loss": loss_finetune_demo}
+        loss, loss_components = self.diffusion.compute_loss(batch, tune_batch, ref_model=ref_model)
+        return {"loss": loss, **loss_components}
    
     def freeze_nonFiLM(self):
 
@@ -876,10 +876,16 @@ class EBMDiffusionModel(nn.Module):
         if tune_batch is None:
             loss_mse = batch_mse_loss * extract(self.loss_weight, timesteps, batch_mse_loss.shape)
             loss = loss_mse * self.config.gradient_loss_weight
-            if getattr(self.config, 'supervise_energy_landscape', False): 
+            if getattr(self.config, 'supervise_energy_landscape', False):
                 loss += loss_energy * self.config.energy_landscape_loss_weight
 
-            return loss.mean(), (loss_mse.mean(), loss_energy.mean(), loss_energy_finetune.mean(), loss_dpo_finetune.mean(), loss_demo_finetune.mean())
+            return loss.mean(), {
+                "loss_mse": loss_mse.mean(),
+                "loss_energy": loss_energy.mean(),
+                "loss_energy_finetune": loss_energy_finetune.mean(),
+                "loss_dpo_finetune": loss_dpo_finetune.mean(),
+                "loss_demo_finetune": loss_demo_finetune.mean(),
+            }
         
         
         #### COMPUTE TUNE BATCH LOSSES ####
@@ -968,7 +974,13 @@ class EBMDiffusionModel(nn.Module):
             if getattr(self.config, 'supervise_energy_landscape', False):
                 loss += loss_energy * self.config.energy_landscape_loss_weight
 
-        return loss.mean(), (loss_mse.mean(), loss_energy.mean(), loss_energy_finetune.mean(), loss_dpo_finetune.mean(), loss_demo_finetune.mean())
+        return loss.mean(), {
+            "loss_mse": loss_mse.mean(),
+            "loss_energy": loss_energy.mean(),
+            "loss_energy_finetune": loss_energy_finetune.mean(),
+            "loss_dpo_finetune": loss_dpo_finetune.mean(),
+            "loss_demo_finetune": loss_demo_finetune.mean(),
+        }
 
         
     def _compute_denoising_mse_loss(self, batch, timesteps, eps, mask=None, model=None):
