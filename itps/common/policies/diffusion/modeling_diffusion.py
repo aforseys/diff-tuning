@@ -797,7 +797,9 @@ class EBMDiffusionModel(nn.Module):
         #     }
         #     """
 
-        ##### VALIDATE BATCH INPUT #### 
+        ##### VALIDATE INPUT #### 
+
+        # Validate main batch input
         assert set(batch).issuperset({"observation.state", "action"})
         assert "observation.images" in batch or "observation.environment_state" in batch
         n_obs_steps = batch["observation.state"].shape[1]
@@ -805,6 +807,7 @@ class EBMDiffusionModel(nn.Module):
         assert horizon == self.config.horizon
         assert n_obs_steps == self.config.n_obs_steps
 
+        # Validate tune batch input
         if tune_batch is not None:
             if 'pref' in tune_batch:
                 pos_batch, neg_batch = tune_batch['pref']
@@ -819,7 +822,6 @@ class EBMDiffusionModel(nn.Module):
                 assert "observation.images" in demo_batch or "observation.environment_state" in demo_batch
                 assert demo_batch["action"].shape[1] == self.config.horizon
                 assert demo_batch["observation.state"].shape[1] == self.config.n_obs_steps
-
 
         # Set default loss values
         loss_energy=torch.tensor(-1, dtype=torch.float32)
