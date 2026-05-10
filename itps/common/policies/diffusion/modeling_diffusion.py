@@ -853,11 +853,10 @@ class EBMDiffusionModel(nn.Module):
         else:
             mask = None
 
-        # Calc MSE loss
         batch_mse_loss = self._compute_denoising_mse_loss(batch, timesteps, eps, mask=mask, model=ref_model)
         
 
-        ## Contrastive Energy Supervision Loss ##
+        ## Contrastive Energy Loss ##
         if getattr(self.config, 'supervise_energy_landscape', False): 
 
             # Resample trajectory noise, keep same timesteps (same as in IRED)
@@ -873,7 +872,7 @@ class EBMDiffusionModel(nn.Module):
             loss_energy = self._compute_comparison_energy_loss(batch, batch, eps, timesteps, mask=mask_concat, neg_eps_weight=neg_eps_weight)
 
 
-        # Return loss if not finetuning
+        #### RETURN LOSS IF NO TUNING LOSSES ####
         if tune_batch is None:
             loss_mse = batch_mse_loss * extract(self.loss_weight, timesteps, batch_mse_loss.shape)
             loss = loss_mse * self.config.gradient_loss_weight
@@ -884,6 +883,8 @@ class EBMDiffusionModel(nn.Module):
         
         
         #### COMPUTE TUNE BATCH LOSSES ####
+
+        ## Preference Energy Finetuning Loss ##
         elif getattr(self.config, 'finetune_energy_landscape', False): 
 
             assert 'pref' in tune_batch, "Tuning batch must contain pairwise preferences"
@@ -907,6 +908,7 @@ class EBMDiffusionModel(nn.Module):
             if getattr(self.config, 'supervise_energy_landscape', False): 
                 loss += loss_energy * self.config.energy_landscape_loss_weight
 
+        ## DPO Finetuning Loss ##
         elif getattr(self.config, 'finetune_dpo', False):
             
             assert ref_model is not None, "DPO loss requires reference model"
@@ -929,7 +931,7 @@ class EBMDiffusionModel(nn.Module):
 
             # Process and return: 
 
-
+        ## Demonstration Finetuning Loss ##
         elif getattr(self.config, 'finetune_demos', False):
 
             assert 'demo' in tune_batch, "Tuning batch must contain new demonstrations"
