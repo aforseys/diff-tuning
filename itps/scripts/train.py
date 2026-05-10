@@ -333,6 +333,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     finetune=isinstance(cfg.dataset_root, DictConfig)
     finetune_type=None
     if finetune:
+        #TODO: INSTEAD BASE ON THE LOSS COMPUTATION PART OF CONFIG !!
         finetune_type=cfg.get("finetune_type", None) #if no type listed, earlier config and energy
         if finetune_type is None:
             finetune_type='energy'
@@ -509,7 +510,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     dl_iter = cycle(dataloader)
 
     # Make finetuning datasets.
-    # Create same dataloader for demo tuning:
+    # Create same dataloader for demo tuning or pref training:
     if demo_tune_dataset is not None:
         if cfg.training.get("drop_n_last_frames"):
             shuffle = False
@@ -524,7 +525,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
         demo_tune_dataloader = torch.utils.data.DataLoader(
             demo_tune_dataset,
             num_workers=cfg.training.num_workers,
-            batch_size=cfg.training.batch_size,
+            batch_size=cfg.training.batch_size, #TODO: MAKE MIN OF BATCH SIZE AND TOTAL???
             shuffle=shuffle,
             sampler=sampler,
             pin_memory=device.type != "cpu",
@@ -532,9 +533,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
         )
         dt_dl_iter = cycle(demo_tune_dataloader)
 
-
-    # create same dataloader for offline pref training
-    if pref_tune_dataset is not None:
+    elif pref_tune_dataset is not None:
         # Use full trajectories so don't need to drop samples (#TODO: MAKE SURE CORRECT, LOADED CORRECTLY)
         shuffle = True
         sampler = None
@@ -576,18 +575,17 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
         tune_batch = None
 
         if finetune:
-            tune_batch = {}
             if demo_tune_dataset is not None:
                 demo_batch = next(dt_dl_iter)
                 for key in demo_batch:
                     demo_batch[key] = demo_batch[key].to(device, non_blocking=True)
-                tune_batch['demo']=demo_batch
+                tune_batch = {"demo": demo_batch}
 
-            if pref_tune_dataset is not None:
+            elif pref_tune_dataset is not None:
                 pref_batch = next(pt_dl_iter)
                 pos_batch = {k: v.to(device, non_blocking=True) for k, v in pref_batch["pos"].items()}
                 neg_batch = {k: v.to(device, non_blocking=True) for k, v in pref_batch["neg"].items()}
-                tune_batch['pref']=(pos_batch, neg_batch)
+                tune_batch = {"pref": (pos_batch, neg_batch)}
 
         train_info = update_policy(
             policy,
