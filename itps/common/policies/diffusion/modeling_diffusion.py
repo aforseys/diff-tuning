@@ -864,7 +864,7 @@ class EBMDiffusionModel(nn.Module):
         if tune_batch is None:
             loss_mse = batch_mse_loss * extract(self.loss_weight, timesteps, batch_mse_loss.shape)
             loss = loss_mse * self.config.gradient_loss_weight
-            if self.config.supervise_energy_landscape: 
+            if getattr(self.config, 'supervise_energy_landscape', False): 
                 loss += loss_energy * self.config.energy_landscape_loss_weight
 
             return loss.mean(), (loss_mse.mean(), loss_energy.mean(), loss_energy_finetune.mean(), loss_dpo_finetune.mean(), loss_demo_finetune.mean())
@@ -891,12 +891,14 @@ class EBMDiffusionModel(nn.Module):
             loss_mse = batch_mse_loss * extract(self.loss_weight, timesteps, batch_mse_loss.shape)
             loss_energy_finetune = finetune_comparison_loss * extract(self.loss_weight, timesteps, finetune_comparison_loss.shape)
             loss = loss_mse * self.config.gradient_loss_weight + loss_energy_finetune * self.config.finetune_loss_weight
-            if self.config.supervise_energy_landscape: 
+            if getattr(self.config, 'supervise_energy_landscape', False): 
                 loss += loss_energy * self.config.energy_landscape_loss_weight
 
         elif getattr(self.config, 'finetune_dpo', False):
             
             assert ref_model is not None, "DPO loss requires reference model"
+            assert not getattr(self.config, 'supervise_energy_landscape', False), "DPO does not assume access to energy landscape for supervision"
+            
             assert 'pref' in tune_batch, "Tuning batch must contain pairwise preferences"
             pos_batch, neg_batch = tune_batch['pref']
 
@@ -914,7 +916,6 @@ class EBMDiffusionModel(nn.Module):
 
             # Process and return: 
 
-            assert not getattr(self.config, 'supervise_energy_landscape', False), "DPO does not assume access to energy landscape for supervision"
 
         elif getattr(self.config, 'finetune_demos', False):
 
@@ -949,9 +950,8 @@ class EBMDiffusionModel(nn.Module):
             loss_mse = batch_mse_loss * extract(self.loss_weight, timesteps, batch_mse_loss.shape)
             loss_demo_finetune = finetune_demo_mse_loss * extract(self.loss_weight, timesteps, finetune_demo_mse_loss.shape)
             loss = loss_mse * self.config.gradient_loss_weight + loss_demo_finetune * self.config.demo_finetune_loss_weight
-
-            #TODO: assert not self.config.supervise_energy_landscape?
-            #return loss.mean(), (loss_mse.mean(), loss_energy.mean(), loss_energy_finetune.mean(), loss_dpo_finetune.mean(), loss_demo_finetune.mean())
+            if getattr(self.config, 'supervise_energy_landscape', False):
+                loss += loss_energy * self.config.energy_landscape_loss_weight
 
         return loss.mean(), (loss_mse.mean(), loss_energy.mean(), loss_energy_finetune.mean(), loss_dpo_finetune.mean(), loss_demo_finetune.mean())
 
