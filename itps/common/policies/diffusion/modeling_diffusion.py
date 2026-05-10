@@ -943,7 +943,7 @@ class EBMDiffusionModel(nn.Module):
 
             # Process loss
             loss_dpo_finetune = pos_mse_loss-neg_mse_loss
-            loss = -torch.sigmoid(-self.config.dpo_params.rho * (loss_dpo_finetune + self.config.dpo_params.mu*loss_energy - self.config.dpo_params.b))
+            loss = -F.sigmoid(-self.config.dpo_params.rho * (loss_dpo_finetune + self.config.dpo_params.mu*loss_energy - self.config.dpo_params.b))
 
         ## Demonstration Finetuning Loss ##
         elif getattr(self.config, 'finetune_demos', False):
