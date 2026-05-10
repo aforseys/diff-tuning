@@ -782,6 +782,218 @@ class EBMDiffusionModel(nn.Module):
         return loss.mean(), (loss_mse.mean(), loss_energy.mean(), loss_energy_finetune.mean())
         # return loss.mean()
 
+    def compute_loss(self, batch: dict[str, Tensor], tune_batch: dict[str, Tensor] = None, ref_model=None) -> Tensor:
+
+        ##### VALIDATE BATCH INPUT #### 
+        assert set(batch).issuperset({"observation.state", "action"})
+        assert "observation.images" in batch or "observation.environment_state" in batch
+        n_obs_steps = batch["observation.state"].shape[1]
+        horizon = batch["action"].shape[1]
+        assert horizon == self.config.horizon
+        assert n_obs_steps == self.config.n_obs_steps
+
+        #TODO: UPDATE VALIDATION TO BE FOR ALL BATCHES (E.G. POS/NEG FROM PREF AND DEMO TOO) AT START?
+
+
+        #### COMPUTE MAIN BATCH LOSSES ####
+
+        ## MSE Loss ##
+        # Sample noise to add to batch.
+        trajectory = batch["action"]
+        eps = torch.randn(trajectory.shape, device=trajectory.device)
+        # Sample a random noising timestep for each item in the batch.
+        timesteps = torch.randint(
+            low=0,
+            high=self.noise_scheduler.config.num_train_timesteps,
+            size=(trajectory.shape[0],),
+            device=trajectory.device,
+        ).long()
+
+        # Get batch mask for energy calculation (don't use repeated actions)
+        if self.config.do_mask_loss_for_padding:
+            if "action_is_pad" not in batch:
+                raise ValueError(
+                    "You need to provide 'action_is_pad' in the batch when "
+                    f"{self.config.do_mask_loss_for_padding=}."
+                )
+            mask = ~batch["action_is_pad"]
+        else:
+            mask = None
+
+        # Calc MSE loss
+        batch_mse_loss = self._compute_denoising_mse_loss(self, batch, timesteps, eps, mask=mask, model=ref_model)
+        
+
+        ## Contrastive Energy Supervision Loss ##
+        if self.config.supervise_energy_landscape:
+
+            # Resample trajectory noise, keep same timesteps (same as in IRED)
+            eps = torch.randn(trajectory.shape, device=trajectory.device)
+        
+            # Use existing batch mask
+            if mask is not None:
+                mask_concat = torch.cat([mask, mask], dim=0)
+            else:
+                mask_concat = None
+
+            neg_eps_weight=2.0 # Negative batch will just be corrupted version of positive. Can test various ways (here 2x noise). Starting point in IRED and used in itps was 3x.
+            batch_comparison_loss = self._compute_comparison_energy_loss(batch, batch, eps, timesteps, mask=mask_concat, neg_eps_weight=neg_eps_weight)
+
+        
+        # Set default finetune loss values
+        loss_energy_finetune=torch.tensor(-1, dtype=torch.float32)
+        loss_dpo_finetune=torch.tensor(-1, dtype=torch.float32)
+        loss_demo_finetune=torch.tensor(-1, dtype=torch.float32)
+
+
+        # Return loss if not finetuning #TODO: ACCOUNT FOR NO CONTRASTIVE COMPARISON ENERGY LOSS
+        if tune_batch is None:
+            loss_mse = batch_mse_loss * extract(self.loss_weight, timesteps, loss.shape)
+            loss_energy = batch_comparison_loss 
+            loss = loss_mse * self.config.gradient_loss_weight + loss_energy * self.config.energy_landscape_loss_weight
+
+            return loss.mean(), (loss_mse.mean(), loss_energy.mean(), loss_energy_finetune.mean(), loss_dpo_finetune.mean(), loss_demo_finetune.mean())
+        
+        
+        #### COMPUTE TUNE BATCH LOSSES ####
+        elif self.config.finetune_energy_landscape: #TODO: CHECK IF HAS ATTRIBUTE
+
+            assert 'pref' in tune_batch, "Tuning batch must contain pairwise preferences"
+            pos_batch, neg_batch = tune_batch['pref']
+
+            # Use same sampled timesteps
+            # Assert batch sizes the same to allow this
+            assert pos_batch["action"].shape == trajectory.shape
+            assert pos_batch["action"].device == trajectory.device
+
+            # Add same amount of noise to both positive and negative comparisons
+            eps = torch.randn(trajectory.shape, device=trajectory.device)
+            mask = None # No mask needed when working with pref dataset
+
+            finetune_comparison_loss = self._compute_comparison_energy_loss(pos_batch, neg_batch, eps, timesteps, mask=mask)
+            
+            # Process and return: 
+            loss_mse = batch_mse_loss * extract(self.loss_weight, timesteps, loss.shape)
+            loss_energy = batch_comparison_loss 
+            loss_energy_finetune = finetune_comparison_loss * extract(self.loss_weight, timesteps, loss.shape)
+            loss = loss_mse * self.config.gradient_loss_weight + loss_energy * self.config.energy_landscape_loss_weight + loss_energy_finetune * self.config.finetune_loss_weight
+            #return loss.mean(), (loss_mse.mean(), loss_energy.mean(), loss_energy_finetune.mean(), loss_dpo_finetune.mean(), loss_demo_finetune.mean())
+
+
+        elif self.config.finetune_dpo:
+            
+            assert ref_model is not None, "DPO loss requires reference model"
+            assert 'pref' in tune_batch, "Tuning batch must contain pairwise preferences"
+            pos_batch, neg_batch = tune_batch['pref']
+
+            # Use same sampled timesteps
+            # Assert batch sizes the same to allow this
+            assert pos_batch["action"].shape == trajectory.shape
+            assert pos_batch["action"].device == trajectory.device
+
+            # Add same amount of noise to both positive and negative comparisons
+            eps = torch.randn(trajectory.shape, device=trajectory.device)
+            mask = None # No mask needed when working with pref dataset
+
+            finetune_pos_mse_loss = self._compute_denoising_mse_loss(pos_batch, timesteps, eps, mask=mask, model=None)
+            finetune_neg_mse_loss = self._compute_denoising_mse_loss(neg_batch, timesteps, eps, mask=mask, model=None)
+
+            #TODO: combine into sigmoid with appropriate timestep weighting and beta.
+
+        elif self.config.finetune_demos: #TODO: CHECK IF HAS ATTRIBUTE
+
+            assert 'demo' in tune_batch, "Tuning batch must contain new demonstrations"
+            demo_batch = tune_batch['demo']
+
+            # Forward diffusion. 
+            demo = demo_batch["action"]
+
+            # Resample eps and timesteps as batch size may differ
+            demo_eps = torch.randn(demo.shape, device=demo.device)
+            demo_timesteps = torch.randint(
+                low=0,
+                high=self.noise_scheduler.config.num_train_timesteps,
+                size=(demo.shape[0],),
+                device=demo.device,
+            ).long()
+
+            if self.config.do_mask_loss_for_padding:
+                if "action_is_pad" not in demo_batch:
+                    raise ValueError(
+                        "You need to provide 'action_is_pad' in the batch when "
+                        f"{self.config.do_mask_loss_for_padding=}."
+                    )
+                mask = ~demo_batch["action_is_pad"]
+            else:
+                mask = None
+            
+            finetune_demo_mse_loss = self._compute_denoising_mse_loss(demo_batch, demo_timesteps, demo_eps, mask=mask)
+
+            # Process
+            loss_mse = batch_mse_loss * extract(self.loss_weight, timesteps, loss.shape)
+            loss_energy = batch_comparison_loss 
+            loss_demo_finetune = finetune_demo_mse_loss * extract(self.loss_weight, timesteps, loss.shape)
+            loss = loss_mse * self.config.gradient_loss_weight + loss_energy * self.config.energy_landscape_loss_weight + loss_demo_finetune * self.config.demo_finetune_loss_weight
+            #return loss.mean(), (loss_mse.mean(), loss_energy.mean(), loss_energy_finetune.mean(), loss_dpo_finetune.mean(), loss_demo_finetune.mean())
+
+        return loss.mean(), (loss_mse.mean(), loss_energy.mean(), loss_energy_finetune.mean(), loss_dpo_finetune.mean(), loss_demo_finetune.mean())
+
+        
+    def _compute_denoising_mse_loss(self, batch, timesteps, eps, mask=None, model=None):
+
+        # Assuming noise prediction
+        assert self.config.prediction_type == "epsilon", "Assumes target prediction is noise."
+        target = eps
+
+        # Use base model if none passed in
+        if model is None: 
+            model = self.model
+
+        # Forward diffusion
+        global_cond = self._prepare_global_conditioning(batch)
+        trajectory = batch['action']
+        noisy_trajectory = self.noise_scheduler.add_noise(trajectory, eps, timesteps)
+
+        # Predict noise and compare to target
+        pred = model(noisy_trajectory, timesteps, global_cond=global_cond, mask=mask)
+        loss = F.mse_loss(pred, target, reduction="none")
+
+        # Mask loss wherever the action is padded with copies (edges of the dataset trajectory).
+        if self.config.do_mask_loss_for_padding:
+            loss = loss * mask.unsqueeze(-1)
+
+        # Reduce loss to one item per trajectory
+        loss = einops.reduce(loss, 'b ... -> b (...)', 'mean')
+        return loss
+
+
+    def _compute_comparison_energy_loss(self, pos_batch, neg_batch, eps, timesteps, mask=None, neg_eps_weight=1):
+
+        global_cond_pos = self._prepare_global_conditioning(pos_batch)
+        global_cond_neg = self._prepare_global_conditioning(neg_batch)
+        assert torch.equal(global_cond_pos, global_cond_neg), "Global conditions of pref comparisons must match"
+
+        positive_trajs = pos_batch["action"]
+        negative_trajs = neg_batch["action"]
+
+        # Add same amount of noise to both positive and negative comparisons, unless weighting negative sample noise for corruption
+        positive_sample = self.noise_scheduler.add_noise(positive_trajs, eps, timesteps)
+        negative_sample = self.noise_scheduler.add_noise(negative_trajs, eps*neg_eps_weight, timesteps)
+
+        # Compute energy of both samples 
+        global_cond_concat = torch.cat([global_cond_pos, global_cond_neg], dim=0) #comparisons must have same global cond
+        traj_concat = torch.cat([positive_sample, negative_sample], dim=0)
+        timesteps_concat = torch.cat([timesteps, timesteps], dim=0)
+        energy = self.model(traj_concat, timesteps_concat, global_cond=global_cond_concat, return_energy=True, mask=mask)
+
+        # Compute cross entropy loss 
+        energy_positive, energy_negative = torch.chunk(energy, 2, 0)
+        energy_stack = torch.cat([energy_positive, energy_negative], dim=-1)
+        target = torch.zeros(energy_positive.size(0)).to(energy_stack.device)
+        loss_energy_contrastive = F.cross_entropy(-1 * energy_stack, target.long(), reduction='none')[:, None]
+
+        return loss_energy_contrastive
+
 class SpatialSoftmax(nn.Module):
     """
     Spatial Soft Argmax operation described in "Deep Spatial Autoencoders for Visuomotor Learning" by Finn et al.
