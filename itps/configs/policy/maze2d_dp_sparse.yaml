@@ -19,7 +19,7 @@ hydra:
 device: "cuda"  # cpu
 
 training:
-  offline_steps: 100000
+  offline_steps: 200000
   online_steps: 0
   eval_freq: 5000
   save_freq: 5000
@@ -28,7 +28,7 @@ training:
 
   batch_size: 256
   grad_clip_norm: 10
-  lr: 1.0e-4
+  lr: 3.0e-5
   lr_scheduler: cosine
   lr_warmup_steps: 500
   adam_betas: [0.95, 0.999]
