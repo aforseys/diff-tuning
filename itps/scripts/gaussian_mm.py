@@ -1,3 +1,4 @@
+import argparse
 import numpy as np
 import datetime
 import matplotlib.pyplot as plt
@@ -112,6 +113,16 @@ def gen_dataset(N, seed):
 
     return data_dict
 
+
+def gen_demo_dataset(N, seed, cluster=0):
+    """Generate exactly N samples from a single cluster, in unconditional format."""
+    rng = np.random.default_rng(seed)
+    means = get_means()
+    covs = get_covs()
+    X = rng.multivariate_normal(mean=means[cluster], cov=covs[cluster], size=N)
+    unconditional_obs = np.hstack([np.zeros((N, 1)), X])
+    return unconditional_obs
+
 # ------- Plot sampled points -------
 def plot_samples(X, x_range=(-8,8), y_range=(-8,8)):
     plt.figure(figsize=(6, 5))
@@ -166,17 +177,29 @@ def visualize_samples_and_pdf(dataset):
 
 if __name__ == "__main__":
 
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--demo", action="store_true", help="Generate finetuning demo dataset (single cluster, unconditional format)")
+    parser.add_argument("--demo-cluster", type=int, default=0, help="Which cluster to use for the demo dataset (default: 0)")
+    parser.add_argument("--demo-n", type=int, default=1000, help="Number of demo samples to generate (default: 1000)")
+    args = parser.parse_args()
+
     N=1000
     seed=42
-    dataset = gen_dataset(N, seed)
-
-    # -- Comment out to generate visualizations -- 
-    visualize_samples_and_pdf(dataset)
-
     save_dir = "data/"
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    unconditional_file = f"gmm_unconditional_{N}_{seed}_{timestamp}.npy"
-    conditional_file = f"gmm_conditional_{N}_{seed}_{timestamp}.npy"
 
-#    np.save(save_dir+unconditional_file, dataset['unconditional_observation'])
-#    np.save(save_dir+conditional_file, dataset['conditional_observation'])
+    if args.demo:
+        demo_file = f"gmm_demo_cluster{args.demo_cluster}_{args.demo_n}_{seed}_{timestamp}.npy"
+        np.save(save_dir + demo_file, gen_demo_dataset(args.demo_n, seed, cluster=args.demo_cluster))
+        print(f"Saved demo dataset to {save_dir}{demo_file}")
+    else:
+        dataset = gen_dataset(N, seed)
+
+        # -- Comment out to generate visualizations --
+        visualize_samples_and_pdf(dataset)
+
+        unconditional_file = f"gmm_unconditional_{N}_{seed}_{timestamp}.npy"
+        conditional_file = f"gmm_conditional_{N}_{seed}_{timestamp}.npy"
+
+#        np.save(save_dir+unconditional_file, dataset['unconditional_observation'])
+#        np.save(save_dir+conditional_file, dataset['conditional_observation'])
