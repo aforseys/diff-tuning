@@ -26,16 +26,16 @@ source /etc/profile
 
 # Load Anaconda Module
 module load conda/Python-ML-2026a-pytorch
-module load cuda/cuda-13
+module load cuda/13.1
 
 export PYTHONPATH="/home/gridsan/aforsey/diff-tuning:$PYTHONPATH"
 export WANDB_MODE=offline
 #export WANDB_DIR=/home/gridsan/aforsey/wandb_logs/gmm/conditional/fine_tuning/param_tuning
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-CONFIGS_DIR="/home/gridsan/aforsey/diff-tuning/itps/configs/policy/maze2d_param_tuning/finetune_tuning/sweep_1"    # Directory containing generated run_*.yaml files
+CONFIGS_DIR="/home/gridsan/aforsey/diff-tuning/itps/configs/policy/gmm_param_tuning/DPO_finetuning_tuning/sweep_1"    # Directory containing generated run_*.yaml files
 SCRIPT="scripts/train.py"             # The python training script
-ENV_NAME="maze2d"                # env={ENV_NAME} passed to the script
+ENV_NAME="gmm"                # env={ENV_NAME} passed to the script
 # ──────────────────────────────────────────────────────────────────────────────
 
 echo "======================================"
