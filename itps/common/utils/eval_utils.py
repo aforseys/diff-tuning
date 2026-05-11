@@ -419,10 +419,10 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
           grad_histories_per_opt = run_inference_with_grad_steps(                     
               policy, N=grad_N, conditional=conditional, opt_params=opt_params          
           )                                                                           
-          for t in range(10):
-              for step_i, opt_vals in enumerate(opt_params):                            
-                    grad_hist = grad_histories_per_opt[step_i][0]
-                    viz_ired_grad_steps(                                            
+          for step_i, opt_vals in enumerate(opt_params):
+              grad_hist = grad_histories_per_opt[step_i][0]
+              for t in sorted(grad_hist.keys(), reverse=True):
+                    viz_ired_grad_steps(
                         policy, grad_hist, t=t, conditional=conditional,
                         opt_vals=opt_vals
                     )
