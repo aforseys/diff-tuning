@@ -7,6 +7,9 @@ sweep:
     train_only_FiLM: [true, false]
   policy:
     dpo_params:
+      rho: 500
+      mu: [0.05, 0.25, 0.5, 0.75, 1, 1.25]
+      b: [-0.25, 0, 0.25]
 
 seed: 100000
 dataset_repo_id: gmm
