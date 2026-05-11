@@ -54,7 +54,7 @@ class BinPlacingTask(PickPlace):
         super()._reset_arena()
         
         # Now swap the object
-        if hasattr(self, "obj_body_id"):
+        if hasattr(self, "_current_obj_body_id"):
             # Remove old object
             mujoco_object = self.mujoco_objects[0]
             self.model.delete_body(mujoco_object.root_body)
@@ -66,12 +66,12 @@ class BinPlacingTask(PickPlace):
         self.model.add_object(mujoco_object)
         
         # Get reference to new object
-        self.obj_body_id = self.sim.model.body_name2id(mujoco_object.root_body)
-        
+        self._current_obj_body_id = self.sim.model.body_name2id(mujoco_object.root_body)
+
         # Place object near gripper
         random_ee_pos = self.random_start()
         object_pos = random_ee_pos + np.array([0, 0, 0.05])
-        self.sim.data.set_body_xpos(self.obj_body_id, object_pos)
+        self.sim.data.set_body_xpos(mujoco_object.root_body, object_pos)
         
         # Close gripper
         gripper_joint_indices = self.robot.gripper.joint_indexes
@@ -128,7 +128,7 @@ class BinPlacingTask(PickPlace):
     
     def reward(self, action):
         """Simple placement reward"""
-        object_pos = self.sim.data.body_xpos[self.obj_body_id]
+        object_pos = self.sim.data.body_xpos[self._current_obj_body_id]
         goal_pos = self.bin_positions[self.current_goal_bin]
         distance = np.linalg.norm(object_pos - goal_pos)
         reward = -distance
