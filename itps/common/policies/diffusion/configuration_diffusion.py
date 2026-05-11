@@ -156,6 +156,10 @@ class DiffusionConfig:
     energy_landscape_loss_weight: float = 0.5
     finetune_energy_landscape: bool = False
     finetune_loss_weight: float = 0
+    finetune_dpo: bool = False
+    dpo_params: dict = field(default_factory=lambda: {"rho": 500, "mu": 0.2, "b": 0})
+    finetune_demos: bool = False
+    demo_finetune_loss_weight: float = 0.0
 
 
     def __post_init__(self):
