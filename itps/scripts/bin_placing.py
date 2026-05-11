@@ -50,19 +50,22 @@ class BinPlacingTask(PickPlace):
         elif self.randomize_object:
             self.current_object = np.random.choice(self.object_list)
         
-        # Remove old object if exists
-        if hasattr(self, "object_id") and self.object_id is not None:
+        # Call parent's reset to set up base scene
+        super()._reset_arena()
+        
+        # Now swap the object
+        if hasattr(self, "obj_body_id"):
+            # Remove old object
             mujoco_object = self.mujoco_objects[0]
             self.model.delete_body(mujoco_object.root_body)
         
-        # Add new object
+        # Add new object of selected type
         mujoco_object_class = suite.models.OBJECTS[self.AVAILABLE_OBJECTS[self.current_object]]
         mujoco_object = mujoco_object_class()
         self.mujoco_objects = [mujoco_object]
         self.model.add_object(mujoco_object)
         
-        # Get references
-        self.object_id = self.model.body_name2id(mujoco_object.root_body)
+        # Get reference to new object
         self.obj_body_id = self.sim.model.body_name2id(mujoco_object.root_body)
         
         # Place object near gripper
