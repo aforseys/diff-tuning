@@ -439,7 +439,7 @@ class EBMDiffusionModel(nn.Module):
             generator=generator,
         )
 
-        total_timesteps = 10
+        total_timesteps = self.config.num_inference_steps
         self.noise_scheduler.set_timesteps(total_timesteps)
 
         grad_history = {} if return_grad_steps else None
