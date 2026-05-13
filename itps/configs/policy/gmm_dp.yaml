@@ -7,6 +7,7 @@ dataset_root: 'data/gmm_unconditional_1000_42_20251204_174604.npy'
 
 wandb:
   enable: true
+  project: "base-models"
 hydra:
   run:
     # Set `dir` to where you would like to save all of the run outputs. If you run another training session
@@ -15,7 +16,7 @@ hydra:
   job:
     name: gmm_${now:%Y.%m.%d.%H.%M.%S}_${env.name}_${policy.name}
 
-device: "cuda:1"  # cpu
+device: "cuda"  # cpu
 
 training:
   offline_steps: 5000
@@ -104,7 +105,7 @@ policy:
   gradient_loss_weight: 1
 
   supervise_energy_landscape: True
-  energy_landscape_loss_weight: 0.5
+  energy_landscape_loss_weight: 0
 
   finetune_energy_landscape: false
   finetune_loss_weight: 0
