@@ -65,7 +65,7 @@ def main():
         cmd = (
             f"python {args.script} "
             f"env={args.env} "
-            f"policy={relative}"
+            f"policy={relative} "
             f"config_name={config_name}"
             )
         
