@@ -124,9 +124,8 @@ def load_hf_dataset(repo_id: str, version: str, root: Path, split: str, goal_hor
                     # skip every 4th frame to match the original dataset
                     observations = np.array(hdf5_file['observations'])
                     timeouts = np.array(hdf5_file['timeouts'])
-                if 'sparse' not in root:
-                    if len(observations)>1000000:
-                        state_index = 1000000
+                if len(observations)>1000000:
+                    state_index = 1000000
                 else:
                     state_index = len(observations)
                 observations = observations[:state_index][::4]
