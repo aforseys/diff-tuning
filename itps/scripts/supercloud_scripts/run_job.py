@@ -58,11 +58,17 @@ def main():
         full_path = os.path.abspath(config_path)
         relative = full_path.split("policy/", 1)[-1]
 
+
+        # Extract just the config filename (e.g., "run_config_A")
+        config_name = os.path.splitext(os.path.basename(config_path))[0]
+
         cmd = (
             f"python {args.script} "
             f"env={args.env} "
             f"policy={relative}"
-        )
+            f"config_name={config_name}"
+            )
+        
         print(f"\n[Rank {args.rank}/{args.size}] Running combo {i+1}/{len(my_configs)}:")
         print(f"  {cmd}\n")
 
