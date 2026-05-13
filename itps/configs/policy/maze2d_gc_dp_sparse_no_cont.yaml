@@ -115,7 +115,7 @@ policy:
   gradient_loss_weight: 1
 
   supervise_energy_landscape: True
-  energy_landscape_loss_weight: 0.5
+  energy_landscape_loss_weight: 0
 
   finetune_energy_landscape: false
   finetune_loss_weight: 0
