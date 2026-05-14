@@ -932,7 +932,7 @@ class EBMDiffusionModel(nn.Module):
 
             # Add same amount of noise to both positive and negative comparisons
             eps = torch.randn(trajectory.shape, device=trajectory.device)
-            mask = None # No mask needed when working with pref dataset
+            mask = None # Pref dataset contains full horizon trajectories so no mask needed
 
             # Calculate positive and negative sample MSE 
             pos_mse_loss = self._compute_denoising_mse_loss(pos_batch, timesteps, eps, mask=mask)
@@ -1007,7 +1007,7 @@ class EBMDiffusionModel(nn.Module):
         loss = F.mse_loss(pred, target, reduction="none")
 
         # Mask loss wherever the action is padded with copies (edges of the dataset trajectory).
-        if self.config.do_mask_loss_for_padding:
+        if mask is not None:
             loss = loss * mask.unsqueeze(-1)
 
         # Reduce loss to one item per trajectory
