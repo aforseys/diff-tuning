@@ -337,31 +337,54 @@ class UnconditionalMaze(MazeEnv):
 
         pygame.quit()
 
-    def run_gc(self): 
+    def run_gc(self):
         self.goal_set_mode = True
+        obs_idx = 0
+        goal_pos = None
+        goal_gui_pos = None
+
         while self.running:
             self.update_mouse_pos()
+
+            if self.obs_list is not None:
+                if obs_idx >= len(self.obs_list):
+                    print("All observations complete.")
+                    self.running = False
+                    break
+                current_obs = self.obs_list[obs_idx]
+                start_xy = np.array(current_obs[:2])
+                goal_xy = np.array(current_obs[2:]) if len(current_obs) == 4 else None
+                self.update_agent_pos(self.xy2gui(start_xy))
+                if goal_xy is not None and self.goal_set_mode:
+                    goal_gui_pos = self.xy2gui(goal_xy)
+                    goal_pos = goal_xy
+                    self.goal_set_mode = False
 
             # Handle events
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
                     break
-
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     if self.goal_set_mode:
                         goal_gui_pos = self.mouse_pos.copy()
                         goal_pos = self.gui2xy(goal_gui_pos)
                         print(f"Goal set at GUI: {goal_gui_pos}, XY: {goal_pos}")
                         self.goal_set_mode = False
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_n and self.obs_list is not None:
+                        obs_idx += 1
+                        self.goal_set_mode = True
+                        goal_pos = None
+                        goal_gui_pos = None
 
             if self.goal_set_mode:
                 self.update_screen_goal_set()
-
             else:
-                self.update_agent_pos(self.mouse_pos.copy())
-                if self.vis_energy: 
-                    xy_pred, energy = self.infer_target(goal_pos = goal_pos, return_energy=True)
+                if self.obs_list is None:
+                    self.update_agent_pos(self.mouse_pos.copy())
+                if self.vis_energy:
+                    xy_pred, energy = self.infer_target(goal_pos=goal_pos, return_energy=True)
                     self.update_screen(xy_pred, scores=energy, goal=goal_gui_pos)
                 else:
                     xy_pred = self.infer_target(goal_pos=goal_pos)
@@ -462,23 +485,24 @@ class ConditionalMaze(UnconditionalMaze):
         goal_pos = None
         goal_gui_pos = None
         self.goal_set_mode = True
+        self.obs_idx = 0
 
         while self.running:
             self.update_mouse_pos()
 
             # Fix agent pos from obs_list if provided
             if self.obs_list is not None:
-                self.obs_idx=0
                 if self.obs_idx >= len(self.obs_list):
                     print("All observations complete.")
                     break
                 current_obs = self.obs_list[self.obs_idx]
-                start_xy = current_obs[:2]
-                goal_xy = current_obs[2:] if len(current_obs)==4 else None
+                start_xy = np.array(current_obs[:2])
+                goal_xy = np.array(current_obs[2:]) if len(current_obs)==4 else None
                 self.update_agent_pos(self.xy2gui(start_xy))
                 # If goal provided in obs_list, skip interactive goal setting
                 if goal_xy is not None and self.goal_set_mode:
                     goal_gui_pos = self.xy2gui(goal_xy)
+                    goal_pos = goal_xy
                     self.goal_set_mode = False
 
             for event in pygame.event.get():
