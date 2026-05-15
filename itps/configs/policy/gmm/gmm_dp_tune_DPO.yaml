@@ -17,19 +17,19 @@ hydra:
     # with the same value for `dir` its contents will be overwritten unless you set `resume` to true.
     dir: data/gmm/general/tune/${now:%Y.%m.%d}/${hydra.job.name}
   job:
-    name: gmm_unconditional_tune_${now:%Y.%m.%d.%H.%M.%S}_${env.name}_${policy.name}
+    name: gmm_unconditional_tune_DPO_${now:%Y.%m.%d.%H.%M.%S}_${env.name}_${policy.name}
 
 device: "cuda"  # cpu
 
 training:
   train_only_FiLM: False
-  offline_steps: 100
+  offline_steps: 500
   online_steps: 0
   eval_freq: 10
   save_freq: 10
   log_freq: 10
   save_checkpoint: True
-  batch_size: 256
+  batch_size: 128
   grad_clip_norm: 10
   lr: 1.0e-4
   lr_scheduler: cosine
@@ -117,7 +117,7 @@ policy:
   demo_finetune_loss_weight: 0.0
 
   finetune_dpo: True
-  dpo_params: 
+  dpo_params:
     rho: 500
-    mu: 0.2
+    mu: 0.75
     b: 0

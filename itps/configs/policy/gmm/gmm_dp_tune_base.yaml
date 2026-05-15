@@ -28,9 +28,9 @@ training:
   save_freq: 10
   log_freq: 10
   save_checkpoint: True
-  batch_size: 256
+  batch_size: 64
   grad_clip_norm: 10
-  lr: 1.0e-4
+  lr: 1.0e-5
   lr_scheduler: cosine
   lr_warmup_steps: 50
   adam_betas: [0.95, 0.999]
@@ -49,7 +49,7 @@ training:
 
 eval:
   n_samples: 200
-  opt_params: [{'n_opt': 1, 't_subset': null, 'denoise': False}, {'n_opt': 2, 't_subset': null, 'denoise': False}, {'n_opt': 5, 't_subset': null, 'denoise': False}]
+  opt_params: [{'n_opt': 1, 't_subset': null, 'denoise': False}, {'n_opt': 1, 't_subset': 5, 'denoise': True}]
   methods: ['ired', 'ddim']
 
 policy:
@@ -110,4 +110,4 @@ policy:
   energy_landscape_loss_weight: 0.0
 
   finetune_energy_landscape: True
-  finetune_loss_weight: 5.0
+  finetune_loss_weight: 2.0

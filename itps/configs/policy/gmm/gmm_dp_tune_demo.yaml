@@ -22,7 +22,7 @@ device: "cuda"  # cpu
 
 training:
   train_only_FiLM: False
-  offline_steps: 100
+  offline_steps: 50
   online_steps: 0
   eval_freq: 10
   save_freq: 10
@@ -113,6 +113,6 @@ policy:
   finetune_loss_weight: 0.0
 
   finetune_demos: true
-  demo_finetune_loss_weight: 5.0
+  demo_finetune_loss_weight: 7.0
 
   finetune_dpo: false
