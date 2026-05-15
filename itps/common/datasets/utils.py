@@ -118,7 +118,8 @@ def load_hf_dataset(repo_id: str, version: str, root: Path, split: str, goal_hor
     if root is not None:
         if 'hdf5' in root or "maze" in root: # maze2d dataset
             import numpy as np
-            if 'hdf5' in root: 
+            saved_goals = None
+            if 'hdf5' in root:
                 import h5py
                 with h5py.File(root, 'r') as hdf5_file:
                     # skip every 4th frame to match the original dataset
@@ -136,7 +137,8 @@ def load_hf_dataset(repo_id: str, version: str, root: Path, split: str, goal_hor
                 observations = np.array(np_file['observations'])
                 timeouts = np.array(np_file['timeouts'])
                 timeouts = timeouts[:len(observations)-1]
-                
+                saved_goals = np.array(np_file['goals']) if 'goals' in np_file else None
+
             def create_episode_and_frame_indices(timeouts, observations, goal_horizon):
                 episode_endings = np.where(timeouts)[0]  # Indices where episodes end
                 episode_lengths = np.diff(np.concatenate(([0], episode_endings + 1)))  # Lengths of episodes
@@ -162,6 +164,8 @@ def load_hf_dataset(repo_id: str, version: str, root: Path, split: str, goal_hor
                 return episode_index, frame_index, index, episode_goal
 
             episode_index, frame_index, index, episode_goal = create_episode_and_frame_indices(timeouts, observations, goal_horizon)
+            if saved_goals is not None:
+                episode_goal = saved_goals[:-1, :2]
             data_dict = {
                 'observation.state': observations[:-1, :2],
                 'observation.environment_state': observations[:-1, :2],

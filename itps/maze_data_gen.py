@@ -302,6 +302,9 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
         else:
             raise NotImplementedError(f"Metric '{metric}' is not implemented.")
 
+        # goal for gc policies: trial["obs"] is [x, y, goal_x, goal_y] in maze XY space
+        trial_goal = trial["obs"][2:] if "obs" in trial and len(trial["obs"]) >= 4 else None
+
         trial_pairs = []
         for i in range(len(scores)):
             for j in range(i + 1, len(scores)):
@@ -317,6 +320,7 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
                         "winner_score": float(scores[winner]),
                         "loser_score": float(scores[loser]),
                         **({"guide": guide.tolist()} if guide is not None else {}),
+                        **({"goal": trial_goal} if trial_goal is not None else {}),
                     })
         pairs.extend(trial_pairs)
 
@@ -363,6 +367,8 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
     N = len(pairs)
     winners = np.zeros((N, 2 + T, 2), dtype=np.float32)
     losers = np.zeros((N, 2 + T, 2), dtype=np.float32)
+    has_goals = all('goal' in p for p in pairs)
+    goals = np.zeros((N, 2 + T, 2), dtype=np.float32) if has_goals else None
     meta = []
 
     for i, pair in enumerate(pairs):
@@ -375,6 +381,8 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
         winners[i, 2:] = w_xy
         losers[i, 0:2] = agent_xy
         losers[i, 2:] = l_xy
+        if has_goals:
+            goals[i, :] = np.array(pair['goal'], dtype=np.float32)
         entry = {
             'obs_idx': pair['obs_idx'],
             'winner_score': float(pair['winner_score']),
@@ -391,10 +399,11 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
 
     assert np.all(losers[:, 0] == winners[:, 0])
 
+    npz_extra = {"goals": goals.reshape(-1, 2)} if has_goals else {}
     np.savez(os.path.join(savepath, f"{prefix}_winners.npz"),
-             observations=winners.reshape(-1, 2), timeouts=timeouts)
+             observations=winners.reshape(-1, 2), timeouts=timeouts, **npz_extra)
     np.savez(os.path.join(savepath, f"{prefix}_losers.npz"),
-             observations=losers.reshape(-1, 2), timeouts=timeouts)
+             observations=losers.reshape(-1, 2), timeouts=timeouts, **npz_extra)
     with open(os.path.join(savepath, f"{prefix}_meta.json"), "w") as f:
         json.dump(meta, f, indent=2)
 
