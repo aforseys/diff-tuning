@@ -553,21 +553,21 @@ def eval_maze(policy, cfg, split='test'):
                 goal = np.array(cfg.eval.goal, dtype=np.float32)
                 dists = np.linalg.norm(traj[:, -1, :] - goal, axis=1)
                 per_obs[m] = dists.reshape(N_obs, n_samples).mean(axis=1).tolist()
-            #Outer edge preference — mean normalized distance from maze center over all trajectory steps:
-            elif m == 'outer_edge_rate':
+            #Center preference — 1 minus mean normalized distance from maze center over all trajectory steps:
+            elif m == 'center_rate':
                 rows, cols = maze.shape
                 x_center = (rows - 1) / 2.0
                 y_center = (cols - 1) / 2.0
                 max_dist = np.sqrt(x_center**2 + y_center**2)
                 dx = traj[:, :, 0] - x_center  # (N_obs*n_samples, horizon)
                 dy = traj[:, :, 1] - y_center
-                scores = np.sqrt(dx**2 + dy**2).mean(axis=1) / max_dist  # (N_obs*n_samples,)
+                scores = 1 - np.sqrt(dx**2 + dy**2).mean(axis=1) / max_dist  # (N_obs*n_samples,)
                 per_obs[m] = scores.reshape(N_obs, n_samples).mean(axis=1).tolist()
-            #Top half preference — fraction of trajectory steps with x < x_mid (lower row index = top of maze):
-            elif m == 'top_half_rate':
+            #Bottom half preference — fraction of trajectory steps with x > x_mid (higher row index = bottom of maze):
+            elif m == 'bottom_half_rate':
                 rows, cols = maze.shape
                 x_mid = (rows - 1) / 2.0
-                scores = (traj[:, :, 0] < x_mid).astype(float).mean(axis=1)  # (N_obs*n_samples,)
+                scores = (traj[:, :, 0] > x_mid).astype(float).mean(axis=1)  # (N_obs*n_samples,)
                 per_obs[m] = scores.reshape(N_obs, n_samples).mean(axis=1).tolist()
 
             else:
