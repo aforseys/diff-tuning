@@ -51,7 +51,7 @@ training:
 
 eval:
   n_samples: 32     # trajectory samples per starting observation
-  opt_params: [{'n_opt': 1, 't_subset': null, 'denoise': False}, {'n_opt': 2, 't_subset': null, 'denoise': False}, {'n_opt': 1, 't_subset': 5, 'denoise': False}, {'n_opt': 1, 't_subset': 5, 'denoise': True}, {'n_opt': 2, 't_subset': 5, 'denoise': True}]
+  opt_params: [{'n_opt': 1, 't_subset': null, 'denoise': False},  {'n_opt': 1, 't_subset': 5, 'denoise': True}]
   goal: [0.98, 9.95]
   metrics: [collision_rate, finetune_goal_dist]
   methods: ['ired', 'ddim']
