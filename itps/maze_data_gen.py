@@ -258,8 +258,17 @@ def visualize_observations(positions, maze_type='large'):
     pygame.quit()
 
 
-def extract_preference_pairs(loadpath, savepath, maze_type='large', score_threshold=0.3, metric='similarity_score', metric_kwargs=None, viz=False, prefix=None):
+_DEFAULT_THRESHOLDS = {
+    'similarity_score': 0.5,
+    'endpoint_distance': 0.3,
+    'collision_rate': 0.9,
+}
+
+def extract_preference_pairs(loadpath, savepath, maze_type='large', score_threshold=None, metric='similarity_score', metric_kwargs=None, viz=False, prefix=None):
     prefix = (prefix + '_' if prefix else '') + 'maze_' + time.strftime("%Y%m%d_%H%M%S")
+
+    if score_threshold is None:
+        score_threshold = _DEFAULT_THRESHOLDS[metric]
 
     maze_env = MazeEnv(maze_type)
     metric_kwargs = metric_kwargs or {}
@@ -522,7 +531,7 @@ if __name__ == "__main__":
     parser.add_argument('--obs-file', type=str, default=None, help="Path to obs JSON file for visualization")
     parser.add_argument('--gen-pref', action='store_true', help="Generate preference pairs from saved trials")
     parser.add_argument('-l', '--loadpath', type=str, default=None, help="Path to trials file for preference generation")
-    parser.add_argument('--score-threshold', type=float, default=0.3)
+    parser.add_argument('--score-threshold', type=float, default=None, help="Score threshold for preference pairs (default: metric-specific)")
     parser.add_argument('--metric', type=str, default='similarity_score')
     parser.add_argument('--viz-pref', action='store_true', help="Visualize preference pairs during generation")
     parser.add_argument('--prefix', type=str, default=None, help="Optional prefix to prepend to output filenames")
