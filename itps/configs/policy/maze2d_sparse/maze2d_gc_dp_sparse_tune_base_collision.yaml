@@ -6,8 +6,8 @@ condition_type: conditional
 env_type: sparse
 dataset_root:
   base: data/maze2d-sparse-v3.hdf5
-  pos: data/maze_comparisons/maze_20260515_102916_winners.npz
-  neg: data/maze_comparisons/maze_20260515_102916_losers.npz
+  pos: data/maze_comparisons/maze_20260515_112825_winners.npz
+  neg: data/maze_comparisons/maze_20260515_112825_losers.npz
 pretrained_policy_path: data/maze2d_dp/sparse/gc/train/2026.05.13/02.28.05_maze2d_diffusion/checkpoints/last/pretrained_model
 
 wandb:
