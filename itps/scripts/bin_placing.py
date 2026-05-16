@@ -1,3 +1,4 @@
+import os
 import xml.etree.ElementTree as ET
 import numpy as np
 import robosuite as suite
@@ -78,10 +79,61 @@ class BinPlacing(ManipulationEnv):
     """
 
     # Tight bounding box around default EEF (~[-0.215, 0.009, 1.007])
+    # Size: 0.09 x 0.12 x 0.06 m  (~20% smaller than original)
     START_REGION = dict(
-        low  = [-0.27, -0.07, 0.97],
-        high = [-0.16,  0.08, 1.05],
+        low  = [-0.260, -0.055, 0.980],
+        high = [-0.170,  0.065, 1.040],
     )
+
+    # Reachable workspace bounds for prism centres when generating random regions
+    # Kept to the robot-side of the table (negative x), left/right of the stand — not over the bins
+    PRISM_CENTER_BOUNDS = dict(
+        low  = [-0.50, -0.42, 0.88],
+        high = [-0.08,  0.42, 1.25],
+    )
+
+    @classmethod
+    def make_start_regions(cls, n=10, seed=0, max_attempts=10_000):
+        """Return a list of n non-overlapping same-size start regions.
+
+        Region 0 is always START_REGION. The remaining n-1 are placed via
+        rejection sampling within PRISM_CENTER_BOUNDS: a candidate center is
+        accepted only if it does not overlap any already-placed prism.
+
+        Two axis-aligned boxes overlap iff they overlap on every axis, so the
+        check is: reject if |c_new - c_existing| < 2*half on ALL three axes.
+
+        Raises RuntimeError if a valid placement cannot be found within
+        max_attempts tries (indicates workspace is too small for n prisms).
+        """
+        lo   = np.array(cls.START_REGION['low'])
+        hi   = np.array(cls.START_REGION['high'])
+        half = (hi - lo) / 2.0
+
+        centers = [(lo + hi) / 2.0]
+        regions = [cls.START_REGION]
+
+        rng  = np.random.default_rng(seed)
+        c_lo = np.array(cls.PRISM_CENTER_BOUNDS['low'])
+        c_hi = np.array(cls.PRISM_CENTER_BOUNDS['high'])
+
+        for i in range(n - 1):
+            for _ in range(max_attempts):
+                candidate = rng.uniform(c_lo + half, c_hi - half)
+                if not any(np.all(np.abs(candidate - ec) < 2 * half) for ec in centers):
+                    centers.append(candidate)
+                    regions.append({
+                        'low':  (candidate - half).tolist(),
+                        'high': (candidate + half).tolist(),
+                    })
+                    break
+            else:
+                raise RuntimeError(
+                    f"Could not place non-overlapping prism {i + 1} after "
+                    f"{max_attempts} attempts. Reduce n or expand PRISM_CENTER_BOUNDS."
+                )
+
+        return regions
 
     # One color per bin for goal dots
     BIN_COLORS = [
@@ -210,51 +262,115 @@ class BinPlacing(ManipulationEnv):
             mujoco_objects=self.grasp_obj,
         )
 
-        self._generate_samples()          # always populate start/goal positions
         if self.show_samples:
+            self._generate_samples()
             self._bake_sample_markers()
 
     # ------------------------------------------------------------------
     # Sample generation + visualization
     # ------------------------------------------------------------------
 
-    def _generate_samples(self, seed=42):
-        """Sample start (EEF) and per-bin goal positions. Stores results in self."""
-        rng = np.random.default_rng(seed)
+    def _generate_samples(self, seed=42, start_regions=None):
+        """Sample start (EEF) and per-bin goal positions. Stores results in self.
 
-        # Start positions: uniform box in EEF space
-        lo = np.array(self.START_REGION['low'])
-        hi = np.array(self.START_REGION['high'])
-        self.start_positions = rng.uniform(lo, hi, size=(self.n_starts, 3))
+        Args:
+            seed:          Base integer seed.
+            start_regions: List of dicts with 'low'/'high' keys defining each prism.
+                           Defaults to [self.START_REGION].
 
-        # Goal positions: slightly above bin rim, well away from walls
+        Seeding contract:
+          - Start positions for prism i use seed [seed, i]       → stable across bin changes
+          - Goal positions for bin j   use seed [seed, 100 + j]  → stable across prism changes
+
+        self.start_positions: list of (n_starts, 3) arrays, one per prism.
+        self.goal_positions:  list of (n_starts, 3) arrays, one per bin.
+        """
+        if start_regions is None:
+            start_regions = self.make_start_regions()
+
+        # Start positions: one independent RNG per prism
+        self.start_positions = []
+        for prism_idx, region in enumerate(start_regions):
+            rng = np.random.default_rng([seed, prism_idx])
+            lo = np.array(region['low'])
+            hi = np.array(region['high'])
+            self.start_positions.append(rng.uniform(lo, hi, size=(self.n_starts, 3)))
+
+        # Goal positions: one independent RNG per bin
         goal_z = self.table_offset[2] + BinTableArena.H * 2 + 0.01  # 1cm above rim
-        ix = (BinTableArena.OX - 2 * BinTableArena.WT) * 0.50  # inner x half-extent
-        iy = (BinTableArena.OY - 2 * BinTableArena.WT) * 0.50  # inner y half-extent
+        ix = (BinTableArena.OX - 2 * BinTableArena.WT) * 0.25  # inner x half-extent
+        iy = (BinTableArena.OY - 2 * BinTableArena.WT) * 0.25  # inner y half-extent
 
         self.goal_positions = []
-        for bx, by in BinTableArena.BIN_XY:
-            gx = rng.uniform(bx - ix, bx + ix, size=self.n_starts)
-            gy = rng.uniform(by - iy, by + iy, size=self.n_starts)
+        for bin_idx, (bx, by) in enumerate(BinTableArena.BIN_XY):
+            rng_bin = np.random.default_rng([seed, 100 + bin_idx])
+            gx = rng_bin.uniform(bx - ix, bx + ix, size=self.n_starts)
+            gy = rng_bin.uniform(by - iy, by + iy, size=self.n_starts)
             self.goal_positions.append(
                 np.stack([gx, gy, np.full(self.n_starts, goal_z)], axis=1)
             )
+
+    def save_observations(self, save_path, n_obs_per_prism=None, n_obs_per_bin=None):
+        """Save start and goal positions to a .npz file.
+
+        Args:
+            save_path:       Destination path (e.g. 'observations.npz').
+            n_obs_per_prism: How many start positions to save per prism (default: all).
+            n_obs_per_bin:   How many goal positions to save per bin   (default: all).
+
+        Saved arrays:
+            start_positions  — (n_prisms, n_obs_per_prism, 3)
+            goal_positions   — (n_bins,   n_obs_per_bin,   3)
+        """
+        if self.start_positions is None or self.goal_positions is None:
+            raise RuntimeError("Call _generate_samples() before save_observations().")
+
+        starts = []
+        for prism_idx, prism_pos in enumerate(self.start_positions):
+            n = n_obs_per_prism if n_obs_per_prism is not None else len(prism_pos)
+            if n > len(prism_pos):
+                raise ValueError(
+                    f"Prism {prism_idx}: requested {n} obs but only {len(prism_pos)} available."
+                )
+            starts.append(prism_pos[:n])
+
+        goals = []
+        for bin_idx, bin_pos in enumerate(self.goal_positions):
+            n = n_obs_per_bin if n_obs_per_bin is not None else len(bin_pos)
+            if n > len(bin_pos):
+                raise ValueError(
+                    f"Bin {bin_idx}: requested {n} obs but only {len(bin_pos)} available."
+                )
+            goals.append(bin_pos[:n])
+
+        np.savez(
+            save_path,
+            start_positions=np.array(starts),   # (n_prisms, n_obs_per_prism, 3)
+            goal_positions=np.array(goals),      # (n_bins,   n_obs_per_bin,   3)
+        )
+        print(
+            f"Saved: {len(starts)} prisms × {len(starts[0])} starts, "
+            f"{len(goals)} bins × {len(goals[0])} goals → {save_path}"
+        )
 
     def _bake_sample_markers(self):
         """Add start/goal dots to the worldbody XML before sim compilation."""
         wb = self.model.worldbody
 
-        # Start dots — yellow
-        for i, pos in enumerate(self.start_positions):
-            g = ET.SubElement(wb, "geom")
-            g.set("name",         f"start_dot_{i}")
-            g.set("type",         "sphere")
-            g.set("size",         "0.012")
-            g.set("pos",          array_to_string(pos))
-            g.set("rgba",         array_to_string([0.95, 0.85, 0.1, 0.9]))
-            g.set("contype",      "0")
-            g.set("conaffinity",  "0")
-            g.set("group",        "1")
+        # Start dots — yellow (one dot per sample per prism)
+        dot_idx = 0
+        for prism_positions in self.start_positions:
+            for pos in prism_positions:
+                g = ET.SubElement(wb, "geom")
+                g.set("name",         f"start_dot_{dot_idx}")
+                g.set("type",         "sphere")
+                g.set("size",         "0.012")
+                g.set("pos",          array_to_string(pos))
+                g.set("rgba",         array_to_string([0.95, 0.85, 0.1, 0.9]))
+                g.set("contype",      "0")
+                g.set("conaffinity",  "0")
+                g.set("group",        "1")
+                dot_idx += 1
 
         # Goal dots — one color per bin
         for bin_idx, (goals, color) in enumerate(
