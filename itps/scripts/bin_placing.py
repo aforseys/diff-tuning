@@ -1,4 +1,5 @@
 import os
+import argparse
 import xml.etree.ElementTree as ET
 import numpy as np
 import robosuite as suite
@@ -16,6 +17,19 @@ from robosuite.utils.mjcf_utils import array_to_string
 from robosuite.utils.observables import Observable, sensor
 from robosuite.utils.transform_utils import convert_quat
 
+OBJECT_MAP = {
+    # Realistic bin-packing objects (mesh-based)
+    "can":      CanObject(name="obj"),
+    "bottle":   BottleObject(name="obj"),
+    "milk":     MilkObject(name="obj"),
+    "cereal":   CerealObject(name="obj"),
+    "bread":    BreadObject(name="obj"),
+    "lemon":    LemonObject(name="obj"),
+    # Geometric primitives
+    "box":      BoxObject(name="obj", size_min=[0.020]*3, size_max=[0.022]*3, rgba=[1, 0, 0, 1]),
+    "cylinder": CylinderObject(name="obj", size_min=[0.020, 0.030], size_max=[0.022, 0.032], rgba=[0.2, 0.6, 1, 1]),
+    "ball":     BallObject(name="obj", size_min=[0.022], size_max=[0.024], rgba=[0.1, 0.9, 0.2, 1]),
+}
 
 # ---------------------------------------------------------------------------
 # Arena: white table with 4 blue bin pads
@@ -156,10 +170,10 @@ class BinPlacing(ManipulationEnv):
         use_camera_obs=True,
         use_object_obs=True,
         reward_shaping=False,
-        target_bin=None,
+        #target_bin=None,
         mujoco_object=None,
-        n_starts=100,
-        show_samples=False,
+       # n_starts=100,
+       # show_samples=False,
         has_renderer=False,
         has_offscreen_renderer=True,
         render_camera="frontview",
@@ -185,13 +199,13 @@ class BinPlacing(ManipulationEnv):
         self.table_offset      = np.array((0, 0, 0.8))
         self.use_object_obs    = use_object_obs
         self.reward_shaping    = reward_shaping
-        self._fixed_target_bin = target_bin
+        self._fixed_target_bin = None
         self.current_goal_bin  = None
         self._input_object     = mujoco_object
-        self.n_starts          = n_starts
-        self.show_samples      = show_samples
-        self.start_positions   = None   # (n_starts, 3)
-        self.goal_positions    = None   # list of 4 arrays, each (n_starts, 3)
+        #self.n_starts          = n_starts
+        #self.show_samples      = show_samples
+        # self.start_positions   = None   # (n_starts, 3)
+        # self.goal_positions    = None   # list of 4 arrays, each (n_starts, 3)
 
         # World-space bin centres (table surface z = 0.8)
         self.bin_positions = np.array([
@@ -262,15 +276,15 @@ class BinPlacing(ManipulationEnv):
             mujoco_objects=self.grasp_obj,
         )
 
-        if self.show_samples:
-            self._generate_samples()
-            self._bake_sample_markers()
+        # if self.show_samples:
+        #     self._generate_samples()
+        #     self._bake_sample_markers()
 
     # ------------------------------------------------------------------
     # Sample generation + visualization
     # ------------------------------------------------------------------
 
-    def _generate_samples(self, seed=42, start_regions=None):
+    def _generate_samples(self, seed=42, start_regions=None, obs_per_start=100, obs_per_goal=100):
         """Sample start (EEF) and per-bin goal positions. Stores results in self.
 
         Args:
@@ -289,103 +303,82 @@ class BinPlacing(ManipulationEnv):
             start_regions = self.make_start_regions()
 
         # Start positions: one independent RNG per prism
-        self.start_positions = []
+        start_positions = []
         for prism_idx, region in enumerate(start_regions):
             rng = np.random.default_rng([seed, prism_idx])
             lo = np.array(region['low'])
             hi = np.array(region['high'])
-            self.start_positions.append(rng.uniform(lo, hi, size=(self.n_starts, 3)))
+            start_positions.append(rng.uniform(lo, hi, size=(obs_per_start, 3)))
 
         # Goal positions: one independent RNG per bin
         goal_z = self.table_offset[2] + BinTableArena.H * 2 + 0.01  # 1cm above rim
         ix = (BinTableArena.OX - 2 * BinTableArena.WT) * 0.25  # inner x half-extent
         iy = (BinTableArena.OY - 2 * BinTableArena.WT) * 0.25  # inner y half-extent
 
-        self.goal_positions = []
+        goal_positions = []
         for bin_idx, (bx, by) in enumerate(BinTableArena.BIN_XY):
             rng_bin = np.random.default_rng([seed, 100 + bin_idx])
-            gx = rng_bin.uniform(bx - ix, bx + ix, size=self.n_starts)
-            gy = rng_bin.uniform(by - iy, by + iy, size=self.n_starts)
-            self.goal_positions.append(
-                np.stack([gx, gy, np.full(self.n_starts, goal_z)], axis=1)
+            gx = rng_bin.uniform(bx - ix, bx + ix, size=obs_per_goal)
+            gy = rng_bin.uniform(by - iy, by + iy, size=obs_per_goal)
+            goal_positions.append(
+                np.stack([gx, gy, np.full(obs_per_goal, goal_z)], axis=1)
             )
 
-    def save_observations(self, save_path, n_obs_per_prism=None, n_obs_per_bin=None):
+        return (start_positions, goal_positions)
+
+    def save_observations(self, start_positions, goal_positions, save_path):
         """Save start and goal positions to a .npz file.
 
         Args:
             save_path:       Destination path (e.g. 'observations.npz').
-            n_obs_per_prism: How many start positions to save per prism (default: all).
-            n_obs_per_bin:   How many goal positions to save per bin   (default: all).
 
-        Saved arrays:
-            start_positions  — (n_prisms, n_obs_per_prism, 3)
-            goal_positions   — (n_bins,   n_obs_per_bin,   3)
         """
-        if self.start_positions is None or self.goal_positions is None:
-            raise RuntimeError("Call _generate_samples() before save_observations().")
-
-        starts = []
-        for prism_idx, prism_pos in enumerate(self.start_positions):
-            n = n_obs_per_prism if n_obs_per_prism is not None else len(prism_pos)
-            if n > len(prism_pos):
-                raise ValueError(
-                    f"Prism {prism_idx}: requested {n} obs but only {len(prism_pos)} available."
-                )
-            starts.append(prism_pos[:n])
-
-        goals = []
-        for bin_idx, bin_pos in enumerate(self.goal_positions):
-            n = n_obs_per_bin if n_obs_per_bin is not None else len(bin_pos)
-            if n > len(bin_pos):
-                raise ValueError(
-                    f"Bin {bin_idx}: requested {n} obs but only {len(bin_pos)} available."
-                )
-            goals.append(bin_pos[:n])
 
         np.savez(
             save_path,
-            start_positions=np.array(starts),   # (n_prisms, n_obs_per_prism, 3)
-            goal_positions=np.array(goals),      # (n_bins,   n_obs_per_bin,   3)
+            start_positions=np.array(start_positions),   # (n_prisms, n_obs_per_prism, 3)
+            goal_positions=np.array(goal_positions),      # (n_bins,   n_obs_per_bin,   3)
         )
         print(
-            f"Saved: {len(starts)} prisms × {len(starts[0])} starts, "
-            f"{len(goals)} bins × {len(goals[0])} goals → {save_path}"
+            f"Saved: {len(start_positions)} prisms × {len(start_positions[0])} starts, "
+            f"{len(goal_positions)} bins × {len(goal_positions[0])} goals → {save_path}"
         )
 
-    def _bake_sample_markers(self):
+    def _bake_sample_markers(self, start_positions=None, goal_positions=None):
         """Add start/goal dots to the worldbody XML before sim compilation."""
         wb = self.model.worldbody
 
         # Start dots — yellow (one dot per sample per prism)
         dot_idx = 0
-        for prism_positions in self.start_positions:
-            for pos in prism_positions:
-                g = ET.SubElement(wb, "geom")
-                g.set("name",         f"start_dot_{dot_idx}")
-                g.set("type",         "sphere")
-                g.set("size",         "0.012")
-                g.set("pos",          array_to_string(pos))
-                g.set("rgba",         array_to_string([0.95, 0.85, 0.1, 0.9]))
-                g.set("contype",      "0")
-                g.set("conaffinity",  "0")
-                g.set("group",        "1")
-                dot_idx += 1
+        if start_positions is not None:
+            for prism_positions in start_positions:
+                for pos in prism_positions:
+                    g = ET.SubElement(wb, "geom")
+                    g.set("name",         f"start_dot_{dot_idx}")
+                    g.set("type",         "sphere")
+                    g.set("size",         "0.012")
+                    g.set("pos",          array_to_string(pos))
+                    g.set("rgba",         array_to_string([0.95, 0.85, 0.1, 0.9]))
+                    g.set("contype",      "0")
+                    g.set("conaffinity",  "0")
+                    g.set("group",        "1")
+                    dot_idx += 1
 
         # Goal dots — one color per bin
-        for bin_idx, (goals, color) in enumerate(
-            zip(self.goal_positions, self.BIN_COLORS)
-        ):
-            for j, pos in enumerate(goals):
-                g = ET.SubElement(wb, "geom")
-                g.set("name",         f"goal_dot_{bin_idx}_{j}")
-                g.set("type",         "sphere")
-                g.set("size",         "0.010")
-                g.set("pos",          array_to_string(pos))
-                g.set("rgba",         array_to_string(color))
-                g.set("contype",      "0")
-                g.set("conaffinity",  "0")
-                g.set("group",        "1")
+        if goal_positions is not None:
+            for bin_idx, (goals, color) in enumerate(
+                zip(goal_positions, self.BIN_COLORS)
+            ):
+                for j, pos in enumerate(goals):
+                    g = ET.SubElement(wb, "geom")
+                    g.set("name",         f"goal_dot_{bin_idx}_{j}")
+                    g.set("type",         "sphere")
+                    g.set("size",         "0.010")
+                    g.set("pos",          array_to_string(pos))
+                    g.set("rgba",         array_to_string(color))
+                    g.set("contype",      "0")
+                    g.set("conaffinity",  "0")
+                    g.set("group",        "1")
 
     # ------------------------------------------------------------------
     # References / Reset
@@ -508,8 +501,8 @@ def _composite_cfg(controller_type):
     return {"type": "BASIC", "body_parts": {"right": part}}
 
 
-def make_env(target_bin=None, has_renderer=True, camera="frontview",
-             mujoco_object=None, show_samples=False, n_starts=100,
+def make_env(has_renderer=True, camera="frontview",
+             mujoco_object=None, 
              controller="JOINT_POSITION"):
     """
     controller="JOINT_POSITION"  — for diffusion policy evaluation
@@ -518,10 +511,10 @@ def make_env(target_bin=None, has_renderer=True, camera="frontview",
     return BinPlacing(
         robots="Panda",
         controller_configs=_composite_cfg(controller),
-        target_bin=target_bin,
+        # target_bin=target_bin,
         mujoco_object=mujoco_object,
-        show_samples=show_samples,
-        n_starts=n_starts,
+        # show_samples=show_samples,
+        # n_starts=n_starts,
         has_renderer=has_renderer,
         has_offscreen_renderer=False,
         render_camera=camera,
@@ -534,7 +527,7 @@ def make_env(target_bin=None, has_renderer=True, camera="frontview",
     )
 
 
-def scripted_episode(env, bin_idx):
+def scripted_episode(env, goal_positions, bin_idx):
     """
     Drive the arm to a sampled goal in bin_idx (0-3) then drop the object.
     Requires env created with controller='OSC_POSE'.
@@ -542,7 +535,7 @@ def scripted_episode(env, bin_idx):
     OSC_POSE default: control_delta=True, output_max=0.05m for position.
     So action[:3] = 1.0 → move 0.05 m/step (at 20 Hz = 1 m/s max).
     """
-    goal_pos = env.goal_positions[bin_idx][0]
+    goal_pos = goal_positions[bin_idx][0]
     print(f"Target: bin {bin_idx+1}  goal_pos={goal_pos.round(3)}")
 
     action_dim = env.action_spec[0].shape[0]   # 7: [dx dy dz dRx dRy dRz gripper]
@@ -635,64 +628,88 @@ def execute_spline(env, waypoints, horizon=64, record=True):
 
     return np.array(joint_traj) if record else None
 
+def sample_generation(env, save_dir, ):
 
-def demo():
-    import argparse
+    # Generate samples 
+    start_positions, goal_positions = env._generate_samples()
+
+    # Save samples 
+    if save_dir is None:
+        print('NOTE: Samples will not be saved. No save directory passed in.')
+    else:
+        env.save_observations(start_positions, goal_positions, save_dir)
+        
+
+if __name__ == "__main__":
+
     parser = argparse.ArgumentParser()
-    view = parser.add_mutually_exclusive_group()
-    view.add_argument("-o", "--overhead", action="store_true", help="Overhead (bird's-eye) view")
-    view.add_argument("-s", "--side",     action="store_true", help="Side view")
-    parser.add_argument("-v", "--viz-samples", action="store_true", help="Show start/goal sample dots")
-    parser.add_argument("-e", "--episode", type=int, choices=[1,2,3,4], metavar="BIN",
+    parser.add_argument("-c", "--camera_view", type="str", default="f", help="Camera view options: f (front), o (overhead), s (side)")
+    parser.add_argument("-g", "--gen-samples", action="store_true", help="Generate start/goal samples")
+    parser.add_argument("-s", "--save-dir", type="str", help="Path to save generated samples", default=None)
+    parser.add_argument("-v", "--viz", action="store_true", help="Show env")
+    parser.add_argument("-d", "--run-demo", action="store_true", help="Show demo motion")
+    parser.add_argument("-b", "--bin", type=int, choices=[1,2,3,4], metavar="BIN",
                         help="Scripted episode: move to a goal in bin 1-4 and drop")
     parser.add_argument("--object", default="can",
                         choices=["can", "bottle", "milk", "cereal", "bread", "lemon",
                                  "box", "cylinder", "ball"],
                         help="Object to hold (default: can)")
+    
     args = parser.parse_args()
 
-    if args.overhead:
+    # Set camera angle
+    if args.camera=='o':
         camera = "birdview"
-    elif args.side:
+    elif args.camera=='s':
         camera = "sideview"
     else:
         camera = "frontview"
 
-    obj_map = {
-        # Realistic bin-packing objects (mesh-based)
-        "can":      CanObject(name="obj"),
-        "bottle":   BottleObject(name="obj"),
-        "milk":     MilkObject(name="obj"),
-        "cereal":   CerealObject(name="obj"),
-        "bread":    BreadObject(name="obj"),
-        "lemon":    LemonObject(name="obj"),
-        # Geometric primitives
-        "box":      BoxObject(name="obj", size_min=[0.020]*3, size_max=[0.022]*3, rgba=[1, 0, 0, 1]),
-        "cylinder": CylinderObject(name="obj", size_min=[0.020, 0.030], size_max=[0.022, 0.032], rgba=[0.2, 0.6, 1, 1]),
-        "ball":     BallObject(name="obj", size_min=[0.022], size_max=[0.024], rgba=[0.1, 0.9, 0.2, 1]),
-    }
-    mujoco_object = obj_map[args.object]
+    # Set object and controller 
+    mujoco_object = OBJECT_MAP[args.object]
+    ctrl = "OSC_POSE" if args.run_demo else "JOINT_POSITION"
 
-    # Scripted episodes need Cartesian delta control; normal view uses JOINT_POSITION
-    ctrl = "OSC_POSE" if args.episode else "JOINT_POSITION"
-    env  = make_env(has_renderer=True, camera=camera, show_samples=args.viz_samples,
+    # Initialize environment 
+    env  = make_env(has_renderer=args.viz, camera=camera,
                     mujoco_object=mujoco_object, controller=ctrl)
-    obs  = env.reset()
+    obs=env.reset()
     print(f"goal_bin={env.current_goal_bin}  camera={camera}  controller={ctrl}")
 
-    if args.episode:
-        scripted_episode(env, bin_idx=args.episode - 1)
-        print("Episode done. Close the window to exit.")
-        while True:
-            env.render()
-    else:
-        print("Close the window to exit.")
-        action = np.zeros(env.action_spec[0].shape)
-        action[-1] = 1.0  # keep gripper closed
-        while True:
-            obs, reward, done, info = env.step(action)
-            env.render()
+    # Generate and save samples
+    samples = None   
+    if args.gen_samples: 
+        start_pos, goal_pos = sample_generation(env, args.save_dir, )
+
+    # Visualize environment 
+    if args.viz:
+
+        # Visualize samples if generated 
+        if samples is not None:
+            start_pos, goal_pos = samples
+            env._bake_sample_markers(start_pos, goal_pos)
+
+        # If running a demonstration
+        if args.run_demo:
+            bin_idx=args.bin - 1
+            # Need to grab a sample for target bin if not generated
+            if samples is None: 
+                _, goal_positions = env._generate_samples(start_regions=0, obs_per_start=0, obs_per_goal=1)
+            scripted_episode(env, goal_positions=goal_positions, bin_idx=bin_idx)
+            print("Episode done. Close the window to exit.")
+            while True:
+                env.render()
+
+        # Otherwise just render environment
+        else:
+            print("Close the window to exit.")
+            action = np.zeros(env.action_spec[0].shape)
+            action[-1] = 1.0  # keep gripper closed
+            while True:
+                obs, reward, done, info = env.step(action)
+                env.render()
+
+    
 
 
-if __name__ == "__main__":
-    demo()
+
+    
