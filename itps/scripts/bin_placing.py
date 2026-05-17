@@ -95,34 +95,37 @@ class BinPlacing(ManipulationEnv):
     # Tight bounding box around default EEF (~[-0.215, 0.009, 1.007])
     # Size: 0.09 x 0.12 x 0.06 m  (~20% smaller than original)
     START_REGION = dict(
-        low  = [-0.260, -0.055, 0.980],
-        high = [-0.170,  0.065, 1.040],
+        low  = [-0.2375, -0.025, 0.995],
+        high = [-0.1925,  0.035, 1.025],
     )
 
     # Reachable workspace bounds for prism centres when generating random regions
     # Kept to the robot-side of the table (negative x), left/right of the stand — not over the bins
     PRISM_CENTER_BOUNDS = dict(
-        low  = [-0.50, -0.42, 0.88],
-        high = [-0.08,  0.42, 1.25],
+        low  = [-0.45, -0.42, 0.95],
+        high = [-0.15,  0.42, 1.25],
     )
 
     @classmethod
-    def make_start_regions(cls, n=10, seed=0, max_attempts=10_000):
-        """Return a list of n non-overlapping same-size start regions.
+    def make_start_regions(cls, n=10, seed=0, max_attempts=10_000, min_sep_factor=3.0):
+        """Return a list of n same-size start regions with enforced minimum separation.
 
         Region 0 is always START_REGION. The remaining n-1 are placed via
         rejection sampling within PRISM_CENTER_BOUNDS: a candidate center is
-        accepted only if it does not overlap any already-placed prism.
+        accepted only if every existing center is at least
+        min_sep_factor * 2 * half away on all three axes simultaneously.
 
-        Two axis-aligned boxes overlap iff they overlap on every axis, so the
-        check is: reject if |c_new - c_existing| < 2*half on ALL three axes.
+        min_sep_factor=1.0 → just non-overlapping; 2.0 → one full region-width
+        gap between every pair of regions.
 
         Raises RuntimeError if a valid placement cannot be found within
-        max_attempts tries (indicates workspace is too small for n prisms).
+        max_attempts tries (reduce n, increase PRISM_CENTER_BOUNDS, or lower
+        min_sep_factor).
         """
         lo   = np.array(cls.START_REGION['low'])
         hi   = np.array(cls.START_REGION['high'])
         half = (hi - lo) / 2.0
+        min_sep = min_sep_factor * 2 * half
 
         centers = [(lo + hi) / 2.0]
         regions = [cls.START_REGION]
@@ -134,7 +137,7 @@ class BinPlacing(ManipulationEnv):
         for i in range(n - 1):
             for _ in range(max_attempts):
                 candidate = rng.uniform(c_lo + half, c_hi - half)
-                if not any(np.all(np.abs(candidate - ec) < 2 * half) for ec in centers):
+                if not any(np.all(np.abs(candidate - ec) < min_sep) for ec in centers):
                     centers.append(candidate)
                     regions.append({
                         'low':  (candidate - half).tolist(),
@@ -143,8 +146,8 @@ class BinPlacing(ManipulationEnv):
                     break
             else:
                 raise RuntimeError(
-                    f"Could not place non-overlapping prism {i + 1} after "
-                    f"{max_attempts} attempts. Reduce n or expand PRISM_CENTER_BOUNDS."
+                    f"Could not place region {i + 1} after {max_attempts} attempts. "
+                    f"Reduce n, expand PRISM_CENTER_BOUNDS, or lower min_sep_factor."
                 )
 
         return regions
@@ -202,6 +205,8 @@ class BinPlacing(ManipulationEnv):
         self._fixed_target_bin = None
         self.current_goal_bin  = None
         self._input_object     = mujoco_object
+        self._marker_data      = None
+        self._spline_data      = None   # (waypoints_list, colors_list) — set before reset()
         #self.n_starts          = n_starts
         #self.show_samples      = show_samples
         # self.start_positions   = None   # (n_starts, 3)
@@ -276,9 +281,11 @@ class BinPlacing(ManipulationEnv):
             mujoco_objects=self.grasp_obj,
         )
 
-        # if self.show_samples:
-        #     self._generate_samples()
-        #     self._bake_sample_markers()
+        if self._marker_data is not None:
+            self._bake_sample_markers(*self._marker_data)
+
+        if self._spline_data is not None:
+            self._bake_spline_markers(*self._spline_data)
 
     # ------------------------------------------------------------------
     # Sample generation + visualization
@@ -380,6 +387,37 @@ class BinPlacing(ManipulationEnv):
                     g.set("conaffinity",  "0")
                     g.set("group",        "1")
 
+    def _bake_spline_markers(self, waypoints_list, colors_list=None, radius=0.004):
+        """Draw spline trajectories as capsule tubes in the worldbody XML.
+
+        Each consecutive pair of waypoints becomes one capsule geom using the
+        MuJoCo `fromto` attribute, giving a connected line regardless of camera
+        angle.
+
+        Args:
+            waypoints_list : list of (n_pts, 3) arrays, one per spline.
+            colors_list    : list of RGBA arrays (one per spline), or None for grey.
+            radius         : tube radius in metres (default 0.004).
+        """
+        wb = self.model.worldbody
+        default_color = [0.75, 0.75, 0.75, 0.6]
+        size_str = str(radius)
+
+        for traj_idx, path in enumerate(waypoints_list):
+            color = colors_list[traj_idx] if colors_list is not None else default_color
+            for seg_idx in range(len(path) - 1):
+                p0 = path[seg_idx]
+                p1 = path[seg_idx + 1]
+                g = ET.SubElement(wb, "geom")
+                g.set("name",        f"spline_{traj_idx}_{seg_idx}")
+                g.set("type",        "capsule")
+                g.set("fromto",      array_to_string(np.concatenate([p0, p1])))
+                g.set("size",        size_str)
+                g.set("rgba",        array_to_string(color))
+                g.set("contype",     "0")
+                g.set("conaffinity", "0")
+                g.set("group",       "1")
+
     # ------------------------------------------------------------------
     # References / Reset
     # ------------------------------------------------------------------
@@ -476,9 +514,13 @@ class BinPlacing(ManipulationEnv):
     def _check_success(self):
         if self.current_goal_bin is None:
             return False
-        obj_pos  = self.sim.data.body_xpos[self.obj_body_id]
-        goal_pos = self.bin_positions[self.current_goal_bin]
-        return bool(np.linalg.norm(obj_pos - goal_pos) < 0.05)
+        obj_pos      = self.sim.data.body_xpos[self.obj_body_id]
+        bx, by       = BinTableArena.BIN_XY[self.current_goal_bin]
+        ox, oy       = BinTableArena.OX, BinTableArena.OY
+        in_bin_xy   = (bx - ox) <= obj_pos[0] <= (bx + ox) and \
+                      (by - oy) <= obj_pos[1] <= (by + oy)
+        above_table = obj_pos[2] > 0.8
+        return bool(in_bin_xy and above_table)
 
     # ------------------------------------------------------------------
     # Helper
@@ -628,24 +670,44 @@ def execute_spline(env, waypoints, horizon=64, record=True):
 
     return np.array(joint_traj) if record else None
 
-def sample_generation(env, save_dir, ):
+def sample_generation(env, save_dir, n_starts=None, obs_per_start=100, obs_per_goal=100):
+    all_regions = env.make_start_regions()
 
-    # Generate samples 
-    start_positions, goal_positions = env._generate_samples()
+    if n_starts is None:
+        start_regions = all_regions
+    elif n_starts > len(all_regions):
+        raise ValueError(
+            f"n_starts ({n_starts}) exceeds the number of preset start regions ({len(all_regions)})"
+        )
+    else:
+        start_regions = all_regions[:n_starts]
 
-    # Save samples 
+    start_positions, goal_positions = env._generate_samples(
+        start_regions=start_regions,
+        obs_per_start=obs_per_start,
+        obs_per_goal=obs_per_goal,
+    )
+
     if save_dir is None:
         print('NOTE: Samples will not be saved. No save directory passed in.')
     else:
         env.save_observations(start_positions, goal_positions, save_dir)
-        
+
+    return (start_positions, goal_positions)
+
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("-c", "--camera_view", type="str", default="f", help="Camera view options: f (front), o (overhead), s (side)")
+    parser.add_argument("-c", "--camera_view", type=str, default="f", help="Camera view options: f (front), o (overhead), s (side)")
     parser.add_argument("-g", "--gen-samples", action="store_true", help="Generate start/goal samples")
-    parser.add_argument("-s", "--save-dir", type="str", help="Path to save generated samples", default=None)
+    parser.add_argument("-s", "--save-dir", type=str, help="Path to save generated samples", default=None)
+    parser.add_argument("--n-starts", type=int, default=None,
+                        help="Number of preset start regions to sample (default: all)")
+    parser.add_argument("--obs-per-start", type=int, default=100,
+                        help="Sample points per start region (default: 100)")
+    parser.add_argument("--obs-per-goal", type=int, default=100,
+                        help="Sample points per goal bin (default: 100)")
     parser.add_argument("-v", "--viz", action="store_true", help="Show env")
     parser.add_argument("-d", "--run-demo", action="store_true", help="Show demo motion")
     parser.add_argument("-b", "--bin", type=int, choices=[1,2,3,4], metavar="BIN",
@@ -658,9 +720,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Set camera angle
-    if args.camera=='o':
+    if args.camera_view=='o':
         camera = "birdview"
-    elif args.camera=='s':
+    elif args.camera_view=='s':
         camera = "sideview"
     else:
         camera = "frontview"
@@ -669,31 +731,33 @@ if __name__ == "__main__":
     mujoco_object = OBJECT_MAP[args.object]
     ctrl = "OSC_POSE" if args.run_demo else "JOINT_POSITION"
 
-    # Initialize environment 
-    env  = make_env(has_renderer=args.viz, camera=camera,
-                    mujoco_object=mujoco_object, controller=ctrl)
-    obs=env.reset()
+    # Initialize environment
+    env = make_env(has_renderer=args.viz, camera=camera,
+                   mujoco_object=mujoco_object, controller=ctrl)
+
+    # Generate samples before reset so markers are baked into the model at compile time
+    samples = None
+    if args.gen_samples:
+        samples = sample_generation(env, args.save_dir,
+                                    n_starts=args.n_starts,
+                                    obs_per_start=args.obs_per_start,
+                                    obs_per_goal=args.obs_per_goal)
+        if args.viz:
+            env._marker_data = samples
+
+    obs = env.reset()
     print(f"goal_bin={env.current_goal_bin}  camera={camera}  controller={ctrl}")
 
-    # Generate and save samples
-    samples = None   
-    if args.gen_samples: 
-        start_pos, goal_pos = sample_generation(env, args.save_dir, )
-
-    # Visualize environment 
+    # Visualize environment
     if args.viz:
-
-        # Visualize samples if generated 
-        if samples is not None:
-            start_pos, goal_pos = samples
-            env._bake_sample_markers(start_pos, goal_pos)
 
         # If running a demonstration
         if args.run_demo:
-            bin_idx=args.bin - 1
-            # Need to grab a sample for target bin if not generated
-            if samples is None: 
-                _, goal_positions = env._generate_samples(start_regions=0, obs_per_start=0, obs_per_goal=1)
+            bin_idx = args.bin - 1
+            if samples is not None:
+                _, goal_positions = samples
+            else:
+                _, goal_positions = env._generate_samples(start_regions=[], obs_per_goal=1)
             scripted_episode(env, goal_positions=goal_positions, bin_idx=bin_idx)
             print("Episode done. Close the window to exit.")
             while True:
