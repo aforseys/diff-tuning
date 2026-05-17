@@ -8,6 +8,7 @@ import pygame
 from collections import deque
 
 from interact_maze2d import MazeEnv
+from common.utils.maze_maps import MAZE_MAPS
 
 
 def pick_start_positions(maze_type='large', n_positions=None, savepath=None):
@@ -256,6 +257,17 @@ def visualize_observations(positions, maze_type='large'):
         env.clock.tick(30)
 
     pygame.quit()
+
+
+def _subsample_xy_path(xy_points, threshold):
+    """Greedy subsampling: keep a point only if it's >= threshold from the last kept point."""
+    if len(xy_points) == 0:
+        return np.array(xy_points)
+    kept = [xy_points[0]]
+    for pt in xy_points[1:]:
+        if np.linalg.norm(np.array(pt) - np.array(kept[-1])) >= threshold:
+            kept.append(pt)
+    return np.array(kept)
 
 
 _DEFAULT_THRESHOLDS = {
@@ -526,6 +538,124 @@ def visualize_preference_pairs(winners_path, losers_path, meta_path=None, maze_t
     pygame.quit()
 
 
+def extract_demo_dataset(loadpath, savepath, maze_type='large', step_threshold=0.15, prefix=None):
+    """
+    Convert saved trial JSONL into a demonstration dataset npz.
+
+    Each trial's drawn guide is subsampled and prepended with the agent start
+    position (x2 for n_obs_steps=2) to form one training episode.
+
+    Asserts all trials have a non-empty guide. Short guides are kept as-is.
+    The output filename automatically contains 'maze' so the dataloader routes
+    it through the correct npz branch.
+    """
+    file_prefix = (prefix + '_' if prefix else '') + 'maze_demos_' + time.strftime("%Y%m%d_%H%M%S")
+    save_file = os.path.join(savepath, f"{file_prefix}.npz")
+    assert 'maze' in os.path.basename(save_file), \
+        f"Output filename must contain 'maze' for the dataloader; got '{os.path.basename(save_file)}'"
+
+    maze_env = MazeEnv(maze_type)
+
+    with open(loadpath, 'r') as f:
+        trials = [json.loads(line) for line in f]
+
+    for i, trial in enumerate(trials):
+        assert len(trial.get('guide', [])) > 0, \
+            f"Trial {i} (trial_idx={trial.get('trial_idx')}) has an empty guide — all trials must have a guide."
+
+    episodes = []
+    trial_goals = []
+    for trial in trials:
+        agent_xy = maze_env.gui2xy(np.array(trial['agent_pos'], dtype=float))
+        guide_xy = np.array([maze_env.gui2xy(np.array(p, dtype=float)) for p in trial['guide']])
+        subsampled = _subsample_xy_path(guide_xy, step_threshold)
+        episode = np.vstack([agent_xy[None], agent_xy[None], subsampled]).astype(np.float32)
+        episodes.append(episode)
+        goal = trial["obs"][2:] if "obs" in trial and len(trial["obs"]) >= 4 else None
+        trial_goals.append(goal)
+
+    has_goals = all(g is not None for g in trial_goals)
+    assert has_goals or all(g is None for g in trial_goals), \
+        "Inconsistent goals: some trials have goals and some do not."
+
+    observations = np.concatenate(episodes, axis=0)
+    ep_lengths = [len(ep) for ep in episodes]
+
+    n_pairs = len(observations) - 1
+    timeouts = np.zeros(n_pairs, dtype=bool)
+    cumulative = 0
+    for ep_len in ep_lengths[:-1]:
+        cumulative += ep_len
+        timeouts[cumulative - 1] = True
+
+    npz_extra = {}
+    if has_goals:
+        goals = np.concatenate([
+            np.tile(np.array(g, dtype=np.float32), (ep_len, 1))
+            for g, ep_len in zip(trial_goals, ep_lengths)
+        ], axis=0)
+        npz_extra['goals'] = goals
+
+    np.savez(save_file, observations=observations, timeouts=timeouts, **npz_extra)
+
+    print(f"Saved {len(trials)} demo episodes → {save_file}")
+    print(f"  observations: {observations.shape}")
+    print(f"  ep lengths:   min={min(ep_lengths)}  max={max(ep_lengths)}  mean={np.mean(ep_lengths):.1f}")
+
+    return trials
+
+
+def visualize_postsampled(dataset_path, maze_type='large', n_episodes=20, seed=0):
+    """
+    Visualize post-downsampled dataset points on the maze.
+    Loads via load_hf_dataset (applies 4x downsampling for hdf5) and scatter-plots
+    each episode's observation.state points — showing actual sampled density.
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as patches
+    import torch
+    from itps.common.datasets.utils import load_hf_dataset
+
+    maze = MAZE_MAPS[maze_type]
+    rows, cols = maze.shape
+
+    hf_dataset = load_hf_dataset('maze2d', 'v1.6', dataset_path, 'train')
+
+    all_obs = torch.stack(hf_dataset['observation.state']).numpy()
+    all_eps = torch.stack(hf_dataset['episode_index']).numpy()
+
+    unique_eps = np.unique(all_eps)
+    rng = np.random.default_rng(seed)
+    if len(unique_eps) > n_episodes:
+        unique_eps = rng.choice(unique_eps, size=n_episodes, replace=False)
+        unique_eps.sort()
+
+    fig, ax = plt.subplots(figsize=(max(6, cols), max(5, rows)))
+
+    for r in range(rows):
+        for c in range(cols):
+            if maze[r, c]:
+                ax.add_patch(patches.Rectangle(
+                    (c - 0.5, r - 0.5), 1, 1,
+                    facecolor='#333333', edgecolor='none'))
+
+    colors = plt.cm.tab10(np.linspace(0, 1, len(unique_eps)))
+    for ep, color in zip(unique_eps, colors):
+        traj = all_obs[all_eps == ep]
+        ax.scatter(traj[:, 1], traj[:, 0], s=4, color=color, alpha=0.7)
+        ax.plot(traj[0, 1], traj[0, 0], 'o', color=color, ms=6, zorder=5)
+        ax.plot(traj[-1, 1], traj[-1, 0], 's', color=color, ms=6, zorder=5)
+
+    ax.set_xlim(-0.5, cols - 0.5)
+    ax.set_ylim(rows - 0.5, -0.5)
+    ax.set_aspect('equal')
+    ax.set_title(f"{len(unique_eps)} episodes from {os.path.basename(dataset_path)}  (○ start, □ end)")
+    ax.set_xlabel("y (column)")
+    ax.set_ylabel("x (row)")
+    plt.tight_layout()
+    plt.show()
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-mt', '--maze_type', default='large', type=str, help="Maze type: open | sparse | large")
@@ -550,10 +680,25 @@ if __name__ == "__main__":
     parser.add_argument('--winners-file', type=str, default=None, help="Path to winners .npz file")
     parser.add_argument('--losers-file', type=str, default=None, help="Path to losers .npz file")
     parser.add_argument('--meta-file', type=str, default=None, help="Path to meta .json file (optional, enables guide overlay)")
+    parser.add_argument('--viz-postsampled', action='store_true', help="Visualize post-downsampled observation points from a dataset file")
+    parser.add_argument('--dataset-file', type=str, default=None, help="Path to dataset file for --viz-postsampled")
+    parser.add_argument('--n-episodes', type=int, default=20, help="Number of episodes to show in --viz-postsampled")
+    parser.add_argument('--gen-demo', action='store_true', help="Generate demo dataset from saved trials")
+    parser.add_argument('--step-threshold', type=float, default=0.15, help="Min distance between subsampled guide points (default: 0.15)")
     parser.add_argument('--goal', type=float, nargs=2, default=None, metavar=('X', 'Y'),
                         help="Fixed eval goal in maze XY space (matches cfg.eval.goal). "
                              "If omitted, falls back to the guide's last point.")
     args = parser.parse_args()
+
+    if args.viz_postsampled:
+        assert args.dataset_file is not None, "Pass --dataset-file to visualize"
+        visualize_postsampled(
+            dataset_path=args.dataset_file,
+            maze_type=args.maze_type,
+            n_episodes=args.n_episodes,
+            seed=args.seed,
+        )
+        sys.exit(0)
 
     if args.viz_pairs:
         assert args.winners_file is not None and args.losers_file is not None, \
@@ -595,6 +740,18 @@ if __name__ == "__main__":
         with open(args.obs_file) as f:
             positions = json.load(f)
         visualize_observations(positions, maze_type=args.maze_type)
+        sys.exit(0)
+
+    if args.gen_demo:
+        assert args.loadpath is not None, "Pass --loadpath to generate demo dataset"
+        assert args.savepath is not None, "Pass --savepath to save demo dataset"
+        extract_demo_dataset(
+            loadpath=args.loadpath,
+            savepath=args.savepath,
+            maze_type=args.maze_type,
+            step_threshold=args.step_threshold,
+            prefix=args.prefix,
+        )
         sys.exit(0)
 
     if args.gen_pref:
