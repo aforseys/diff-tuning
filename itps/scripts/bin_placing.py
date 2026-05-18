@@ -207,6 +207,7 @@ class BinPlacing(ManipulationEnv):
         self._input_object     = mujoco_object
         self._marker_data      = None
         self._spline_data      = None   # (waypoints_list, colors_list) — set before reset()
+        self._waypoint_data    = None   # (waypoints_list, colors_list) — raw optimizer waypoints
         #self.n_starts          = n_starts
         #self.show_samples      = show_samples
         # self.start_positions   = None   # (n_starts, 3)
@@ -286,6 +287,9 @@ class BinPlacing(ManipulationEnv):
 
         if self._spline_data is not None:
             self._bake_spline_markers(*self._spline_data)
+
+        if self._waypoint_data is not None:
+            self._bake_waypoint_markers(*self._waypoint_data)
 
     # ------------------------------------------------------------------
     # Sample generation + visualization
@@ -387,17 +391,17 @@ class BinPlacing(ManipulationEnv):
                     g.set("conaffinity",  "0")
                     g.set("group",        "1")
 
-    def _bake_spline_markers(self, waypoints_list, colors_list=None, radius=0.004):
+    def _bake_spline_markers(self, waypoints_list, colors_list=None, radius=0.004, n_samples=100):
         """Draw spline trajectories as capsule tubes in the worldbody XML.
 
-        Each consecutive pair of waypoints becomes one capsule geom using the
-        MuJoCo `fromto` attribute, giving a connected line regardless of camera
-        angle.
+        Fits the same cubic spline used by execute_spline and samples it densely,
+        so the tubes match the path the robot will actually follow.
 
         Args:
             waypoints_list : list of (n_pts, 3) arrays, one per spline.
             colors_list    : list of RGBA arrays (one per spline), or None for grey.
             radius         : tube radius in metres (default 0.004).
+            n_samples      : points sampled from the spline for drawing (default 100).
         """
         wb = self.model.worldbody
         default_color = [0.75, 0.75, 0.75, 0.6]
@@ -405,13 +409,43 @@ class BinPlacing(ManipulationEnv):
 
         for traj_idx, path in enumerate(waypoints_list):
             color = colors_list[traj_idx] if colors_list is not None else default_color
-            for seg_idx in range(len(path) - 1):
-                p0 = path[seg_idx]
-                p1 = path[seg_idx + 1]
+            path = np.asarray(path, dtype=float)
+
+            seg_len  = np.linalg.norm(np.diff(path, axis=0), axis=1)
+            arc      = np.concatenate([[0.0], np.cumsum(seg_len)])
+            arc_norm = arc / arc[-1]
+
+            if len(path) >= 4:
+                dense = CubicSpline(arc_norm, path)(np.linspace(0.0, 1.0, n_samples))
+            else:
+                dense = interp1d(arc_norm, path, axis=0, kind='linear')(np.linspace(0.0, 1.0, n_samples))
+
+            for seg_idx in range(len(dense) - 1):
+                p0 = dense[seg_idx]
+                p1 = dense[seg_idx + 1]
                 g = ET.SubElement(wb, "geom")
                 g.set("name",        f"spline_{traj_idx}_{seg_idx}")
                 g.set("type",        "capsule")
                 g.set("fromto",      array_to_string(np.concatenate([p0, p1])))
+                g.set("size",        size_str)
+                g.set("rgba",        array_to_string(color))
+                g.set("contype",     "0")
+                g.set("conaffinity", "0")
+                g.set("group",       "1")
+
+    def _bake_waypoint_markers(self, waypoints_list, colors_list=None, radius=0.008):
+        """Draw raw optimizer waypoints as spheres in the worldbody XML."""
+        wb = self.model.worldbody
+        default_color = [1.0, 1.0, 0.0, 0.9]   # yellow
+        size_str = str(radius)
+
+        for traj_idx, path in enumerate(waypoints_list):
+            color = colors_list[traj_idx] if colors_list is not None else default_color
+            for pt_idx, pos in enumerate(np.asarray(path, dtype=float)):
+                g = ET.SubElement(wb, "geom")
+                g.set("name",        f"waypoint_{traj_idx}_{pt_idx}")
+                g.set("type",        "sphere")
+                g.set("pos",         array_to_string(pos))
                 g.set("size",        size_str)
                 g.set("rgba",        array_to_string(color))
                 g.set("contype",     "0")
