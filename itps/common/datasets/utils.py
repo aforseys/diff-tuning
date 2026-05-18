@@ -116,7 +116,52 @@ def get_hf_dataset_safe_version(repo_id: str, version: str) -> str:
 def load_hf_dataset(repo_id: str, version: str, root: Path, split: str, goal_horizon: int=60) -> datasets.Dataset:
     """hf_dataset contains all the observations, states, actions, rewards, etc."""
     if root is not None:
-        if 'hdf5' in root or "maze" in root: # maze2d dataset
+        if 'robosuite' in repo_id:  # robosuite demos from collect_demos.py
+            import h5py
+            import numpy as np
+
+            obs_states, images, actions = [], [], []
+            episode_indices, frame_indices, timestamps, global_indices = [], [], [], []
+            global_idx = 0
+
+            with h5py.File(root, 'r') as f:
+                demo_keys = sorted(f['data'].keys(), key=lambda k: int(k.split('_')[1]))
+                for ep_idx, key in enumerate(demo_keys):
+                    dg = f['data'][key]
+                    joint_pos   = dg['obs/joint_pos'][:]           # (T+1, 7)
+                    agentview   = dg['obs/agentview_image'][:]     # (T+1, H, W, 3) uint8
+                    delta_joint = dg['action/delta_joint'][:]      # (T, 8)
+                    T = len(delta_joint)
+
+                    # observation.state: absolute joint_pos + gripper command (= delta_joint[:, -1])
+                    obs_state = np.concatenate(
+                        [joint_pos[:T], delta_joint[:, -1:]], axis=1
+                    ).astype(np.float32)  # (T, 8)
+
+                    imgs = agentview[:T].astype(np.float32) / 255.0  # (T, H, W, 3)
+                    imgs = imgs.transpose(0, 3, 1, 2)                 # (T, 3, H, W)
+
+                    obs_states.append(obs_state)
+                    images.append(imgs)
+                    actions.append(delta_joint.astype(np.float32))
+                    episode_indices.append(np.full(T, ep_idx, dtype=np.int64))
+                    frame_indices.append(np.arange(T, dtype=np.int64))
+                    timestamps.append(np.arange(T, dtype=np.float32) / 10.0)
+                    global_indices.append(np.arange(global_idx, global_idx + T, dtype=np.int64))
+                    global_idx += T
+
+            data_dict = {
+                'observation.state':           np.concatenate(obs_states, axis=0),
+                'observation.image.agentview': np.concatenate(images, axis=0),
+                'action':                      np.concatenate(actions, axis=0),
+                'episode_index':               np.concatenate(episode_indices, axis=0),
+                'frame_index':                 np.concatenate(frame_indices, axis=0),
+                'timestamp':                   np.concatenate(timestamps, axis=0),
+                'index':                       np.concatenate(global_indices, axis=0),
+            }
+            hf_dataset = datasets.Dataset.from_dict(data_dict)
+
+        elif 'hdf5' in root or "maze" in root: # maze2d dataset
             import numpy as np
             saved_goals = None
             if 'hdf5' in root:

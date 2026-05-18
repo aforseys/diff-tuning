@@ -164,8 +164,8 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
     def forward(self, batch: dict[str, Tensor], tune_batch: dict[str, Tensor]= None) -> dict[str, Tensor]:
         """Run the batch through the model and compute the loss for training or validation."""
         batch = self.normalize_inputs(batch)
-        # if len(self.expected_image_keys) > 0: #TODO: Need to make shallow copy here? (Done in Irene's code) #TODO: where would I need this
-        #     batch["observation.images"] = torch.stack([batch[k] for k in self.expected_image_keys], dim=-4)
+        if len(self.expected_image_keys) > 0:
+            batch["observation.images"] = torch.stack([batch[k] for k in self.expected_image_keys], dim=-4)
         batch = self.normalize_targets(batch)
         if tune_batch is not None:
             if 'demo' in tune_batch:

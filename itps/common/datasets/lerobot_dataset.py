@@ -42,6 +42,13 @@ DATA_DIR = Path(os.environ["DATA_DIR"]) if "DATA_DIR" in os.environ else None
 def calc_stats_from_hf_dataset(hf_dataset):
     stats_dict = {}
     for field in hf_dataset.column_names:
+        if field.startswith('observation.image'):
+            c = hf_dataset[0][field].shape[0]
+            stats_dict[field] = {
+                'max': torch.ones(c, 1, 1),
+                'min': torch.zeros(c, 1, 1),
+            }
+            continue
         concatenated_tensors = torch.stack(hf_dataset[field]).float()
         stats = {
             'max': torch.max(concatenated_tensors, dim=0).values,
@@ -74,12 +81,13 @@ class LeRobotDataset(torch.utils.data.Dataset):
         # TODO(rcadene, aliberts): implement faster transfer
         # https://huggingface.co/docs/huggingface_hub/en/guides/download#faster-downloads
         self.hf_dataset = load_hf_dataset(repo_id, CODEBASE_VERSION, root, split, self.goal_horizon)
-        if split == "train" and 'maze2d' not in repo_id and 'zarr' not in repo_id and 'gmm' not in repo_id:
+        _custom = ('maze2d', 'zarr', 'gmm', 'robosuite')
+        if split == "train" and not any(k in repo_id for k in _custom):
             self.episode_data_index = load_episode_data_index(repo_id, CODEBASE_VERSION, root)
         else:
             self.episode_data_index = calculate_episode_data_index(self.hf_dataset)
             self.hf_dataset = reset_episode_index(self.hf_dataset)
-        if 'maze2d' in repo_id or 'zarr' in repo_id or 'gmm' in repo_id:
+        if any(k in repo_id for k in _custom):
             self.stats = calc_stats_from_hf_dataset(self.hf_dataset)
             self.info = {'codebase_version': 'v0.0',
                          'fps': 10,
