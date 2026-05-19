@@ -74,10 +74,10 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
             config = DiffusionConfig()
         self.config = config
         self.normalize_inputs = Normalize(
-            config.input_shapes, 
-            config.input_normalization_modes, 
-            dataset_stats, 
-            stats_mapping={"episode_goal": "observation.state"}  # Goal uses state's normalization stats
+            config.input_shapes,
+            config.input_normalization_modes,
+            dataset_stats,
+            stats_mapping={"episode_goal": "observation.state"} if config.use_stats_mapping else {}
         )
         
         self.normalize_targets = Normalize(

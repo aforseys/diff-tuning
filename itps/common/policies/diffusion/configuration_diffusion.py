@@ -149,6 +149,9 @@ class DiffusionConfig:
     # Inference
     num_inference_steps: int | None = None
 
+    # Goal conditioning
+    use_stats_mapping: bool = True  # map episode_goal stats to observation.state; set False for one-hot goals
+
     # Loss computation
     do_mask_loss_for_padding: bool = False
     gradient_loss_weight: float = 1

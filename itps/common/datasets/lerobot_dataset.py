@@ -49,6 +49,13 @@ def calc_stats_from_hf_dataset(hf_dataset):
                 'min': torch.zeros(c, 1, 1),
             }
             continue
+        if field == 'episode_goal':
+            n = hf_dataset[0][field].shape[0]
+            stats_dict[field] = {
+                'max': torch.ones(n),
+                'min': torch.zeros(n),
+            }
+            continue
         concatenated_tensors = torch.stack(hf_dataset[field]).float()
         stats = {
             'max': torch.max(concatenated_tensors, dim=0).values,
