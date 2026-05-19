@@ -49,7 +49,7 @@ from itps.common.utils.utils import (
     set_global_seed,
 )
 from itps.scripts.eval import eval_policy, eval_GMM
-from itps.common.utils.eval_utils import eval_maze
+from itps.common.utils.eval_utils import eval_maze, eval_robosuite
 
 def make_optimizer_and_scheduler(cfg, policy, train_FiLM_only=False):
     if cfg.policy.name == "act":
@@ -421,6 +421,9 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
                             for label, metrics in split_info.items():
                                 for metric_name, vals in metrics.items():
                                     eval_info['aggregated'][f"{metric_name}_{label}"] = vals['mean']
+
+                elif cfg.dataset_repo_id == 'robosuite':
+                    eval_info = eval_robosuite(policy, cfg)
 
                 else:
                     assert eval_env is not None

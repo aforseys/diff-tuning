@@ -589,3 +589,103 @@ def eval_maze(policy, cfg, split='test'):
         }
     
     return metrics_dict
+
+
+def eval_robosuite(policy, cfg):
+    from collections import deque
+    import sys, os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+    from scripts.bin_placing import make_eval_env, OBJECT_MAP
+
+    n_episodes   = cfg.eval.n_episodes
+    n_bins       = 4
+    n_obs_steps  = policy.config.n_obs_steps
+    is_goal_cond = 'episode_goal' in policy.config.input_shapes
+    chunk_sizes  = list(cfg.eval.get('action_chunk_sizes', [policy.config.n_action_steps]))
+    max_steps    = cfg.eval.get('max_episode_steps', 500)
+    img_size     = cfg.eval.get('img_size', 84)
+    obj          = OBJECT_MAP.get(cfg.eval.get('object', 'can'))
+    device       = next(policy.parameters()).device
+
+    def get_state(obs, gripper_cmd):
+        return np.concatenate([obs["robot0_joint_pos"], [gripper_cmd]]).astype(np.float32)
+
+    def get_image(obs):
+        img = obs["agentview_image"].astype(np.float32) / 255.0
+        return img.transpose(2, 0, 1)  # (3, H, W)
+
+    def get_placed_bin(env):
+        original = env.current_goal_bin
+        placed = None
+        for b in range(n_bins):
+            env.set_target_bin(b)
+            if env._check_success():
+                placed = b
+                break
+        env.set_target_bin(original)
+        return placed
+
+    all_metrics = {}
+    env = make_eval_env(img_size=img_size, mujoco_object=obj)
+
+    for chunk_size in chunk_sizes:
+        successes, bin_counts, correct_bins = [], [0] * n_bins, []
+
+        for ep in range(n_episodes):
+            target_bin = ep % n_bins
+            env.set_target_bin(target_bin)
+            obs = env.reset()
+
+            gripper_cmd = 1.0
+            state_buf = deque([get_state(obs, gripper_cmd)] * n_obs_steps, maxlen=n_obs_steps)
+            image_buf = deque([get_image(obs)]               * n_obs_steps, maxlen=n_obs_steps)
+
+            if is_goal_cond:
+                goal = np.zeros(n_bins, dtype=np.float32)
+                goal[target_bin] = 1.0
+                goal_tensor = torch.tensor(goal).unsqueeze(0).to(device)
+
+            done, step = False, 0
+            while not done and step < max_steps:
+                obs_batch = {
+                    'observation.state':
+                        torch.tensor(np.stack(state_buf), dtype=torch.float32).unsqueeze(0).to(device),
+                    'observation.image.agentview':
+                        torch.tensor(np.stack(image_buf), dtype=torch.float32).unsqueeze(0).to(device),
+                }
+                if is_goal_cond:
+                    obs_batch['episode_goal'] = goal_tensor
+
+                with torch.no_grad():
+                    _, full_trajs = policy.run_inference(obs_batch, methods=['ddim'], return_full=True)
+                start = policy.config.n_obs_steps - 1
+                chunk = full_trajs[0][0][start:start + chunk_size].cpu().numpy()  # (chunk_size, 8)
+
+                for t in range(chunk_size):
+                    delta         = chunk[t]
+                    target_joints = obs["robot0_joint_pos"] + delta[:7]
+                    gripper_cmd   = float(delta[7])
+                    obs, _, _, _  = env.step(np.concatenate([target_joints, [gripper_cmd]]))
+                    state_buf.append(get_state(obs, gripper_cmd))
+                    image_buf.append(get_image(obs))
+                    step += 1
+                    if env._check_success():
+                        done = True
+                        break
+
+            placed = get_placed_bin(env)
+            successes.append(float(placed is not None))
+            if placed is not None:
+                bin_counts[placed] += 1
+            if is_goal_cond:
+                correct_bins.append(float(placed == target_bin))
+
+        p = f'chunk{chunk_size}'
+        all_metrics[f'{p}/success_rate'] = float(np.mean(successes))
+        for b in range(n_bins):
+            all_metrics[f'{p}/bin{b}_count'] = bin_counts[b]
+        if is_goal_cond:
+            all_metrics[f'{p}/correct_bin_rate'] = float(np.mean(correct_bins))
+
+    env.close()
+    return {'aggregated': all_metrics}
