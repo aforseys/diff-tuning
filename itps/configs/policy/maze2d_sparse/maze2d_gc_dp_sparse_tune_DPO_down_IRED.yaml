@@ -20,22 +20,22 @@ hydra:
     # with the same value for `dir` its contents will be overwritten unless you set `resume` to true.
     dir: data/maze2d_dp/sparse/gc/tune/${now:%Y.%m.%d}/${hydra.job.name}
   job:
-    name: sparse_GC_DPO_tune_down_${now:%H.%M.%S}_${env.name}_${policy.name}
+    name: sparse_GC_DPO_IRED_tune_down_${now:%H.%M.%S}_${env.name}_${policy.name}
 
 device: "cuda"  # cpu
 
 training:
   train_only_FiLM: false
-  offline_steps: 1000
+  offline_steps: 250
   online_steps: 0
-  eval_freq: 100
-  save_freq: 100
-  log_freq: 100
+  eval_freq: 50
+  save_freq: 50
+  log_freq: 50
   save_checkpoint: true
 
   batch_size: 128
   grad_clip_norm: 10
-  lr: 1.0e-6
+  lr: 1.0e-5
   lr_scheduler: cosine
   lr_warmup_steps: 50
   adam_betas: [0.95, 0.999]
@@ -131,5 +131,5 @@ policy:
   finetune_dpo: true
   dpo_params: 
     rho: 500
-    mu: 10.0
+    mu: 2.0
     b: 0

@@ -6,8 +6,8 @@ condition_type: conditional
 env_type: sparse
 dataset_root:
   base: data/maze2d-sparse-v3.hdf5
-  pos: data/maze_comparisons/maze_20260515_112634_winners.npz
-  neg: data/maze_comparisons/maze_20260515_112634_losers.npz
+  pos: data/maze_comparisons/maze_20260515_112825_winners.npz
+  neg: data/maze_comparisons/maze_20260515_112825_losers.npz
 pretrained_policy_path: data/maze2d_dp/sparse/gc/train/2026.05.13/02.28.05_maze2d_diffusion/checkpoints/last/pretrained_model
 
 wandb:
@@ -20,22 +20,22 @@ hydra:
     # with the same value for `dir` its contents will be overwritten unless you set `resume` to true.
     dir: data/maze2d_dp/sparse/gc/tune/${now:%Y.%m.%d}/${hydra.job.name}
   job:
-    name: sparse_GC_DPO_tune_down_${now:%H.%M.%S}_${env.name}_${policy.name}
+    name: sparse_GC_DPO_IRED_tune_collision_${now:%H.%M.%S}_${env.name}_${policy.name}
 
 device: "cuda"  # cpu
 
 training:
   train_only_FiLM: false
-  offline_steps: 1000
+  offline_steps: 250
   online_steps: 0
-  eval_freq: 100
-  save_freq: 100
-  log_freq: 100
+  eval_freq: 50
+  save_freq: 50
+  log_freq: 50
   save_checkpoint: true
 
   batch_size: 128
   grad_clip_norm: 10
-  lr: 1.0e-6
+  lr: 1.0e-5
   lr_scheduler: cosine
   lr_warmup_steps: 50
   adam_betas: [0.95, 0.999]
@@ -58,7 +58,7 @@ training:
 eval:
   n_samples: 32     # trajectory samples per starting observation
   opt_params: [{'n_opt': 1, 't_subset': null, 'denoise': False},  {'n_opt': 1, 't_subset': 5, 'denoise': True}]
-  metrics: [collision_rate, obs_goal_dist, bottom_half_rate]
+  metrics: [collision_rate, obs_goal_dist]
   methods: ['ired', 'ddim']
   train_obs: data/maze_obs/set_obs_gc_40_min5_max7_seed0_20260430_031349_train
   test_obs: data/maze_obs/set_obs_gc_40_min5_max7_seed0_20260430_031349_test
@@ -131,5 +131,5 @@ policy:
   finetune_dpo: true
   dpo_params: 
     rho: 500
-    mu: 10.0
+    mu: 2.0
     b: 0

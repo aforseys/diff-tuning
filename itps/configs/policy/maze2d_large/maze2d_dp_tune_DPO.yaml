@@ -12,6 +12,7 @@ pretrained_policy_path: data/maze2d_dp/large/general/train/2026.04.28/16.25.20_m
 
 wandb:
   enable: true
+  project: maze2d-finetuning
 
 hydra:
   run:
@@ -24,19 +25,19 @@ hydra:
 device: "cuda"  # cpu
 
 training:
-  train_only_FiLM: True
-  offline_steps: 100
+  train_only_FiLM: false
+  offline_steps: 1000
   online_steps: 0
   eval_freq: 100
   save_freq: 100
   log_freq: 100
-  save_checkpoint: false
+  save_checkpoint: true
 
-  batch_size: 256
+  batch_size: 128
   grad_clip_norm: 10
-  lr: 1.0e-4
+  lr: 1.0e-6
   lr_scheduler: cosine
-  lr_warmup_steps: 500
+  lr_warmup_steps: 50
   adam_betas: [0.95, 0.999]
   adam_eps: 1.0e-8
   adam_weight_decay: 1.0e-6
@@ -126,5 +127,5 @@ policy:
   finetune_dpo: true
   dpo_params: 
     rho: 500
-    mu: 0.75
+    mu: 10.0
     b: 0
