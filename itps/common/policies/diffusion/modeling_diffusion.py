@@ -978,11 +978,6 @@ class EBMDiffusionModel(nn.Module):
             loss_demo_finetune = self._compute_denoising_mse_loss(demo_batch, demo_timesteps, demo_eps, mask=mask)
             loss_demo_finetune = loss_demo_finetune * extract(self.loss_weight, demo_timesteps, loss_demo_finetune.shape) # weight MSE loss by timestep
 
-            print(f"loss_mse shape: {loss_mse.shape}")
-            print(f"loss_demo_finetune shape: {loss_demo_finetune.shape}")
-            print(f"main batch size: {batch['action'].shape[0]}")
-            print(f"demo batch size: {demo_batch['action'].shape[0]}")
-
             # Process loss 
             loss = loss_mse * self.config.gradient_loss_weight + loss_demo_finetune * self.config.demo_finetune_loss_weight
 
