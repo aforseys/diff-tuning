@@ -31,9 +31,9 @@ hydra:
   run:
     # Set `dir` to where you would like to save all of the run outputs. If you run another training session
     # with the same value for `dir` its contents will be overwritten unless you set `resume` to true.
-    dir: data/maze2d_dp/large/general/tune/DPO_param_sweep_3/${now:%Y.%m.%d}/${hydra.job.name}
+    dir: data/maze2d_dp/large/general/tune/DPO_param_sweep_4/${now:%Y.%m.%d}/${hydra.job.name}
   job:
-    name: maze_general_tune_DPO_param_sweep_3_${now:%H.%M.%S}_${env.name}_${config_name}_${policy.name}
+    name: maze_general_tune_DPO_param_sweep_4_${now:%H.%M.%S}_${env.name}_${config_name}_${policy.name}
 
 device: "cuda"  # cpu
 
