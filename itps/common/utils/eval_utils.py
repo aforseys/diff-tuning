@@ -591,6 +591,8 @@ def eval_maze(policy, cfg, split='test'):
     return metrics_dict
 
 
+# -- ROBOSUITE EVALUATION --
+
 def eval_robosuite(policy, cfg):
     from collections import deque
     import sys, os
@@ -618,8 +620,8 @@ def eval_robosuite(policy, cfg):
         original = env.current_goal_bin
         placed = None
         for b in range(n_bins):
-            env.set_target_bin(b)
-            if env._check_success():
+            env.set_target_bin(b) 
+            if env._check_success(): #TODO: HOW IS THIS CALCULATED? NEEDS TO BE DROPPED / RELEASED? 
                 placed = b
                 break
         env.set_target_bin(original)
@@ -628,18 +630,21 @@ def eval_robosuite(policy, cfg):
     all_metrics = {}
     env = make_eval_env(img_size=img_size, mujoco_object=obj)
 
+    # Test different action chunking sizes 
     for chunk_size in chunk_sizes:
         successes, bin_counts, correct_bins = [], [0] * n_bins, []
 
         for ep in range(n_episodes):
-            target_bin = ep % n_bins
-            env.set_target_bin(target_bin)
-            obs = env.reset()
+            target_bin = ep % n_bins #TODO: GET "TARGET BIN" FROM PASSED IN TRAINING OBSERVATIONS 
+            env.set_target_bin(target_bin) #TODO: WHAT DOES SETTING TARGET BIN HERE DO 
+            obs = env.reset() #TODO: GET "OBS" FROM PASSED IN TRAINING OBSERVATIONS
 
             gripper_cmd = 1.0
-            state_buf = deque([get_state(obs, gripper_cmd)] * n_obs_steps, maxlen=n_obs_steps)
+            #TODO: WHAT DO THESE LINES DO
+            state_buf = deque([get_state(obs, gripper_cmd)] * n_obs_steps, maxlen=n_obs_steps) 
             image_buf = deque([get_image(obs)]               * n_obs_steps, maxlen=n_obs_steps)
 
+            # Make one-hot vector with goal bin if goal conditioned
             if is_goal_cond:
                 goal = np.zeros(n_bins, dtype=np.float32)
                 goal[target_bin] = 1.0
@@ -657,9 +662,9 @@ def eval_robosuite(policy, cfg):
                     obs_batch['episode_goal'] = goal_tensor
 
                 with torch.no_grad():
-                    _, full_trajs = policy.run_inference(obs_batch, methods=['ddim'], return_full=True)
-                start = policy.config.n_obs_steps - 1
-                chunk = full_trajs[0][0][start:start + chunk_size].cpu().numpy()  # (chunk_size, 8)
+                    _, full_trajs = policy.run_inference(obs_batch, methods=['ddim'], return_full=True) #TODO: WHAT SIZE DOES THIS OUTPUT
+                start = policy.config.n_obs_steps - 1 #TODO: WHAT IS THIS
+                chunk = full_trajs[0][0][start:start + chunk_size].cpu().numpy()  # (chunk_size, 8) #TODO: WHY [0][0] INDEX?
 
                 for t in range(chunk_size):
                     delta         = chunk[t]
@@ -679,6 +684,9 @@ def eval_robosuite(policy, cfg):
                 bin_counts[placed] += 1
             if is_goal_cond:
                 correct_bins.append(float(placed == target_bin))
+
+            #TODO: HERE, INSTEAD OF JUST RECORDING THIS SUCCESS, ITERATE THROUGH METRICS
+            #TODO: RECORD XYZ OF TRAJECTORY ROLLOUT TO EVALUATE STRATEGY-BASED METRICS CALCULATED ON FULL TRAJECTORY 
 
         p = f'chunk{chunk_size}'
         all_metrics[f'{p}/success_rate'] = float(np.mean(successes))
