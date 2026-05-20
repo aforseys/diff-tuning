@@ -343,7 +343,7 @@ def filter_samples(samples, finetune, conditional):
     else: 
         return [np.concatenate(samples_by_obs)] #return list with concatenated np array
 
-def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=None, opt_params=[{'n_opt': 1, 't_subset': None, 'denoise': False}], methods=['ired', 'ddim'], viz_opt=False):
+def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=None, opt_params=[{'n_opt': 1, 't_subset': None, 'denoise': False}], methods=['ired', 'ddim'], viz_opt=False, save_samples_path=None):
 
     if condition_type == "conditional":
         conditional=True
@@ -358,7 +358,24 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
     # Generate samples and calculate log likelihood
     samples, ll = log_likelihood(policy, conditional, finetune, N, opt_params=opt_params, methods=methods)
 
-    # DDIM samples are last set, all others are IRED sampling 
+    if save_samples_path is not None:
+        save_dict = {}
+        n_ired = len(opt_params) if 'ired' in methods else 0
+        for i, s in enumerate(samples):
+            arr = np.concatenate(s, axis=0)  # stack across obs
+            if 'ired' in methods and i < n_ired:
+                label = f'ired_{opt_params[i]["n_opt"]}steps'
+                if opt_params[i]["t_subset"] is not None:
+                    label += f'_last{opt_params[i]["t_subset"]}'
+                if opt_params[i]["denoise"]:
+                    label += '_denoise'
+            else:
+                label = 'ddim'
+            save_dict[label] = arr
+        np.savez(save_samples_path, **save_dict)
+        print(f"Saved samples to {save_samples_path}.npz")
+
+    # DDIM samples are last set, all others are IRED sampling
     if 'ddim' in methods:
         DDIM_samples = samples[-1]
         DDIM_ll = ll[-1]

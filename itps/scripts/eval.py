@@ -449,7 +449,8 @@ def main(
     out_dir: str | None = None,
     config_overrides: list[str] | None = None,
     viz: bool | None = False,
-    training_samples: Path | None = None
+    training_samples: Path | None = None,
+    save_samples: str | None = None
 ):
     assert (pretrained_policy_path is None) ^ (hydra_cfg_path is None)
     if pretrained_policy_path is not None:
@@ -491,15 +492,16 @@ def main(
 
         if hydra_cfg.env.name == 'gmm':
             info = eval_GMM(
-                policy, 
+                policy,
                 hydra_cfg.condition_type,
-                finetune=finetune, 
+                finetune=finetune,
                 N = hydra_cfg.eval.n_samples,
                 viz = viz,
                 training_samples = training_samples, #used for viz if viz True
-                opt_params=hydra_cfg.eval.opt_params, 
-                methods=hydra_cfg.eval.methods, 
-                viz_opt=True
+                opt_params=hydra_cfg.eval.opt_params,
+                methods=hydra_cfg.eval.methods,
+                viz_opt=True,
+                save_samples_path=save_samples
                 )
         
         elif hydra_cfg.env.name == 'maze2d':
@@ -594,6 +596,12 @@ if __name__ == "__main__":
         help="Visualize Evaluation",
     )
     parser.add_argument(
+        "--save-samples",
+        type=str,
+        default=None,
+        help="Path (without extension) to save generated samples as an .npz file.",
+    )
+    parser.add_argument(
         "overrides",
         nargs="*",
         help="Any key=value arguments to override config values (use dots for.nested=overrides)",
@@ -611,5 +619,6 @@ if __name__ == "__main__":
             pretrained_policy_path=pretrained_policy_path,
             out_dir=args.out_dir,
             config_overrides=args.overrides,
-            viz=args.viz
+            viz=args.viz,
+            save_samples=args.save_samples
         )
