@@ -17,10 +17,12 @@ def sample_gmm(n_samples, weights, means, covs, seed=None):
     #weights = np.asarray(weights, dtype=float)
     #weights = weights / weights.sum()  # ensure normalization
     K = len(means)
-    n_samples_per_mean = [n_samples//K + (n_samples%K)*int(k==K-1) for k in range(K)] #hard coding even samples here
-    comps = np.concatenate([[k]*n_samples_per_mean[k] for k in range(K)])
+    #n_samples_per_mean = [n_samples//K + (n_samples%K)*int(k==K-1) for k in range(K)] #hard coding even samples here
+    #comps = np.concatenate([[k]*n_samples_per_mean[k] for k in range(K)])
     # choose components for each sample
-    #comps = rng.choice(K, size=n_samples, p=weights)
+    w = np.asarray(weights, dtype=float)
+    w = w / w.sum()
+    comps = rng.choice(K, size=n_samples, p=w)
 
     # sample from each chosen component
     X = np.zeros((n_samples, 2))
@@ -181,6 +183,7 @@ if __name__ == "__main__":
     parser.add_argument("--demo", action="store_true", help="Generate finetuning demo dataset (single cluster, unconditional format)")
     parser.add_argument("--demo-cluster", type=int, default=0, help="Which cluster to use for the demo dataset (default: 0)")
     parser.add_argument("--demo-n", type=int, default=1000, help="Number of demo samples to generate (default: 1000)")
+    parser.add_argument("--save-path", type=str, default=None, help="Directory to save generated datasets (default: no saving)")
     args = parser.parse_args()
 
     N=1000
@@ -198,8 +201,9 @@ if __name__ == "__main__":
         # -- Comment out to generate visualizations --
         visualize_samples_and_pdf(dataset)
 
-        unconditional_file = f"gmm_unconditional_{N}_{seed}_{timestamp}.npy"
-        conditional_file = f"gmm_conditional_{N}_{seed}_{timestamp}.npy"
-
-#        np.save(save_dir+unconditional_file, dataset['unconditional_observation'])
-#        np.save(save_dir+conditional_file, dataset['conditional_observation'])
+        if args.save_path is not None:
+            unconditional_file = f"gmm_unconditional_{N}_{seed}_{timestamp}.npy"
+            conditional_file = f"gmm_conditional_{N}_{seed}_{timestamp}.npy"
+            np.save(args.save_path + unconditional_file, dataset['unconditional_observation'])
+            np.save(args.save_path + conditional_file, dataset['conditional_observation'])
+            print(f"Saved datasets to {args.save_path}")
