@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from matplotlib import pyplot as plt
 from itps.scripts.gaussian_mm import get_weights, get_means, get_covs, mixture_pdf
+from itps.common.utils.utils import set_global_seed
 
 ## -- RUN INFERENCE --
 def gen_obs(conditional, N, device):
@@ -343,7 +344,9 @@ def filter_samples(samples, finetune, conditional):
     else: 
         return [np.concatenate(samples_by_obs)] #return list with concatenated np array
 
-def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=None, opt_params=[{'n_opt': 1, 't_subset': None, 'denoise': False}], methods=['ired', 'ddim'], viz_opt=False, save_samples_path=None):
+def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=None, opt_params=[{'n_opt': 1, 't_subset': None, 'denoise': False}], methods=['ired', 'ddim'], viz_opt=False, save_samples_path=None, seed=None):
+    if seed is not None:
+        set_global_seed(seed)
 
     if condition_type == "conditional":
         conditional=True
@@ -479,7 +482,7 @@ def check_maze_collision(xy_traj, maze):
     return np.any(collisions, axis=1)
 
 
-def eval_maze(policy, cfg, split='test'):
+def eval_maze(policy, cfg, split='test', seed=None):
     """
     Offline trajectory evaluation for maze2d without running the gym env.
 
@@ -492,6 +495,9 @@ def eval_maze(policy, cfg, split='test'):
       metrics:           list of "collision_rate" | "path_length" | "goal_dist"
       train_obs / test_obs: list of [state_x, state_y, goal_x, goal_y]
     """
+    if seed is not None:
+        set_global_seed(seed)
+
     obs_file = cfg.eval.train_obs if split == 'train' else cfg.eval.test_obs
     if obs_file is None:
         return {}
@@ -610,7 +616,10 @@ def eval_maze(policy, cfg, split='test'):
 
 # -- ROBOSUITE EVALUATION --
 
-def eval_robosuite(policy, cfg):
+def eval_robosuite(policy, cfg, seed=None):
+    if seed is not None:
+        set_global_seed(seed)
+
     from collections import deque
     import sys, os
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))

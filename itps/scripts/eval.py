@@ -501,7 +501,8 @@ def main(
                 opt_params=hydra_cfg.eval.opt_params,
                 methods=hydra_cfg.eval.methods,
                 viz_opt=True,
-                save_samples_path=save_samples
+                save_samples_path=save_samples,
+                seed=hydra_cfg.seed,
                 )
         
         elif hydra_cfg.env.name == 'maze2d':
@@ -519,7 +520,7 @@ def main(
             info = {"aggregated":{}}
             if hydra_cfg.eval.get('train_obs') is not None or hydra_cfg.eval.get('test_obs') is not None:
                 for split in ('train', 'test'):
-                    split_info = eval_maze(policy, hydra_cfg, split=split)
+                    split_info = eval_maze(policy, hydra_cfg, split=split, seed=hydra_cfg.seed)
                     for label, metrics in split_info.items():
                         for metric_name, vals in metrics.items():
                             info['aggregated'][f"{metric_name}_{label}"] = vals['mean']

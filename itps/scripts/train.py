@@ -48,8 +48,8 @@ from itps.common.utils.utils import (
     init_logging,
     set_global_seed,
 )
-from itps.scripts.eval import eval_policy, eval_GMM
-from itps.common.utils.eval_utils import eval_maze, eval_robosuite
+from itps.scripts.eval import eval_policy
+from itps.common.utils.eval_utils import eval_GMM, eval_maze, eval_robosuite
 
 def make_optimizer_and_scheduler(cfg, policy, train_FiLM_only=False):
     if cfg.policy.name == "act":
@@ -410,20 +410,21 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
                         N = cfg.eval.n_samples,
                         viz = False,
                         finetune=finetune,
-                        opt_params = list(cfg.eval.opt_params)
+                        opt_params = list(cfg.eval.opt_params),
+                        seed=cfg.seed,
                         )
 
                 elif cfg.dataset_repo_id == 'maze2d':
                     eval_info = {'aggregated':{}}
                     if cfg.eval.get('train_obs') is not None or cfg.eval.get('test_obs') is not None:
                         for split in ('train', 'test'):
-                            split_info = eval_maze(policy, cfg, split=split)
+                            split_info = eval_maze(policy, cfg, split=split, seed=cfg.seed)
                             for label, metrics in split_info.items():
                                 for metric_name, vals in metrics.items():
                                     eval_info['aggregated'][f"{metric_name}_{label}"] = vals['mean']
 
                 elif cfg.dataset_repo_id == 'robosuite':
-                    eval_info = eval_robosuite(policy, cfg)
+                    eval_info = eval_robosuite(policy, cfg, seed=cfg.seed)
 
                 else:
                     assert eval_env is not None
