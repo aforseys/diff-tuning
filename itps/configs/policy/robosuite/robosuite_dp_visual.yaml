@@ -5,7 +5,7 @@
 seed: 100000
 dataset_repo_id: robosuite
 condition_type: unconditional
-dataset_root: ???   # path to .hdf5 demo file
+dataset_root: data/robosuite/demo/obs_can_10prism_10starts.hdf5   # path to .hdf5 demo file
 past_action_visible: false
 
 wandb:
@@ -16,15 +16,16 @@ hydra:
   run:
     dir: data/robosuite_dp/train/${now:%Y.%m.%d}/${hydra.job.name}
   job:
-    name: ${now:%H.%M.%S}_${env.name}_${policy.name}
+    name: ${now:%H.%M.%S}_${env.name}_${policy.name}_visual
 
 device: cuda
+use_amp: True
 
 training:
   offline_steps: 100000
   online_steps: 0
-  eval_freq: 5000
-  save_freq: 5000
+  eval_freq: 10000
+  save_freq: 10000
   log_freq: 500
   save_checkpoint: true
   batch_size: 256
@@ -46,15 +47,16 @@ training:
 
 eval:
   n_episodes: 50
-  obs_file: ???   # path to observations .npz
+  obs_file: data/robosuite/obs/obs_can_10prism_10starts.npz   # path to observations .npz
   train_prisms: [0, 1, 2, 3, 4, 5, 6]
   test_prisms: [7, 8, 9]
   train_bins: null
   test_bins: null
   steps_per_action: 2
-  max_episode_steps: 200
+  max_episode_steps: 400
   img_size: 84
   object: can
+  action_chunk_sizes: [16, 32]
 
 policy:
   name: diffusion
