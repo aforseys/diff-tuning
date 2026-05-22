@@ -5,7 +5,7 @@
 seed: 100000
 dataset_repo_id: robosuite
 condition_type: unconditional
-dataset_root: data/robosuite/demo/obs_can_10prism_10starts.hdf5   # path to .hdf5 demo file
+dataset_root: data/robosuite/demo/demo_can_10prism_10starts.hdf5   # path to .hdf5 demo file
 past_action_visible: true
 
 wandb:
