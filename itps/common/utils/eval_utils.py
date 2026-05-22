@@ -768,6 +768,15 @@ def eval_robosuite(policy, cfg, seed=None):
                     if is_goal_cond:
                         obs_batch['episode_goal'] = goal_tensor
 
+                    if ep_i == 0 and step == 0:
+                        print("=== EVAL DEBUG (ep=0, step=0) ===")
+                        print("obs_batch shapes:", {k: v.shape for k, v in obs_batch.items()})
+                        print("state sample (first obs step):", obs_batch["observation.state"][0, 0])
+                        if "observation.image.agentview" in obs_batch:
+                            img = obs_batch["observation.image.agentview"][0, 0]
+                            print(f"image range: [{img.min():.3f}, {img.max():.3f}]")
+                        print("=================================")
+
                     with torch.no_grad():
                         _, full_trajs = policy.run_inference(obs_batch, methods=['ddim'], return_full=True)
                     start = policy.config.n_obs_steps - 1
