@@ -343,7 +343,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     # using the eval.py instead, with gym_dora environment and dora-rs.
     eval_env = None
     if cfg.training.eval_freq > 0:
-        if not (cfg.dataset_repo_id=='gmm' or cfg.dataset_repo_id=='maze2d'):
+        if not (cfg.dataset_repo_id=='gmm' or cfg.dataset_repo_id=='maze2d' or cfg.dataset_repo_id=='robosuite'):
             logging.info("make_env")
             eval_env = make_env(cfg)
 

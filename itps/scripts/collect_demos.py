@@ -78,7 +78,6 @@ def _snapshot(obs, use_wrist):
         "eef_quat":        obs["robot0_eef_quat"].copy(),
         "joint_pos":       obs["robot0_joint_pos"].copy(),
         "cube_pos":        obs["cube_pos"].copy(),
-        "goal_pos":        obs["goal_pos"].copy(),
         "agentview_image": obs["agentview_image"].copy(),
     }
     if use_wrist:
@@ -86,7 +85,7 @@ def _snapshot(obs, use_wrist):
     return snap
 
 
-def collect_episode(env, init_obs, waypoints, record_every=5,
+def collect_episode(env, init_obs, waypoints, goal_xyz, target_bin, record_every=5,
                     gripper_steps=30, use_wrist=True, n_spline_pts=200):
     """
     Execute a spline and record observations at a fixed physics-step rate.
@@ -141,7 +140,7 @@ def collect_episode(env, init_obs, waypoints, record_every=5,
             if np.linalg.norm(delta) < 0.010:
                 break
             action     = np.zeros(action_dim)
-            action[:3] = np.clip(delta / 0.20, -1.0, 1.0)
+            action[:3] = np.clip(delta / 0.10, -1.0, 1.0)
             action[-1] = 1.0
             _step(action, 1.0)
             moved = True
@@ -160,20 +159,21 @@ def collect_episode(env, init_obs, waypoints, record_every=5,
     return {
         "snapshots":   snapshots,
         "gripper_seq": gripper_seq,
-        "success":     bool(env._check_success()),
+        "goal_xyz":    goal_xyz,
+        "success":     env.placement_success(target_bin),
     }
 
 
 def episode_to_arrays(episode):
     """Convert raw episode dict to numpy arrays ready for HDF5 storage."""
-    snaps   = episode["snapshots"]              # length T+1
-    gripper = np.array(episode["gripper_seq"])  # length T
+    snaps    = episode["snapshots"]              # length T+1
+    gripper  = np.array(episode["gripper_seq"])  # length T
+    goal_xyz = episode["goal_xyz"]               # (3,)
 
     eef_pos   = np.array([s["eef_pos"]   for s in snaps])   # (T+1, 3)
     eef_quat  = np.array([s["eef_quat"]  for s in snaps])   # (T+1, 4)
     joint_pos = np.array([s["joint_pos"] for s in snaps])   # (T+1, 7)
     cube_pos  = np.array([s["cube_pos"]  for s in snaps])   # (T+1, 3)
-    goal_pos  = snaps[0]["goal_pos"]                          # (3,)
     agentview = np.array([s["agentview_image"] for s in snaps])  # (T+1, H, W, 3)
 
     # Delta actions computed from consecutive keyframe positions
@@ -188,7 +188,7 @@ def episode_to_arrays(episode):
         "obs/eef_quat":        eef_quat,
         "obs/joint_pos":       joint_pos,
         "obs/cube_pos":        cube_pos,
-        "obs/goal_pos":        np.tile(goal_pos, (len(snaps), 1)),  # (T+1, 3)
+        "obs/goal_pos":        np.tile(goal_xyz, (len(snaps), 1)),  # (T+1, 3)
         "obs/agentview_image": agentview,
         "action/delta_eef":    delta_eef,
         "action/delta_joint":  delta_joint,
@@ -212,12 +212,12 @@ def main():
                         help="Input trajectories .npz")
     parser.add_argument("--save-path",      required=True,
                         help="Output HDF5 file path")
-    parser.add_argument("--record-every",   type=int, default=15,
-                        help="Record a snapshot every N physics steps (default 5)")
+    parser.add_argument("--record-every",   type=int, default=2,
+                        help="Record a snapshot every N physics steps (default 2, gives 10 Hz at 20 Hz control)")
     parser.add_argument("--n-spline-pts",   type=int, default=150,
                         help="Spline interpolation points for path following (default 200)")
-    parser.add_argument("--gripper-steps",  type=int, default=100,
-                        help="Gripper-open steps after reaching goal (default 10)")
+    parser.add_argument("--gripper-steps",  type=int, default=25,
+                        help="Gripper-open steps after reaching goal (default 25, ~1.25s at 20 Hz)")
     parser.add_argument("--img-size",       type=int, default=84,
                         help="Camera image resolution (default 84)")
     parser.add_argument("--no-wrist",       action="store_true",
@@ -238,13 +238,19 @@ def main():
     args = parser.parse_args()
 
     # --- Load and filter ---
-    data          = np.load(args.traj_file, allow_pickle=False)
-    waypoints     = data["waypoints"]       # (N, n_pts, 3)
-    prism_idx     = data["prism_idx"]
-    bin_idx       = data["bin_idx"]
-    start_obs_idx = data["start_obs_idx"]
-    goal_obs_idx  = data["goal_obs_idx"]
-    combo_idx     = data["combo_idx"]
+    data         = np.load(args.traj_file, allow_pickle=False)
+    waypoints    = data["waypoints"]    # (N, n_pts, 3)
+    start_pos    = data["start_pos"]    # (N, 3)
+    goal_pos     = data["goal_pos"]     # (N, 3)
+    bin_idx      = data["bin_idx"]      # (N,)
+    prism_idx    = data["prism_idx"]    # (N,)
+    combo_idx    = data["combo_idx"]    # (N,)
+    if "start_joints" not in data:
+        raise ValueError(
+            "Trajectory file is missing 'start_joints'. "
+            "Re-generate observations with --solve-ik and re-run generate_trajectories.py."
+        )
+    start_joints = data["start_joints"]  # (N, n_joints)
 
     mask = np.ones(len(waypoints), dtype=bool)
     if args.prism is not None:
@@ -274,25 +280,48 @@ def main():
         has_renderer=args.render,
         mujoco_object=OBJECT_MAP[args.object],
     )
+    n_joints = env.robots[0].dof
 
     os.makedirs(os.path.dirname(os.path.abspath(args.save_path)), exist_ok=True)
 
     n_success = 0
     with h5py.File(args.save_path, "w") as f:
         f.attrs["n_demos"]     = n_demos
+        f.attrs["object_type"] = args.object
         f.attrs["config_json"] = config_json
         data_grp = f.create_group("data")
 
         for demo_num, traj_i in enumerate(indices):
             wp       = waypoints[traj_i]          # (n_pts, 3)
-            goal_bin = int(bin_idx[traj_i])
+            goal_xyz = goal_pos[traj_i]           # (3,)
 
-            env.set_target_bin(goal_bin)
             init_obs = env.reset()
+
+            # Teleport arm to saved start joint configuration.
+            env.sim.data.qpos[:n_joints] = start_joints[traj_i]
+            env.sim.data.qvel[:n_joints] = 0.0
+            env.sim.forward()
+            # Re-place the can at the new EEF position so it is still grasped
+            # (_reset_internal placed it at the rest-pose EEF, which is now wrong).
+            eef_pos = env._eef_pos()
+            env.sim.data.set_joint_qpos(
+                env.grasp_obj.joints[0],
+                np.concatenate([eef_pos, np.array([1, 0, 0, 0])])
+            )
+            env.sim.forward()
+            zero_act = np.zeros(env.action_spec[0].shape)
+            zero_act[-1] = 1.0   # gripper closed
+            init_obs, _, _, _ = env.step(zero_act)
+
+            if demo_num < 5:
+                actual_eef = init_obs["robot0_eef_pos"]
+                err = np.linalg.norm(actual_eef - start_pos[traj_i])
+                print(f"  [demo {demo_num}] start_pos={start_pos[traj_i].round(3)}  "
+                      f"eef={actual_eef.round(3)}  err={err:.4f} m")
 
             t0 = time.perf_counter()
             episode = collect_episode(
-                env, init_obs, wp,
+                env, init_obs, wp, goal_xyz=goal_xyz, target_bin=int(bin_idx[traj_i]),
                 record_every=args.record_every,
                 gripper_steps=args.gripper_steps,
                 use_wrist=use_wrist,
@@ -301,16 +330,27 @@ def main():
             elapsed = time.perf_counter() - t0
             arrays, success = episode_to_arrays(episode)
             n_obs = len(episode["snapshots"])
+            if demo_num < 5 and not success:
+                obj_pos  = env.sim.data.body_xpos[env.obj_body_id]
+                loc_ok   = env.location_success(int(bin_idx[traj_i]))
+                grip_ok  = env._gripper_is_open()
+                total_fj = sum(
+                    env.sim.data.qpos[env.sim.model.jnt_qposadr[i]]
+                    for i in range(env.sim.model.njnt)
+                    if "finger_joint" in env.sim.model.joint_id2name(i)
+                )
+                print(f"  [demo {demo_num}] FAIL  obj_pos={obj_pos.round(3)}  "
+                      f"location={loc_ok}  gripper_open={grip_ok}  finger_qpos_sum={total_fj:.4f}  "
+                      f"z_thresh={env.PLACED_Z_THRESHOLD:.3f}")
             if success:
                 n_success += 1
 
             dg = data_grp.create_group(f"demo_{demo_num}")
-            dg.attrs["prism_idx"]     = int(prism_idx[traj_i])
-            dg.attrs["bin_idx"]       = goal_bin
-            dg.attrs["start_obs_idx"] = int(start_obs_idx[traj_i])
-            dg.attrs["goal_obs_idx"]  = int(goal_obs_idx[traj_i])
-            dg.attrs["combo_idx"]     = int(combo_idx[traj_i])
-            dg.attrs["success"]       = success
+            dg.attrs["traj_idx"]  = int(traj_i)
+            dg.attrs["prism_idx"] = int(prism_idx[traj_i])
+            dg.attrs["bin_idx"]   = int(bin_idx[traj_i])
+            dg.attrs["combo_idx"] = int(combo_idx[traj_i])
+            dg.attrs["success"]   = success
 
             for key, arr in arrays.items():
                 dg.create_dataset(key, data=arr, compression="gzip",

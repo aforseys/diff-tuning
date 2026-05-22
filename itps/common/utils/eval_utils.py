@@ -616,110 +616,190 @@ def eval_maze(policy, cfg, split='test', seed=None):
 
 # -- ROBOSUITE EVALUATION --
 
+def _robosuite_conditions(is_goal_cond, train_prisms, test_prisms, train_bins, test_bins):
+    """Return list of (label, prism_list, bin_list_or_None) eval conditions."""
+    conditions = []
+    if is_goal_cond:
+        combos = [
+            ('seen_start_seen_goal', train_prisms, train_bins),
+            ('new_start_seen_goal',  test_prisms,  train_bins),
+            ('seen_start_new_goal',  train_prisms, test_bins),
+            ('new_start_new_goal',   test_prisms,  test_bins),
+        ]
+        for label, prisms, bins in combos:
+            if prisms is not None and bins is not None:
+                conditions.append((label, prisms, bins))
+    else:
+        if train_prisms is not None:
+            conditions.append(('train', train_prisms, None))
+        if test_prisms is not None:
+            conditions.append(('test', test_prisms, None))
+    return conditions
+
+
+def _sample_episode_indices(obs_data, prisms, bins, n_episodes, is_goal_cond, rng):
+    """Sample n_episodes row indices from obs_data matching the given prism/bin lists."""
+    prism_idx = obs_data['prism_idx']
+    bin_idx   = obs_data['bin_idx']
+
+    mask = np.isin(prism_idx, prisms)
+    if is_goal_cond:
+        mask &= np.isin(bin_idx, bins)
+    else:
+        mask &= (bin_idx == 0)   # deduplicate: each start config appears once per bin
+
+    candidates = np.where(mask)[0]
+    if len(candidates) == 0:
+        bin_desc = f"bin_idx==0" if bins is None else f"bins={bins}"
+        raise ValueError(f"No observations found for prisms={prisms}, {bin_desc}")
+    return rng.choice(candidates, size=n_episodes, replace=len(candidates) < n_episodes)
+
+
 def eval_robosuite(policy, cfg, seed=None):
+    """
+    Evaluate the robosuite policy against fixed observations from cfg.eval.obs_file.
+
+    Config fields (under eval):
+      obs_file:      path to .npz with start_pos, goal_pos, bin_idx, prism_idx, start_joints
+      train_prisms:  list of prism indices seen during finetuning
+      test_prisms:   list of prism indices NOT seen during finetuning
+      train_bins:    list of bin indices seen during finetuning (GC only; null for non-GC)
+      test_bins:     list of bin indices NOT seen during finetuning (GC only; null for non-GC)
+      n_episodes:    episodes sampled per condition
+    """
     if seed is not None:
         set_global_seed(seed)
+    rng = np.random.default_rng(seed)
 
     from collections import deque
     import sys, os
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
     from scripts.bin_placing import make_eval_env, OBJECT_MAP
 
-    n_episodes   = cfg.eval.n_episodes
-    n_bins       = 4
-    n_obs_steps  = policy.config.n_obs_steps
-    is_goal_cond = 'episode_goal' in policy.config.input_shapes
-    chunk_sizes  = list(cfg.eval.get('action_chunk_sizes', [policy.config.n_action_steps]))
-    max_steps    = cfg.eval.get('max_episode_steps', 500)
-    img_size     = cfg.eval.get('img_size', 84)
-    obj          = OBJECT_MAP.get(cfg.eval.get('object', 'can'))
-    device       = next(policy.parameters()).device
+    n_episodes       = cfg.eval.n_episodes
+    n_bins           = 4
+    n_obs_steps      = policy.config.n_obs_steps
+    steps_per_action = cfg.eval.get('steps_per_action', 2)
+    is_goal_cond     = 'episode_goal' in policy.config.input_shapes
+    chunk_sizes      = list(cfg.eval.get('action_chunk_sizes', [policy.config.n_action_steps]))
+    max_steps        = cfg.eval.get('max_episode_steps', 200)
+    img_size         = cfg.eval.get('img_size', 84)
+    obj              = OBJECT_MAP.get(cfg.eval.get('object', 'can'))
+    device           = next(policy.parameters()).device
 
-    def get_state(obs, gripper_cmd):
-        return np.concatenate([obs["robot0_joint_pos"], [gripper_cmd]]).astype(np.float32)
+    obs_file     = cfg.eval.get('obs_file', None)
+    train_prisms = list(cfg.eval.get('train_prisms')) if cfg.eval.get('train_prisms') else None
+    test_prisms  = list(cfg.eval.get('test_prisms'))  if cfg.eval.get('test_prisms')  else None
+    train_bins   = list(cfg.eval.get('train_bins'))   if cfg.eval.get('train_bins')   else None
+    test_bins    = list(cfg.eval.get('test_bins'))    if cfg.eval.get('test_bins')    else None
+
+    if obs_file is None:
+        raise ValueError("cfg.eval.obs_file must be set for robosuite eval")
+
+    obs_data = np.load(obs_file)
+    n_joints = obs_data['start_joints'].shape[1]
+
+    conditions = _robosuite_conditions(is_goal_cond, train_prisms, test_prisms, train_bins, test_bins)
+    if not conditions:
+        raise ValueError("No eval conditions found — set train_prisms/test_prisms (and train_bins/test_bins for GC)")
+
+    state_dim = policy.config.input_shapes["observation.state"][0]
+    past_action_visible = state_dim > 8
+
+    def get_state(obs, gripper_cmd, prev_action=None):
+        state = np.concatenate([obs["robot0_joint_pos"], [gripper_cmd]]).astype(np.float32)
+        if past_action_visible:
+            pa = prev_action if prev_action is not None else np.zeros(8, dtype=np.float32)
+            state = np.concatenate([state, pa])
+        return state
 
     def get_image(obs):
         img = obs["agentview_image"].astype(np.float32) / 255.0
         return img.transpose(2, 0, 1)  # (3, H, W)
 
     def get_placed_bin(env):
-        original = env.current_goal_bin
-        placed = None
+        result = {'location': None, 'placement': None}
         for b in range(n_bins):
-            env.set_target_bin(b) 
-            if env._check_success(): #TODO: HOW IS THIS CALCULATED? NEEDS TO BE DROPPED / RELEASED? 
-                placed = b
+            if env.location_success(b):
+                result['location'] = b
+                if env.placement_success(b):
+                    result['placement'] = b
                 break
-        env.set_target_bin(original)
-        return placed
+        return result
 
     all_metrics = {}
     env = make_eval_env(img_size=img_size, mujoco_object=obj)
 
-    # Test different action chunking sizes 
     for chunk_size in chunk_sizes:
-        successes, bin_counts, correct_bins = [], [0] * n_bins, []
+        for cond_label, prisms, bins in conditions:
+            indices = _sample_episode_indices(obs_data, prisms, bins, n_episodes, is_goal_cond, rng)
+            location_bins, placement_bins, target_bins = [], [], []
 
-        for ep in range(n_episodes):
-            target_bin = ep % n_bins #TODO: GET "TARGET BIN" FROM PASSED IN TRAINING OBSERVATIONS 
-            env.set_target_bin(target_bin) #TODO: WHAT DOES SETTING TARGET BIN HERE DO 
-            obs = env.reset() #TODO: GET "OBS" FROM PASSED IN TRAINING OBSERVATIONS
+            for idx in indices:
+                target_bin  = int(obs_data['bin_idx'][idx])
+                joint_start = obs_data['start_joints'][idx]
 
-            gripper_cmd = 1.0
-            #TODO: WHAT DO THESE LINES DO
-            state_buf = deque([get_state(obs, gripper_cmd)] * n_obs_steps, maxlen=n_obs_steps) 
-            image_buf = deque([get_image(obs)]               * n_obs_steps, maxlen=n_obs_steps)
+                obs = env.reset()
+                env.sim.data.qpos[:n_joints] = joint_start
+                env.sim.data.qvel[:n_joints] = 0.0
+                env.sim.forward()
+                zero_act = np.zeros(env.action_spec[0].shape)
+                zero_act[-1] = 1.0
+                obs, _, _, _ = env.step(zero_act)
 
-            # Make one-hot vector with goal bin if goal conditioned
-            if is_goal_cond:
-                goal = np.zeros(n_bins, dtype=np.float32)
-                goal[target_bin] = 1.0
-                goal_tensor = torch.tensor(goal).unsqueeze(0).to(device)
+                gripper_cmd = 1.0
+                prev_action = np.zeros(8, dtype=np.float32)
+                state_buf = deque([get_state(obs, gripper_cmd, prev_action)] * n_obs_steps, maxlen=n_obs_steps)
+                image_buf = deque([get_image(obs)]                            * n_obs_steps, maxlen=n_obs_steps)
 
-            done, step = False, 0
-            while not done and step < max_steps:
-                obs_batch = {
-                    'observation.state':
-                        torch.tensor(np.stack(state_buf), dtype=torch.float32).unsqueeze(0).to(device),
-                    'observation.image.agentview':
-                        torch.tensor(np.stack(image_buf), dtype=torch.float32).unsqueeze(0).to(device),
-                }
                 if is_goal_cond:
-                    obs_batch['episode_goal'] = goal_tensor
+                    goal = np.zeros(n_bins, dtype=np.float32)
+                    goal[target_bin] = 1.0
+                    goal_tensor = torch.tensor(goal).unsqueeze(0).to(device)
 
-                with torch.no_grad():
-                    _, full_trajs = policy.run_inference(obs_batch, methods=['ddim'], return_full=True) #TODO: WHAT SIZE DOES THIS OUTPUT
-                start = policy.config.n_obs_steps - 1 #TODO: WHAT IS THIS
-                chunk = full_trajs[0][0][start:start + chunk_size].cpu().numpy()  # (chunk_size, 8) #TODO: WHY [0][0] INDEX?
+                step = 0
+                while step < max_steps:
+                    obs_batch = {
+                        'observation.state':
+                            torch.tensor(np.stack(state_buf), dtype=torch.float32).unsqueeze(0).to(device),
+                        'observation.image.agentview':
+                            torch.tensor(np.stack(image_buf), dtype=torch.float32).unsqueeze(0).to(device),
+                    }
+                    if is_goal_cond:
+                        obs_batch['episode_goal'] = goal_tensor
 
-                for t in range(chunk_size):
-                    delta         = chunk[t]
-                    target_joints = obs["robot0_joint_pos"] + delta[:7]
-                    gripper_cmd   = float(delta[7])
-                    obs, _, _, _  = env.step(np.concatenate([target_joints, [gripper_cmd]]))
-                    state_buf.append(get_state(obs, gripper_cmd))
-                    image_buf.append(get_image(obs))
-                    step += 1
-                    if env._check_success():
-                        done = True
-                        break
+                    with torch.no_grad():
+                        _, full_trajs = policy.run_inference(obs_batch, methods=['ddim'], return_full=True)
+                    start = policy.config.n_obs_steps - 1
+                    chunk = full_trajs[0][0][start:start + chunk_size].cpu().numpy()
 
-            placed = get_placed_bin(env)
-            successes.append(float(placed is not None))
-            if placed is not None:
-                bin_counts[placed] += 1
+                    for t in range(chunk_size):
+                        delta         = chunk[t]
+                        target_joints = obs["robot0_joint_pos"] + delta[:7]
+                        gripper_cmd   = float(delta[7])
+                        action        = np.concatenate([target_joints, [gripper_cmd]])
+                        for _ in range(steps_per_action):
+                            obs, _, _, _ = env.step(action)
+                        prev_action = delta.astype(np.float32)
+                        state_buf.append(get_state(obs, gripper_cmd, prev_action))
+                        image_buf.append(get_image(obs))
+                        step += 1
+                        if step >= max_steps or any(env.placement_success(b) for b in range(n_bins)):
+                            break
+
+                result = get_placed_bin(env)
+                location_bins.append(result['location'])
+                placement_bins.append(result['placement'])
+                target_bins.append(target_bin)
+
+            p = f'chunk{chunk_size}/{cond_label}'
+            all_metrics[f'{p}/location_rate']        = float(np.mean([b is not None for b in location_bins]))
+            all_metrics[f'{p}/placement_rate']       = float(np.mean([b is not None for b in placement_bins]))
+            all_metrics[f'{p}/location_bin_counts']  = [sum(b == i for b in location_bins  if b is not None) for i in range(n_bins)]
+            all_metrics[f'{p}/placement_bin_counts'] = [sum(b == i for b in placement_bins if b is not None) for i in range(n_bins)]
             if is_goal_cond:
-                correct_bins.append(float(placed == target_bin))
-
-            #TODO: HERE, INSTEAD OF JUST RECORDING THIS SUCCESS, ITERATE THROUGH METRICS
-            #TODO: RECORD XYZ OF TRAJECTORY ROLLOUT TO EVALUATE STRATEGY-BASED METRICS CALCULATED ON FULL TRAJECTORY 
-
-        p = f'chunk{chunk_size}'
-        all_metrics[f'{p}/success_rate'] = float(np.mean(successes))
-        for b in range(n_bins):
-            all_metrics[f'{p}/bin{b}_count'] = bin_counts[b]
-        if is_goal_cond:
-            all_metrics[f'{p}/correct_bin_rate'] = float(np.mean(correct_bins))
+                all_metrics[f'{p}/correct_location_rate']  = float(np.mean([b == t for b, t in zip(location_bins, target_bins)]))
+                all_metrics[f'{p}/correct_placement_rate'] = float(np.mean([b == t for b, t in zip(placement_bins, target_bins)]))
 
     env.close()
     return {'aggregated': all_metrics}

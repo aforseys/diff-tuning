@@ -52,8 +52,6 @@ def main():
                         help="Filter: only show trajectories going to this bin (0-3)")
     parser.add_argument("--combo",        type=int, default=None,
                         help="Filter: only show trajectories with this reward combo index")
-    parser.add_argument("--goal-obs",     type=int, default=None,
-                        help="Filter: only show trajectories with this goal observation index")
     parser.add_argument("--show-samples", action="store_true",
                         help="Also render start/goal sample dots from the saved observations")
     parser.add_argument("--show-waypoints", action="store_true",
@@ -72,12 +70,11 @@ def main():
     args = parser.parse_args()
 
     # --- Load trajectories ---
-    data         = np.load(args.traj_file, allow_pickle=False)
-    waypoints    = data["waypoints"]       # (N, n_pts, 3)
-    prism_idx    = data["prism_idx"]
-    bin_idx      = data["bin_idx"]
-    combo_idx    = data["combo_idx"]
-    goal_obs_idx = data["goal_obs_idx"]
+    data      = np.load(args.traj_file, allow_pickle=False)
+    waypoints = data["waypoints"]       # (N, n_pts, 3)
+    prism_idx = data["prism_idx"]
+    bin_idx   = data["bin_idx"]
+    combo_idx = data["combo_idx"]
 
     # --- Filter ---
     mask = np.ones(len(waypoints), dtype=bool)
@@ -87,8 +84,6 @@ def main():
         mask &= (bin_idx == args.bin)
     if args.combo is not None:
         mask &= (combo_idx == args.combo)
-    if args.goal_obs is not None:
-        mask &= (goal_obs_idx == args.goal_obs)
 
     indices = np.where(mask)[0]
     if len(indices) == 0:
@@ -120,9 +115,16 @@ def main():
         env._spline_data = (list(selected_waypoints), colors)
 
     if args.show_samples:
-        start_positions = data["start_positions"]
-        goal_positions  = data["goal_positions"]
-        env._marker_data = (list(start_positions), list(goal_positions))
+        sp = data["start_pos"]
+        gp = data["goal_pos"]
+        pi = data["prism_idx"]
+        bi = data["bin_idx"]
+        n_p = int(pi.max()) + 1
+        n_b = int(bi.max()) + 1
+        # Reconstruct list-of-arrays expected by _bake_sample_markers
+        start_positions = [sp[(pi == p) & (bi == 0)] for p in range(n_p)]
+        goal_positions  = [gp[(bi == b) & (pi == 0)] for b in range(n_b)]
+        env._marker_data = (start_positions, goal_positions)
 
     if args.show_waypoints:
         env._waypoint_data = (list(selected_waypoints), colors)
@@ -143,7 +145,6 @@ def main():
         print(f"Executing {len(indices)} trajectories — close the window to exit.")
         for i, (wp, goal_bin) in enumerate(zip(selected_waypoints, selected_bins)):
             print(f"  [{i+1}/{len(indices)}] bin {goal_bin}")
-            env.set_target_bin(int(goal_bin))
             env.reset()   # hard reset rebakes tubes + resets robot
             execute_spline(env, wp, horizon=args.horizon, record=False)
 

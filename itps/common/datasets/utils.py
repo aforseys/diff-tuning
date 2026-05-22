@@ -113,7 +113,7 @@ def get_hf_dataset_safe_version(repo_id: str, version: str) -> str:
         return version
 
 
-def load_hf_dataset(repo_id: str, version: str, root: Path, split: str, goal_horizon: int=60) -> datasets.Dataset:
+def load_hf_dataset(repo_id: str, version: str, root: Path, split: str, goal_horizon: int=60, past_action_visible: bool=False) -> datasets.Dataset:
     """hf_dataset contains all the observations, states, actions, rewards, etc."""
     if root is not None:
         if 'robosuite' in repo_id:  # robosuite demos from collect_demos.py
@@ -134,9 +134,14 @@ def load_hf_dataset(repo_id: str, version: str, root: Path, split: str, goal_hor
                     T = len(delta_joint)
 
                     # observation.state: absolute joint_pos + gripper command (= delta_joint[:, -1])
+                    # Optionally append previous action for past_action_visible mode (8 → 16 dims)
                     obs_state = np.concatenate(
                         [joint_pos[:T], delta_joint[:, -1:]], axis=1
                     ).astype(np.float32)  # (T, 8)
+                    if past_action_visible:
+                        prev_action = np.zeros_like(delta_joint)   # (T, 8)
+                        prev_action[1:] = delta_joint[:-1]
+                        obs_state = np.concatenate([obs_state, prev_action], axis=1)  # (T, 16)
 
                     imgs = agentview[:T].astype(np.float32) / 255.0  # (T, H, W, 3)
                     imgs = imgs.transpose(0, 3, 1, 2)                 # (T, 3, H, W)

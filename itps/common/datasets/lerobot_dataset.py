@@ -75,7 +75,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
         image_transforms: Callable | None = None,
         delta_timestamps: dict[list[float]] | None = None,
         video_backend: str | None = None,
-        goal_horizon: int | None = 60
+        goal_horizon: int | None = 60,
+        past_action_visible: bool = False,
     ):
         super().__init__()
         self.repo_id = repo_id
@@ -87,7 +88,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         # load data from hub or locally when root is provided
         # TODO(rcadene, aliberts): implement faster transfer
         # https://huggingface.co/docs/huggingface_hub/en/guides/download#faster-downloads
-        self.hf_dataset = load_hf_dataset(repo_id, CODEBASE_VERSION, root, split, self.goal_horizon)
+        self.hf_dataset = load_hf_dataset(repo_id, CODEBASE_VERSION, root, split, self.goal_horizon, past_action_visible=past_action_visible)
         _custom = ('maze2d', 'zarr', 'gmm', 'robosuite')
         if split == "train" and not any(k in repo_id for k in _custom):
             self.episode_data_index = load_episode_data_index(repo_id, CODEBASE_VERSION, root)

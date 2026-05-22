@@ -160,6 +160,10 @@ class BinPlacing(ManipulationEnv):
         [0.9,  0.55, 0.05, 0.9],  # orange
     ]
 
+    # table surface z = 0.8; bin rim = 0.8 + 2*H ≈ 0.844
+    # 4 cm clearance above rim covers the lower half of typical objects (can, bottle, etc.)
+    PLACED_Z_THRESHOLD = 0.8 + BinTableArena.H * 2 + 0.04
+
     def __init__(
         self,
         robots,
@@ -202,8 +206,6 @@ class BinPlacing(ManipulationEnv):
         self.table_offset      = np.array((0, 0, 0.8))
         self.use_object_obs    = use_object_obs
         self.reward_shaping    = reward_shaping
-        self._fixed_target_bin = None
-        self.current_goal_bin  = None
         self._input_object     = mujoco_object
         self._marker_data      = None
         self._spline_data      = None   # (waypoints_list, colors_list) — set before reset()
@@ -282,6 +284,10 @@ class BinPlacing(ManipulationEnv):
             mujoco_objects=self.grasp_obj,
         )
 
+        for cam in self.model.worldbody.findall('.//camera[@name="agentview"]'):
+            cam.set('pos', '0.8 0 1.6')
+            cam.set('fovy', '70')
+
         if self._marker_data is not None:
             self._bake_sample_markers(*self._marker_data)
 
@@ -295,20 +301,22 @@ class BinPlacing(ManipulationEnv):
     # Sample generation + visualization
     # ------------------------------------------------------------------
 
-    def _generate_samples(self, seed=42, start_regions=None, obs_per_start=100, obs_per_goal=100):
-        """Sample start (EEF) and per-bin goal positions. Stores results in self.
+    def _generate_samples(self, seed=42, start_regions=None, n_obs=100):
+        """Sample start (EEF) and per-bin goal positions with 1:1 pairing.
 
         Args:
             seed:          Base integer seed.
             start_regions: List of dicts with 'low'/'high' keys defining each prism.
-                           Defaults to [self.START_REGION].
+                           Defaults to make_start_regions().
+            n_obs:         Number of (start, goal) pairs per (prism, bin) combination.
 
         Seeding contract:
           - Start positions for prism i use seed [seed, i]       → stable across bin changes
           - Goal positions for bin j   use seed [seed, 100 + j]  → stable across prism changes
 
-        self.start_positions: list of (n_starts, 3) arrays, one per prism.
-        self.goal_positions:  list of (n_starts, 3) arrays, one per bin.
+        Returns:
+            start_positions: list of (n_obs, 3) arrays, one per prism.
+            goal_positions:  list of (n_obs, 3) arrays, one per bin.
         """
         if start_regions is None:
             start_regions = self.make_start_regions()
@@ -319,7 +327,7 @@ class BinPlacing(ManipulationEnv):
             rng = np.random.default_rng([seed, prism_idx])
             lo = np.array(region['low'])
             hi = np.array(region['high'])
-            start_positions.append(rng.uniform(lo, hi, size=(obs_per_start, 3)))
+            start_positions.append(rng.uniform(lo, hi, size=(n_obs, 3)))
 
         # Goal positions: one independent RNG per bin
         goal_z = self.table_offset[2] + BinTableArena.H * 2 + 0.01  # 1cm above rim
@@ -329,30 +337,71 @@ class BinPlacing(ManipulationEnv):
         goal_positions = []
         for bin_idx, (bx, by) in enumerate(BinTableArena.BIN_XY):
             rng_bin = np.random.default_rng([seed, 100 + bin_idx])
-            gx = rng_bin.uniform(bx - ix, bx + ix, size=obs_per_goal)
-            gy = rng_bin.uniform(by - iy, by + iy, size=obs_per_goal)
+            gx = rng_bin.uniform(bx - ix, bx + ix, size=n_obs)
+            gy = rng_bin.uniform(by - iy, by + iy, size=n_obs)
             goal_positions.append(
-                np.stack([gx, gy, np.full(obs_per_goal, goal_z)], axis=1)
+                np.stack([gx, gy, np.full(n_obs, goal_z)], axis=1)
             )
 
         return (start_positions, goal_positions)
 
-    def save_observations(self, start_positions, goal_positions, save_path):
-        """Save start and goal positions to a .npz file.
+    def save_observations(self, start_positions, goal_positions, save_path,
+                           object_type=None, start_joints=None):
+        """Save all (start, goal) pairs as flat aligned arrays.
+
+        For each (prism p, bin b), start[j] is paired 1:1 with goal[j].
+        Total pairs N = n_prisms * n_bins * n_obs.
 
         Args:
+            start_positions: list of (n_obs, 3) arrays, one per prism.
+            goal_positions:  list of (n_obs, 3) arrays, one per bin.
             save_path:       Destination path (e.g. 'observations.npz').
-
+            object_type:     String name of the object (e.g. 'can', 'bottle').
+            start_joints:    Optional list of (n_obs, n_joints) arrays, one per prism.
+                             Tiled across bins and saved as 'start_joints' (N, n_joints).
         """
+        n_prisms = len(start_positions)
+        n_bins   = len(goal_positions)
+        n_obs    = start_positions[0].shape[0]
+        N        = n_prisms * n_bins * n_obs
 
-        np.savez(
-            save_path,
-            start_positions=np.array(start_positions),   # (n_prisms, n_obs_per_prism, 3)
-            goal_positions=np.array(goal_positions),      # (n_bins,   n_obs_per_bin,   3)
+        out_start     = np.empty((N, 3), dtype=np.float64)
+        out_goal      = np.empty((N, 3), dtype=np.float64)
+        out_bin_idx   = np.empty(N,      dtype=np.int32)
+        out_prism_idx = np.empty(N,      dtype=np.int32)
+        if start_joints is not None:
+            n_joints   = start_joints[0].shape[1]
+            out_joints = np.empty((N, n_joints), dtype=np.float64)
+
+        i = 0
+        for p, starts in enumerate(start_positions):
+            for b, goals in enumerate(goal_positions):
+                out_start[i:i+n_obs]     = starts
+                out_goal[i:i+n_obs]      = goals
+                out_bin_idx[i:i+n_obs]   = b
+                out_prism_idx[i:i+n_obs] = p
+                if start_joints is not None:
+                    out_joints[i:i+n_obs] = start_joints[p]
+                i += n_obs
+
+        save_dict = dict(
+            start_pos=out_start,
+            goal_pos=out_goal,
+            bin_idx=out_bin_idx,
+            prism_idx=out_prism_idx,
         )
+        if start_joints is not None:
+            save_dict["start_joints"] = out_joints
+        if object_type is not None:
+            save_dict["object_type"] = np.array(object_type)
+
+        np.savez(save_path, **save_dict)
         print(
-            f"Saved: {len(start_positions)} prisms × {len(start_positions[0])} starts, "
-            f"{len(goal_positions)} bins × {len(goal_positions[0])} goals → {save_path}"
+            f"Saved {N} pairs "
+            f"({n_prisms} prisms × {n_bins} bins × {n_obs} obs each)"
+            + (f"  object={object_type}" if object_type else "")
+            + (f"  start_joints={out_joints.shape}" if start_joints is not None else "")
+            + f" → {save_path}"
         )
 
     def _bake_sample_markers(self, start_positions=None, goal_positions=None):
@@ -486,11 +535,6 @@ class BinPlacing(ManipulationEnv):
             self.sim.step()
         self.sim.forward()
 
-        if self._fixed_target_bin is not None:
-            self.current_goal_bin = self._fixed_target_bin
-        else:
-            self.current_goal_bin = int(self.rng.integers(0, 4))
-
     def _eef_pos(self):
         """Return the grip-site world position."""
         eef_id = self.robots[0].eef_site_id
@@ -516,15 +560,7 @@ class BinPlacing(ManipulationEnv):
             def cube_quat(obs_cache):
                 return convert_quat(np.array(self.sim.data.body_xquat[self.obj_body_id]), to="xyzw")
 
-            @sensor(modality=modality)
-            def goal_bin(obs_cache):
-                return np.array([self.current_goal_bin or 0], dtype=np.int64)
-
-            @sensor(modality=modality)
-            def goal_pos(obs_cache):
-                return self.bin_positions[self.current_goal_bin or 0].copy()
-
-            for s in [cube_pos, cube_quat, goal_bin, goal_pos]:
+            for s in [cube_pos, cube_quat]:
                 observables[s.__name__] = Observable(
                     name=s.__name__, sensor=s, sampling_rate=self.control_freq
                 )
@@ -536,34 +572,28 @@ class BinPlacing(ManipulationEnv):
     # ------------------------------------------------------------------
 
     def reward(self, action=None):
-        if self.current_goal_bin is None:
-            return 0.0
-        obj_pos  = self.sim.data.body_xpos[self.obj_body_id]
-        goal_pos = self.bin_positions[self.current_goal_bin]
-        dist = np.linalg.norm(obj_pos - goal_pos)
-        if self._check_success():
-            return 1.0
-        return -dist if self.reward_shaping else 0.0
+        return 0.0
 
-    def _check_success(self):
-        if self.current_goal_bin is None:
-            return False
-        obj_pos      = self.sim.data.body_xpos[self.obj_body_id]
-        bx, by       = BinTableArena.BIN_XY[self.current_goal_bin]
-        ox, oy       = BinTableArena.OX, BinTableArena.OY
-        in_bin_xy   = (bx - ox) <= obj_pos[0] <= (bx + ox) and \
-                      (by - oy) <= obj_pos[1] <= (by + oy)
-        above_table = obj_pos[2] > 0.8
-        return bool(in_bin_xy and above_table)
+    def _gripper_is_open(self, threshold=0.06):
+        total = 0.0
+        for i in range(self.sim.model.njnt):
+            if "finger_joint" in self.sim.model.joint_id2name(i):
+                total += abs(self.sim.data.qpos[self.sim.model.jnt_qposadr[i]])
+        return total > threshold
 
-    # ------------------------------------------------------------------
-    # Helper
-    # ------------------------------------------------------------------
+    def location_success(self, bin_idx):
+        """Object CoM is within bin XY footprint and within z bounds [table, PLACED_Z_THRESHOLD]."""
+        obj_pos    = self.sim.data.body_xpos[self.obj_body_id]
+        bx, by     = BinTableArena.BIN_XY[bin_idx]
+        ox, oy     = BinTableArena.OX, BinTableArena.OY
+        in_bin_xy  = (bx - ox) <= obj_pos[0] <= (bx + ox) and \
+                     (by - oy) <= obj_pos[1] <= (by + oy)
+        in_z_range = 0.8 < obj_pos[2] < self.PLACED_Z_THRESHOLD
+        return bool(in_bin_xy and in_z_range)
 
-    def set_target_bin(self, idx):
-        if not 0 <= idx < 4:
-            raise ValueError(f"idx must be 0-3, got {idx}")
-        self._fixed_target_bin = idx
+    def placement_success(self, bin_idx):
+        """Object is location_success AND gripper is open."""
+        return self.location_success(bin_idx) and self._gripper_is_open()
 
 
 # ---------------------------------------------------------------------------
@@ -726,7 +756,51 @@ def execute_spline(env, waypoints, horizon=64, record=True):
 
     return np.array(joint_traj) if record else None
 
-def sample_generation(env, save_dir, n_starts=None, obs_per_start=100, obs_per_goal=100):
+def solve_start_joints(env_osc, start_positions):
+    """Solve IK for each EEF start position by driving the arm there via OSC_POSE.
+
+    For each target, resets the env and uses a P-controller to move the EEF to the
+    target XYZ, then records joint angles at convergence. Results are per-prism so
+    save_observations can tile them across bins without re-solving.
+
+    Args:
+        env_osc:         BinPlacing env built with controller='OSC_POSE'.
+        start_positions: list of (n_obs, 3) arrays, one per start prism.
+
+    Returns:
+        list of (n_obs, n_joints) arrays, one per start prism.
+    """
+    n_joints   = env_osc.robots[0].dof
+    action_dim = env_osc.action_spec[0].shape[0]
+    total      = sum(len(p) for p in start_positions)
+    done       = 0
+    result     = []
+
+    for pi, positions in enumerate(start_positions):
+        n = len(positions)
+        joints = np.zeros((n, n_joints), dtype=np.float64)
+        for oi, target_xyz in enumerate(positions):
+            env_osc.reset()
+            for _ in range(500):
+                eef   = env_osc._eef_pos()
+                delta = target_xyz - eef
+                if np.linalg.norm(delta) < 0.008:
+                    break
+                action     = np.zeros(action_dim)
+                action[:3] = np.clip(delta / 0.20, -1.0, 1.0)
+                action[-1] = 1.0
+                env_osc.step(action)
+            joints[oi] = env_osc.sim.data.qpos[:n_joints].copy()
+            done += 1
+            if done % 20 == 0 or done == total:
+                err = np.linalg.norm(target_xyz - env_osc._eef_pos())
+                print(f"  IK: {done}/{total}  prism={pi}  err={err:.4f} m")
+        result.append(joints)
+
+    return result
+
+
+def sample_generation(env, save_dir, n_starts=None, n_obs=10, object_type=None, env_osc=None):
     all_regions = env.make_start_regions()
 
     if n_starts is None:
@@ -740,14 +814,19 @@ def sample_generation(env, save_dir, n_starts=None, obs_per_start=100, obs_per_g
 
     start_positions, goal_positions = env._generate_samples(
         start_regions=start_regions,
-        obs_per_start=obs_per_start,
-        obs_per_goal=obs_per_goal,
+        n_obs=n_obs,
     )
+
+    start_joints = None
+    if env_osc is not None:
+        print(f"Solving IK for {sum(len(p) for p in start_positions)} start positions...")
+        start_joints = solve_start_joints(env_osc, start_positions)
 
     if save_dir is None:
         print('NOTE: Samples will not be saved. No save directory passed in.')
     else:
-        env.save_observations(start_positions, goal_positions, save_dir)
+        env.save_observations(start_positions, goal_positions, save_dir,
+                               object_type=object_type, start_joints=start_joints)
 
     return (start_positions, goal_positions)
 
@@ -760,10 +839,8 @@ if __name__ == "__main__":
     parser.add_argument("-s", "--save-dir", type=str, help="Path to save generated samples", default=None)
     parser.add_argument("--n-starts", type=int, default=None,
                         help="Number of preset start regions to sample (default: all)")
-    parser.add_argument("--obs-per-start", type=int, default=100,
-                        help="Sample points per start region (default: 100)")
-    parser.add_argument("--obs-per-goal", type=int, default=100,
-                        help="Sample points per goal bin (default: 100)")
+    parser.add_argument("--n-obs", type=int, default=10,
+                        help="Observations per (prism, bin) pair (default: 10)")
     parser.add_argument("-v", "--viz", action="store_true", help="Show env")
     parser.add_argument("-d", "--run-demo", action="store_true", help="Show demo motion")
     parser.add_argument("-b", "--bin", type=int, choices=[1,2,3,4], metavar="BIN",
@@ -772,7 +849,9 @@ if __name__ == "__main__":
                         choices=["can", "bottle", "milk", "cereal", "bread", "lemon",
                                  "box", "cylinder", "ball"],
                         help="Object to hold (default: can)")
-    
+    parser.add_argument("--solve-ik", action="store_true",
+                        help="Solve IK for start positions and save joint angles (requires --gen-samples)")
+
     args = parser.parse_args()
 
     # Set camera angle
@@ -794,15 +873,22 @@ if __name__ == "__main__":
     # Generate samples before reset so markers are baked into the model at compile time
     samples = None
     if args.gen_samples:
+        env_osc = None
+        if args.solve_ik:
+            env_osc = make_env(has_renderer=False, mujoco_object=mujoco_object,
+                               controller="OSC_POSE")
         samples = sample_generation(env, args.save_dir,
                                     n_starts=args.n_starts,
-                                    obs_per_start=args.obs_per_start,
-                                    obs_per_goal=args.obs_per_goal)
+                                    n_obs=args.n_obs,
+                                    object_type=args.object,
+                                    env_osc=env_osc)
+        if env_osc is not None:
+            env_osc.close()
         if args.viz:
             env._marker_data = samples
 
     obs = env.reset()
-    print(f"goal_bin={env.current_goal_bin}  camera={camera}  controller={ctrl}")
+    print(f"camera={camera}  controller={ctrl}")
 
     # Visualize environment
     if args.viz:

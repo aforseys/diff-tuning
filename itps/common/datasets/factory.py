@@ -104,6 +104,7 @@ def make_dataset(cfg, split: str = "train") -> LeRobotDataset | MultiLeRobotData
             delta_timestamps=cfg.training.get("delta_timestamps"),
             image_transforms=image_transforms,
             video_backend=cfg.video_backend,
+            past_action_visible=cfg.get("past_action_visible", False),
         )
 
         # Add goal horizon if necessary 

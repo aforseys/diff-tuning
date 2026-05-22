@@ -249,38 +249,40 @@ def main():
     n_combos     = len(combos)
     combo_weights_arr = np.array(combos, dtype=np.float64)   # (n_combos, n_features)
 
-    # --- Load and validate observations ---
-    data            = np.load(args.obs_file)
-    start_positions = data["start_positions"]   # (n_prisms, n_obs, 3)
-    goal_positions  = data["goal_positions"]    # (n_bins,   n_obs, 3)
+    # --- Load and validate observations (flat format from save_observations) ---
+    data         = np.load(args.obs_file)
+    start_pos    = data["start_pos"]    # (N_obs, 3)
+    goal_pos     = data["goal_pos"]     # (N_obs, 3)
+    bin_idx      = data["bin_idx"]      # (N_obs,)
+    prism_idx    = data["prism_idx"]    # (N_obs,)
+    start_joints = data["start_joints"] if "start_joints" in data else None
+    object_type  = str(data["object_type"]) if "object_type" in data else None
 
-    n_prisms, n_obs_start, _ = start_positions.shape
-    n_bins,   n_obs_goal,  _ = goal_positions.shape
+    N_obs    = len(start_pos)
+    n_prisms = int(prism_idx.max()) + 1
+    n_bins   = int(bin_idx.max()) + 1
+    n_obs    = N_obs // (n_prisms * n_bins)
 
-    assert n_obs_start == n_obs_goal, (
-        f"n_obs_start ({n_obs_start}) != n_obs_goal ({n_obs_goal}); "
-        "each start must pair 1-to-1 with a goal."
+    assert N_obs == n_prisms * n_bins * n_obs, (
+        f"Flat obs array size {N_obs} is not divisible by "
+        f"n_prisms({n_prisms}) × n_bins({n_bins})"
     )
-    n_obs = n_obs_start
-
     assert n_bins == len(BIN_XY), (
-        f"goal_positions has {n_bins} bins but BinTableArena has {len(BIN_XY)}."
+        f"obs file has {n_bins} bins but BinTableArena has {len(BIN_XY)}."
     )
-
     if n_obs % n_combos != 0:
         raise ValueError(
-            f"n_obs ({n_obs}) is not divisible by n_combos ({n_combos}). "
+            f"n_obs per group ({n_obs}) is not divisible by n_combos ({n_combos}). "
             f"Adjust weight lists so their Cartesian product size ({n_combos}) "
             f"evenly divides n_obs ({n_obs})."
         )
     obs_per_combo = n_obs // n_combos
 
     n_wpts = args.n_waypoints
-    N      = n_prisms * n_bins * n_obs
 
-    print(f"Loaded:  {n_prisms} prisms × {n_obs} obs,  {n_bins} bins × {n_obs} goals")
+    print(f"Loaded: {N_obs} total obs  ({n_prisms} prisms × {n_bins} bins × {n_obs} each)")
     print(f"Reward combos: {n_combos}  ({obs_per_combo} obs each)")
-    print(f"Total trajectories: {N}  ({n_wpts} intermediate waypoints each)")
+    print(f"Total trajectories: {N_obs}  ({n_wpts} intermediate waypoints each)")
     for ci, combo in enumerate(combos):
         weights_str = "  ".join(f"{name}={w}" for name, w in zip(FEATURE_NAMES, combo)
                                 if w != 0.0)
@@ -289,18 +291,15 @@ def main():
     opt         = GradientOptimizer(max_iter=args.max_iter)
     constraints = build_constraints(args)
 
-    # --- Output buffers ---
-    all_waypoints     = np.zeros((N, n_wpts + 2, 3), dtype=np.float64)
-    all_prism_idx     = np.zeros(N, dtype=np.int32)
-    all_start_obs_idx = np.zeros(N, dtype=np.int32)
-    all_bin_idx       = np.zeros(N, dtype=np.int32)
-    all_goal_obs_idx  = np.zeros(N, dtype=np.int32)
-    all_combo_idx     = np.zeros(N, dtype=np.int32)
+    # --- Output buffers (one entry per flat obs row) ---
+    all_waypoints = np.zeros((N_obs, n_wpts + 2, 3), dtype=np.float64)
+    all_combo_idx = np.zeros(N_obs, dtype=np.int32)
 
-    flat = 0
+    done = 0
     for pi in range(n_prisms):
         for bi in range(n_bins):
-            bin_x, bin_y = BIN_XY[bi]
+            bin_x, bin_y  = BIN_XY[bi]
+            group_indices = np.where((prism_idx == pi) & (bin_idx == bi))[0]  # (n_obs,)
 
             for ci, combo in enumerate(combos):
                 weight_combo      = dict(zip(FEATURE_NAMES, combo))
@@ -309,36 +308,27 @@ def main():
                 )
                 reward_fn, jac_fn = build_reward_fns(features, weights)
 
-                obs_start = ci * obs_per_combo
-                obs_end   = obs_start + obs_per_combo
+                obs_slice = group_indices[ci * obs_per_combo : (ci + 1) * obs_per_combo]
 
-                for oi in range(obs_start, obs_end):
-                    pos_start = start_positions[pi, oi]
-                    pos_goal  = goal_positions[bi, oi]
-
+                for flat_i in obs_slice:
                     result = opt.optimize_trajectory(
-                        pos_start, pos_goal, QUAT_DOWN, QUAT_DOWN,
+                        start_pos[flat_i], goal_pos[flat_i], QUAT_DOWN, QUAT_DOWN,
                         reward_fn,
                         initial_waypoints=n_wpts,
                         jac=jac_fn,
                         constraints=constraints,
                     )
 
-                    path = np.array(
-                        [pos_start]
+                    all_waypoints[flat_i] = np.array(
+                        [start_pos[flat_i]]
                         + [wp["pos"] for wp in result]
-                        + [pos_goal]
+                        + [goal_pos[flat_i]]
                     )
-                    all_waypoints[flat]     = path
-                    all_prism_idx[flat]     = pi
-                    all_start_obs_idx[flat] = oi
-                    all_bin_idx[flat]       = bi
-                    all_goal_obs_idx[flat]  = oi
-                    all_combo_idx[flat]     = ci
-                    flat += 1
+                    all_combo_idx[flat_i] = ci
+                    done += 1
 
-                    if flat % 500 == 0 or flat == N:
-                        print(f"  {flat}/{N}")
+                    if done % 500 == 0 or done == N_obs:
+                        print(f"  {done}/{N_obs}")
 
     # --- Config record ---
     constraint_specs = []
@@ -371,19 +361,22 @@ def main():
         "constraints":     constraint_specs,
     }
 
-    np.savez(
-        args.save_path,
-        waypoints       = all_waypoints,        # (N, n_wpts+2, 3)
-        prism_idx       = all_prism_idx,        # (N,)
-        start_obs_idx   = all_start_obs_idx,    # (N,)
-        bin_idx         = all_bin_idx,          # (N,)
-        goal_obs_idx    = all_goal_obs_idx,     # (N,)
-        combo_idx       = all_combo_idx,        # (N,)
-        combo_weights   = combo_weights_arr,    # (n_combos, n_features)
-        start_positions = start_positions,      # (n_prisms, n_obs, 3)
-        goal_positions  = goal_positions,       # (n_bins,   n_obs, 3)
-        config_json     = np.bytes_(json.dumps(config, indent=2)),
+    save_dict = dict(
+        waypoints     = all_waypoints,       # (N, n_wpts+2, 3)
+        start_pos     = start_pos,           # (N, 3)  — embedded from obs file
+        goal_pos      = goal_pos,            # (N, 3)
+        bin_idx       = bin_idx,             # (N,)
+        prism_idx     = prism_idx,           # (N,)
+        combo_idx     = all_combo_idx,       # (N,)
+        combo_weights = combo_weights_arr,   # (n_combos, n_features)
+        config_json   = np.bytes_(json.dumps(config, indent=2)),
     )
+    if start_joints is not None:
+        save_dict["start_joints"] = start_joints
+    if object_type is not None:
+        save_dict["object_type"] = np.bytes_(object_type)
+
+    np.savez(args.save_path, **save_dict)
 
     print(f"\nSaved → {args.save_path}")
     print(f"waypoints shape: {all_waypoints.shape}")
