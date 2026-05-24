@@ -48,6 +48,7 @@ from itps.trajectory_opt.geometric_features import (
     HeightThreshold,
     DesiredHeight,
     ZTableDistance,
+    BinXAlignment,
     BinYAlignment,
     BinWallAvoidance,
     GoalProgress,
@@ -83,6 +84,7 @@ FEATURE_NAMES = [
     "desired_height",
     "z_table_distance",
     "bin_wall_avoidance",
+    "bin_x_alignment",
     "bin_y_alignment",
     "goal_progress",
 ]
@@ -130,6 +132,12 @@ def build_features_and_weights(args, target_bin_x: float, target_bin_y: float,
     w = weight_combo["bin_wall_avoidance"]
     if w != 0.0:
         features.append(BinWallAvoidance(BIN_XY, OX, OY, BIN_WALL_TOP))
+        weights.append(w)
+
+    w = weight_combo["bin_x_alignment"]
+    if w != 0.0:
+        features.append(BinXAlignment(x_bin=target_bin_x,
+                                      early_weight=args.bin_x_alignment_early))
         weights.append(w)
 
     w = weight_combo["bin_y_alignment"]
@@ -216,6 +224,10 @@ def main():
                         help="ZTableDistance weight(s) — reward height above table (default 0)")
     parser.add_argument("--bin-wall-avoidance",    type=float, nargs="+", default=[0.0],
                         help="BinWallAvoidance weight(s); use negative to penalise (default 0)")
+    parser.add_argument("--bin-x-alignment",       type=float, nargs="+", default=[0.0],
+                        help="BinXAlignment weight(s) toward target bin x-coordinate (default 0)")
+    parser.add_argument("--bin-x-alignment-early", type=float, default=1.0,
+                        help="BinXAlignment early_weight front-loading (default 1.0)")
     parser.add_argument("--bin-y-alignment",       type=float, nargs="+", default=[0.0],
                         help="BinYAlignment weight(s) toward target bin (default 0)")
     parser.add_argument("--bin-y-alignment-early", type=float, default=1.0,
@@ -353,6 +365,7 @@ def main():
         "feature_params":  {
             "height_threshold_z":     args.height_threshold_z,
             "desired_height_z":       args.desired_height_z,
+            "bin_x_alignment_early":  args.bin_x_alignment_early,
             "bin_y_alignment_early":  args.bin_y_alignment_early,
             "table_z":                TABLE_Z,
             "bin_wall_top_z":         BIN_WALL_TOP,

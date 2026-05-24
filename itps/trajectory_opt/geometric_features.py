@@ -314,6 +314,49 @@ class BinYAlignment(Feature):
         return grad_pos, np.zeros_like(quats)
 
 
+class BinXAlignment(Feature):
+    """
+    Encourages the trajectory to align with a target bin's x-coordinate,
+    with optional extra weight on early timesteps for earlier commitment.
+
+    Per-waypoint value: -weight_i * (x_i - x_bin)²
+
+    where weight_i = 1 + early_weight * (1 - i / (k-1))
+
+    At i=0:   weight = 1 + early_weight  (highest pressure)
+    At i=k-1: weight = 1.0               (base pressure)
+
+    Setting early_weight=0 gives uniform x-alignment.
+    Higher early_weight front-loads the commitment to the target bin's x-lane.
+
+    Use with a positive weight.
+
+    Args:
+        x_bin        (float): target bin's x-coordinate.
+        early_weight (float): extra multiplier on early timesteps (default 1.0).
+    """
+
+    def __init__(self, x_bin: float, early_weight: float = 1.0):
+        self.x_bin        = x_bin
+        self.early_weight = early_weight
+
+    def _timestep_weights(self, k: int) -> np.ndarray:
+        return 1.0 + self.early_weight * np.linspace(1.0, 0.0, k)
+
+    def __call__(self, positions: np.ndarray, _quats: np.ndarray) -> np.ndarray:
+        k     = len(positions)
+        x_dev = (positions[:, 0] - self.x_bin) ** 2
+        return -self._timestep_weights(k) * x_dev
+
+    def gradient(self, positions, quats):
+        n     = len(positions)
+        w     = self._timestep_weights(n)
+        x_dev = positions[:, 0] - self.x_bin
+        grad_pos = np.zeros_like(positions)
+        grad_pos[:, 0] = -2.0 * w * x_dev / n
+        return grad_pos, np.zeros_like(quats)
+
+
 class BinWallAvoidance(Feature):
     """
     Soft penalty for trajectories that pass through bin walls.
