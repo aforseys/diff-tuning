@@ -223,7 +223,7 @@ def log_eval_info(logger, info, step, cfg, dataset, is_online):
         f"epch:{num_epochs:.2f}"]
     
     # Log environment-specific evaluation information 
-    if cfg.dataset_repo_id not in ('gmm', 'maze2d'):
+    if cfg.dataset_repo_id not in ('gmm', 'maze2d', 'robosuite'):
         eval_s = info["eval_s"]
         avg_sum_reward = info["avg_sum_reward"]
         pc_success = info["pc_success"]
@@ -439,7 +439,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
             policy.train()
             log_eval_info(logger, eval_info["aggregated"], step, cfg, offline_dataset, is_online=is_online)
             if cfg.wandb.enable:
-                if cfg.dataset_repo_id not in ('gmm', 'maze2d'):
+                if cfg.dataset_repo_id not in ('gmm', 'maze2d', 'robosuite'):
                     logger.log_video(eval_info["video_paths"][0], step, mode="eval")
             logging.info("Resume training")
 

@@ -735,7 +735,7 @@ def eval_robosuite(policy, cfg, seed=None):
             indices = _sample_episode_indices(obs_data, prisms, bins, n_episodes, is_goal_cond, rng)
             location_bins, placement_bins, target_bins = [], [], []
 
-            for idx in indices:
+            for ep_i, idx in enumerate(indices):
                 target_bin  = int(obs_data['bin_idx'][idx])
                 joint_start = obs_data['start_joints'][idx]
 
@@ -769,7 +769,7 @@ def eval_robosuite(policy, cfg, seed=None):
                         obs_batch['episode_goal'] = goal_tensor
 
                     if ep_i == 0 and step == 0:
-                        print("=== EVAL DEBUG (ep=0, step=0) ===")
+                        print(f"=== EVAL DEBUG (ep={ep_i}, step={step}) ===")
                         print("obs_batch shapes:", {k: v.shape for k, v in obs_batch.items()})
                         print("state sample (first obs step):", obs_batch["observation.state"][0, 0])
                         if "observation.image.agentview" in obs_batch:
@@ -804,8 +804,9 @@ def eval_robosuite(policy, cfg, seed=None):
             p = f'chunk{chunk_size}/{cond_label}'
             all_metrics[f'{p}/location_rate']        = float(np.mean([b is not None for b in location_bins]))
             all_metrics[f'{p}/placement_rate']       = float(np.mean([b is not None for b in placement_bins]))
-            all_metrics[f'{p}/location_bin_counts']  = [sum(b == i for b in location_bins  if b is not None) for i in range(n_bins)]
-            all_metrics[f'{p}/placement_bin_counts'] = [sum(b == i for b in placement_bins if b is not None) for i in range(n_bins)]
+            for i in range(n_bins):
+                all_metrics[f'{p}/location_bin_{i}']  = sum(b == i for b in location_bins  if b is not None)
+                all_metrics[f'{p}/placement_bin_{i}'] = sum(b == i for b in placement_bins if b is not None)
             if is_goal_cond:
                 all_metrics[f'{p}/correct_location_rate']  = float(np.mean([b == t for b, t in zip(location_bins, target_bins)]))
                 all_metrics[f'{p}/correct_placement_rate'] = float(np.mean([b == t for b, t in zip(placement_bins, target_bins)]))
