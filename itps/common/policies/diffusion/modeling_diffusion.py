@@ -801,7 +801,7 @@ class EBMDiffusionModel(nn.Module):
 
         # Validate main batch input
         assert set(batch).issuperset({"observation.state", "action"})
-        assert "observation.images" in batch or "observation.environment_state" in batch
+        assert "observation.images" in batch or "observation.environment_state" in batch or "observation.state" in batch
         n_obs_steps = batch["observation.state"].shape[1]
         horizon = batch["action"].shape[1]
         assert horizon == self.config.horizon
@@ -813,13 +813,13 @@ class EBMDiffusionModel(nn.Module):
                 pos_batch, neg_batch = tune_batch['pref']
                 for b in (pos_batch, neg_batch):
                     assert set(b).issuperset({"observation.state", "action"})
-                    assert "observation.images" in b or "observation.environment_state" in b
+                    assert "observation.images" in b or "observation.environment_state" in b or "observation.state" in b
                     assert b["action"].shape[1] == self.config.horizon
                     assert b["observation.state"].shape[1] == self.config.n_obs_steps
             if 'demo' in tune_batch:
                 demo_batch = tune_batch['demo']
                 assert set(demo_batch).issuperset({"observation.state", "action"})
-                assert "observation.images" in demo_batch or "observation.environment_state" in demo_batch
+                assert "observation.images" in demo_batch or "observation.environment_state" in demo_batch or "observation.state" in demo_batch
                 assert demo_batch["action"].shape[1] == self.config.horizon
                 assert demo_batch["observation.state"].shape[1] == self.config.n_obs_steps
 
