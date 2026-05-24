@@ -5,7 +5,7 @@
 seed: 100000
 dataset_repo_id: robosuite
 condition_type: unconditional
-dataset_root: data/robosuite/demo/demo_can_10prism_10starts.hdf5   # path to .hdf5 demo file
+dataset_root: data/robosuite/demos/demo_can_10prism_10starts.hdf5   # path to .hdf5 demo file
 past_action_visible: false
 
 wandb:
@@ -18,17 +18,17 @@ hydra:
   job:
     name: ${now:%H.%M.%S}_${env.name}_${policy.name}_visual
 
-device: cuda
+device: cuda:1
 use_amp: True
 
 training:
-  offline_steps: 100000
+  offline_steps: 400000
   online_steps: 0
-  eval_freq: 10000
-  save_freq: 10000
+  eval_freq: 20000
+  save_freq: 20000
   log_freq: 500
   save_checkpoint: true
-  batch_size: 256
+  batch_size: 64
   num_workers: 4
   grad_clip_norm: 10
   lr: 1.0e-4
