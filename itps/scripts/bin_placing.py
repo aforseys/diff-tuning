@@ -633,13 +633,13 @@ def make_env(has_renderer=True, camera="frontview",
     )
 
 
-def make_eval_env(img_size=84, mujoco_object=None):
+def make_eval_env(img_size=84, mujoco_object=None, render=False):
     """BinPlacing env for diffusion policy evaluation: JOINT_POSITION control with camera obs."""
     return BinPlacing(
         robots="Panda",
         controller_configs=_composite_cfg("JOINT_POSITION"),
         mujoco_object=mujoco_object,
-        has_renderer=False,
+        has_renderer=render,
         has_offscreen_renderer=True,
         render_camera="agentview",
         use_camera_obs=True,

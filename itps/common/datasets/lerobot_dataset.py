@@ -17,6 +17,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Callable
+import numpy as np
 
 import datasets
 import torch
@@ -77,6 +78,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         video_backend: str | None = None,
         goal_horizon: int | None = 60,
         past_action_visible: bool = False,
+        load_images: bool = True,
     ):
         super().__init__()
         self.repo_id = repo_id
@@ -88,7 +90,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
         # load data from hub or locally when root is provided
         # TODO(rcadene, aliberts): implement faster transfer
         # https://huggingface.co/docs/huggingface_hub/en/guides/download#faster-downloads
-        self.hf_dataset = load_hf_dataset(repo_id, CODEBASE_VERSION, root, split, self.goal_horizon, past_action_visible=past_action_visible)
+        self.hf_dataset = load_hf_dataset(repo_id, CODEBASE_VERSION, root, split, self.goal_horizon, past_action_visible=past_action_visible, load_images=load_images)
+        self._images = getattr(self.hf_dataset, '_images', None)  # (N, 3, H, W) uint8 or None
         _custom = ('maze2d', 'zarr', 'gmm', 'robosuite')
         if split == "train" and not any(k in repo_id for k in _custom):
             self.episode_data_index = load_episode_data_index(repo_id, CODEBASE_VERSION, root)
@@ -97,6 +100,11 @@ class LeRobotDataset(torch.utils.data.Dataset):
             self.hf_dataset = reset_episode_index(self.hf_dataset)
         if any(k in repo_id for k in _custom):
             self.stats = calc_stats_from_hf_dataset(self.hf_dataset)
+            if self._images is not None:
+                self.stats['observation.image.agentview'] = {
+                    'max': torch.ones(3, 1, 1),
+                    'min': torch.zeros(3, 1, 1),
+                }
             self.info = {'codebase_version': 'v0.0',
                          'fps': 10,
                          'video': False,}
@@ -173,13 +181,26 @@ class LeRobotDataset(torch.utils.data.Dataset):
         item = self.hf_dataset[idx]
 
         if self.delta_timestamps is not None:
-            item = load_previous_and_future_frames(
-                item,
-                self.hf_dataset,
-                self.episode_data_index,
-                self.delta_timestamps,
-                self.tolerance_s,
-            )
+            if self._images is not None and 'observation.image.agentview' in self.delta_timestamps:
+                # Images stored outside hf_dataset — swap image key for 'index' with same timestamps
+                # so load_previous_and_future_frames returns the global frame indices we need.
+                img_ts = self.delta_timestamps['observation.image.agentview']
+                dt = {k: v for k, v in self.delta_timestamps.items() if k != 'observation.image.agentview'}
+                dt['index'] = img_ts
+                item = load_previous_and_future_frames(item, self.hf_dataset, self.episode_data_index, dt, self.tolerance_s)
+                indices = np.array(item.pop('index'))
+                item.pop('index_is_pad', None)
+                item['observation.image.agentview'] = torch.from_numpy(
+                    self._images[indices].astype(np.float32) / 255.0
+                )  # (n_obs_steps, 3, H, W)
+            else:
+                item = load_previous_and_future_frames(
+                    item,
+                    self.hf_dataset,
+                    self.episode_data_index,
+                    self.delta_timestamps,
+                    self.tolerance_s,
+                )
 
         if self.video:
             item = load_from_videos(
@@ -189,6 +210,14 @@ class LeRobotDataset(torch.utils.data.Dataset):
                 self.tolerance_s,
                 self.video_backend,
             )
+
+        for cam in self.camera_keys:
+            if cam in item:
+                img = item[cam]
+                if isinstance(img, torch.Tensor) and img.dtype == torch.uint8:
+                    item[cam] = img.float() / 255.0
+                elif isinstance(img, np.ndarray) and img.dtype == np.uint8:
+                    item[cam] = torch.from_numpy(img).float() / 255.0
 
         if self.image_transforms is not None:
             for cam in self.camera_keys:

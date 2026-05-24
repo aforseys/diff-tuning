@@ -113,7 +113,7 @@ def get_hf_dataset_safe_version(repo_id: str, version: str) -> str:
         return version
 
 
-def load_hf_dataset(repo_id: str, version: str, root: Path, split: str, goal_horizon: int=60, past_action_visible: bool=False) -> datasets.Dataset:
+def load_hf_dataset(repo_id: str, version: str, root: Path, split: str, goal_horizon: int=60, past_action_visible: bool=False, load_images: bool=True) -> datasets.Dataset:
     """hf_dataset contains all the observations, states, actions, rewards, etc."""
     if root is not None:
         if 'robosuite' in repo_id:  # robosuite demos from collect_demos.py
@@ -143,14 +143,14 @@ def load_hf_dataset(repo_id: str, version: str, root: Path, split: str, goal_hor
                         prev_action[1:] = delta_joint[:-1]
                         obs_state = np.concatenate([obs_state, prev_action], axis=1)  # (T, 16)
 
-                    imgs = agentview[:T].astype(np.float32) / 255.0  # (T, H, W, 3)
-                    imgs = imgs.transpose(0, 3, 1, 2)                 # (T, 3, H, W)
+                    if load_images:
+                        imgs = agentview[:T].transpose(0, 3, 1, 2)  # (T, 3, H, W) uint8
+                        images.append(imgs)
 
                     goal_onehot = np.zeros(4, dtype=np.float32)
                     goal_onehot[int(dg.attrs['bin_idx'])] = 1.0
 
                     obs_states.append(obs_state)
-                    images.append(imgs)
                     actions.append(delta_joint.astype(np.float32))
                     goals.append(np.tile(goal_onehot, (T, 1)))
                     episode_indices.append(np.full(T, ep_idx, dtype=np.int64))
@@ -161,15 +161,20 @@ def load_hf_dataset(repo_id: str, version: str, root: Path, split: str, goal_hor
 
             data_dict = {
                 'observation.state':           np.concatenate(obs_states, axis=0),
-                'observation.image.agentview': np.concatenate(images, axis=0),
                 'action':                      np.concatenate(actions, axis=0),
-                'episode_goal':                np.concatenate(goals, axis=0),
+                'episode_goal':                np.concatenate(goals,     axis=0),
                 'episode_index':               np.concatenate(episode_indices, axis=0),
                 'frame_index':                 np.concatenate(frame_indices, axis=0),
                 'timestamp':                   np.concatenate(timestamps, axis=0),
                 'index':                       np.concatenate(global_indices, axis=0),
             }
             hf_dataset = datasets.Dataset.from_dict(data_dict)
+            # Images stored separately to avoid PyArrow int32 offset overflow on large datasets.
+            # Attached as hf_dataset._images (uint8, shape N x C x H x W); fetched by global index in __getitem__.
+            if load_images:
+                hf_dataset._images = np.concatenate(images, axis=0)  # (N, 3, H, W) uint8
+            else:
+                hf_dataset._images = None
 
         elif 'hdf5' in root or "maze" in root: # maze2d dataset
             import numpy as np

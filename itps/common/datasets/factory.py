@@ -99,12 +99,16 @@ def make_dataset(cfg, split: str = "train") -> LeRobotDataset | MultiLeRobotData
         #     image_transforms=image_transforms,
         #     video_backend=cfg.video_backend,
         # )
+        load_images = any(
+            'image' in k for k in cfg.policy.get('input_shapes', {}).keys()
+        )
         dataset_kwargs = dict(
             split=split,
             delta_timestamps=cfg.training.get("delta_timestamps"),
             image_transforms=image_transforms,
             video_backend=cfg.video_backend,
             past_action_visible=cfg.get("past_action_visible", False),
+            load_images=load_images,
         )
 
         # Add goal horizon if necessary 
