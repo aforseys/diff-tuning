@@ -1,3 +1,5 @@
+#!/bin/bash
+
 # Initialize the module command first source
 source /etc/profile
 
