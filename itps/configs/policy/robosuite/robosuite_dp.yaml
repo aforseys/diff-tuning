@@ -56,6 +56,9 @@ eval:
   img_size: 84
   object: can
   action_chunk_sizes: [16, 32]
+  metrics: []  # e.g. [x_alignment, y_alignment, z_table_dist, goal_progress]
+  methods: ['ddim']
+  opt_params: null
 
 policy:
   name: diffusion
