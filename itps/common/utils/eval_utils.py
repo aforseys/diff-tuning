@@ -655,7 +655,7 @@ def _sample_episode_indices(obs_data, prisms, bins, n_episodes, is_goal_cond, rn
     return rng.choice(candidates, size=n_episodes, replace=len(candidates) < n_episodes)
 
 
-def eval_robosuite(policy, cfg, seed=None):
+def eval_robosuite(policy, cfg, seed=None, render=False):
     """
     Evaluate the robosuite policy against fixed observations from cfg.eval.obs_file.
 
@@ -728,7 +728,7 @@ def eval_robosuite(policy, cfg, seed=None):
         return result
 
     all_metrics = {}
-    env = make_eval_env(img_size=img_size, mujoco_object=obj)
+    env = make_eval_env(img_size=img_size, mujoco_object=obj, render=render)
 
     for chunk_size in chunk_sizes:
         for cond_label, prisms, bins in conditions:
@@ -789,6 +789,8 @@ def eval_robosuite(policy, cfg, seed=None):
                         action        = np.concatenate([target_joints, [gripper_cmd]])
                         for _ in range(steps_per_action):
                             obs, _, _, _ = env.step(action)
+                            if render:
+                                env.render()
                         prev_action = delta.astype(np.float32)
                         state_buf.append(get_state(obs, gripper_cmd, prev_action))
                         image_buf.append(get_image(obs))

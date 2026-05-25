@@ -450,7 +450,8 @@ def main(
     config_overrides: list[str] | None = None,
     viz: bool | None = False,
     training_samples: Path | None = None,
-    save_samples: str | None = None
+    save_samples: str | None = None,
+    render: bool = False,
 ):
     assert (pretrained_policy_path is None) ^ (hydra_cfg_path is None)
     if pretrained_policy_path is not None:
@@ -472,7 +473,7 @@ def main(
 
     log_output_dir(out_dir)
 
-    if hydra_cfg.env.name not in ('gmm', 'maze2d'):  
+    if hydra_cfg.env.name not in ('gmm', 'maze2d', 'robosuite'):
         logging.info("Making environment.")
         env = make_env(hydra_cfg)
 
@@ -505,6 +506,10 @@ def main(
                 seed=hydra_cfg.seed,
                 )
         
+        elif hydra_cfg.env.name == 'robosuite':
+            from itps.common.utils.eval_utils import eval_robosuite
+            info = eval_robosuite(policy, hydra_cfg, seed=hydra_cfg.seed, render=render)
+
         elif hydra_cfg.env.name == 'maze2d':
             # info = eval_policy(
             #     env,
@@ -531,7 +536,7 @@ def main(
     with open(Path(out_dir) / "eval_info.json", "w") as f:
         json.dump(info, f, indent=2)
 
-    if hydra_cfg.env.name not in ('gmm', 'maze2d'):  
+    if hydra_cfg.env.name not in ('gmm', 'maze2d', 'robosuite'):
          env.close()
 
     logging.info("End of eval")
@@ -597,6 +602,11 @@ if __name__ == "__main__":
         help="Visualize Evaluation",
     )
     parser.add_argument(
+        "--render",
+        action="store_true",
+        help="Render robosuite environment during evaluation",
+    )
+    parser.add_argument(
         "--save-samples",
         type=str,
         default=None,
@@ -621,5 +631,6 @@ if __name__ == "__main__":
             out_dir=args.out_dir,
             config_overrides=args.overrides,
             viz=args.viz,
-            save_samples=args.save_samples
+            save_samples=args.save_samples,
+            render=args.render,
         )
