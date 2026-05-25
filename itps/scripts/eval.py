@@ -452,6 +452,7 @@ def main(
     training_samples: Path | None = None,
     save_samples: str | None = None,
     render: bool = False,
+    n_viz_samples: int = 0,
 ):
     assert (pretrained_policy_path is None) ^ (hydra_cfg_path is None)
     if pretrained_policy_path is not None:
@@ -508,7 +509,7 @@ def main(
         
         elif hydra_cfg.env.name == 'robosuite':
             from itps.common.utils.eval_utils import eval_robosuite
-            info = eval_robosuite(policy, hydra_cfg, seed=hydra_cfg.seed, render=render)
+            info = eval_robosuite(policy, hydra_cfg, seed=hydra_cfg.seed, render=render, n_viz_samples=n_viz_samples)
 
         elif hydra_cfg.env.name == 'maze2d':
             # info = eval_policy(
@@ -613,6 +614,12 @@ if __name__ == "__main__":
         help="Path (without extension) to save generated samples as an .npz file.",
     )
     parser.add_argument(
+        "--viz-samples",
+        type=int,
+        default=0,
+        help="Number of trajectories to sample and visualize as EEF fan plot at each episode start (robosuite only).",
+    )
+    parser.add_argument(
         "overrides",
         nargs="*",
         help="Any key=value arguments to override config values (use dots for.nested=overrides)",
@@ -633,4 +640,5 @@ if __name__ == "__main__":
             viz=args.viz,
             save_samples=args.save_samples,
             render=args.render,
+            n_viz_samples=args.viz_samples,
         )
