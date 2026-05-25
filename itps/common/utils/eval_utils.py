@@ -866,9 +866,10 @@ def eval_robosuite(policy, cfg, seed=None, render=False, n_viz_samples=0):
                     obs_batch = {
                         'observation.state':
                             torch.tensor(np.stack(state_buf), dtype=torch.float32).unsqueeze(0).to(device),
-                        'observation.image.agentview':
-                            torch.tensor(np.stack(image_buf), dtype=torch.float32).unsqueeze(0).to(device),
                     }
+                    if 'observation.image.agentview' in policy.config.input_shapes:
+                        obs_batch['observation.image.agentview'] = \
+                            torch.tensor(np.stack(image_buf), dtype=torch.float32).unsqueeze(0).to(device)
                     if is_goal_cond:
                         obs_batch['episode_goal'] = goal_tensor
 
