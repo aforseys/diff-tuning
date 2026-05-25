@@ -5,7 +5,7 @@
 seed: 100000
 dataset_repo_id: robosuite
 condition_type: unconditional
-dataset_root: data/robosuite/demos/demo_can_10prism_10starts.hdf5   # path to .hdf5 demo file
+dataset_root: data/demo_can_10prism_10starts.hdf5   # path to .hdf5 demo file
 past_action_visible: false
 
 wandb:
@@ -47,7 +47,7 @@ training:
 
 eval:
   n_episodes: 50
-  obs_file: data/robosuite/obs/obs_can_10prism_10starts.npz   # path to observations .npz
+  obs_file: data/obs_can_10prism_10starts.npz   # path to observations .npz
   train_prisms: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
   test_prisms: []
   train_bins: null
