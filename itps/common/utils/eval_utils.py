@@ -655,7 +655,80 @@ def _sample_episode_indices(obs_data, prisms, bins, n_episodes, is_goal_cond, rn
     return rng.choice(candidates, size=n_episodes, replace=len(candidates) < n_episodes)
 
 
-def eval_robosuite(policy, cfg, seed=None, render=False):
+def _viz_sampled_trajectories(env, obs, policy, obs_batch, n_viz_samples, n_joints, chunk_size, start_idx, device):
+    """Sample n_viz_samples trajectories, place sphere markers at EEF waypoints, render at high res."""
+    import mujoco
+    import matplotlib.pyplot as plt
+    import colorsys
+
+    # Batch obs n_viz_samples times → different noise initializations → different trajectories
+    batched = {k: v.repeat(n_viz_samples, *([1] * (v.dim() - 1))) for k, v in obs_batch.items()}
+    with torch.no_grad():
+        _, full_trajs = policy.run_inference(batched, methods=['ddim'], return_full=True)
+    trajs = full_trajs[0][:, start_idx:, :7].cpu().numpy()  # (N, T, 7) — full predicted future
+
+    # FK: compute EEF path for each sample without stepping physics
+    saved_qpos = env.sim.data.qpos.copy()
+    start_joints = obs["robot0_joint_pos"].copy()
+    all_eef = []
+    for i in range(n_viz_samples):
+        eef_path = []
+        current = start_joints.copy()
+        for t in range(trajs.shape[1]):
+            current = current + trajs[i, t]
+            env.sim.data.qpos[:n_joints] = current
+            env.sim.forward()
+            eef_path.append(env._eef_pos().copy())
+        all_eef.append(np.array(eef_path))
+    env.sim.data.qpos[:] = saved_qpos
+    env.sim.forward()
+
+    # Use the existing offscreen render context — inject sphere geoms before rendering
+    VIZ_W, VIZ_H = 640, 480
+    cam_id = env.sim.model.camera_name2id('agentview')
+    ctx = env.sim._render_context_offscreen
+    ctx.cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
+    ctx.cam.fixedcamid = cam_id
+
+    mujoco.mjv_updateScene(
+        env.sim.model._model, env.sim.data._data,
+        ctx.vopt, ctx.pert, ctx.cam, mujoco.mjtCatBit.mjCAT_ALL, ctx.scn
+    )
+
+    # Inject sphere geoms — subsample to ~10 waypoints per trajectory
+    step = max(1, trajs.shape[1] // 15)
+    for i, eef_path in enumerate(all_eef):
+        h = i / n_viz_samples
+        r, g, b = colorsys.hsv_to_rgb(h, 0.9, 0.95)
+        rgba = np.array([r, g, b, 0.8], dtype=np.float32)
+        for pos in eef_path[::step]:
+            if ctx.scn.ngeom >= ctx.scn.maxgeom:
+                break
+            mujoco.mjv_initGeom(
+                ctx.scn.geoms[ctx.scn.ngeom],
+                mujoco.mjtGeom.mjGEOM_SPHERE,
+                np.array([0.012, 0.012, 0.012]),
+                pos.astype(np.float64),
+                np.eye(3, dtype=np.float64).flatten(),
+                rgba,
+            )
+            ctx.scn.ngeom += 1
+
+    # Render directly — don't use ctx.render() which would call mjv_updateScene again and wipe our geoms
+    ctx.update_offscreen_size(VIZ_W, VIZ_H)
+    viewport = mujoco.MjrRect(0, 0, VIZ_W, VIZ_H)
+    mujoco.mjr_render(viewport, ctx.scn, ctx.con)
+    img = ctx.read_pixels(VIZ_W, VIZ_H)[::-1]  # flip bottom-up → top-down
+
+    fig, ax = plt.subplots(figsize=(9, 7))
+    ax.imshow(img)
+    ax.axis('off')
+    ax.set_title(f'{n_viz_samples} sampled EEF trajectories', fontsize=13)
+    plt.tight_layout()
+    plt.show(block=True)
+
+
+def eval_robosuite(policy, cfg, seed=None, render=False, n_viz_samples=0):
     """
     Evaluate the robosuite policy against fixed observations from cfg.eval.obs_file.
 
@@ -682,7 +755,7 @@ def eval_robosuite(policy, cfg, seed=None, render=False):
     steps_per_action = cfg.eval.get('steps_per_action', 2)
     is_goal_cond     = 'episode_goal' in policy.config.input_shapes
     chunk_sizes      = list(cfg.eval.get('action_chunk_sizes', [policy.config.n_action_steps]))
-    max_steps        = cfg.eval.get('max_episode_steps', 200)
+    max_steps        = 1200
     img_size         = cfg.eval.get('img_size', 84)
     obj              = OBJECT_MAP.get(cfg.eval.get('object', 'can'))
     device           = next(policy.parameters()).device
@@ -731,6 +804,7 @@ def eval_robosuite(policy, cfg, seed=None, render=False):
     env = make_eval_env(img_size=img_size, mujoco_object=obj, render=render)
 
     for chunk_size in chunk_sizes:
+        rng = np.random.default_rng(seed)
         for cond_label, prisms, bins in conditions:
             indices = _sample_episode_indices(obs_data, prisms, bins, n_episodes, is_goal_cond, rng)
             location_bins, placement_bins, target_bins = [], [], []
@@ -750,19 +824,11 @@ def eval_robosuite(policy, cfg, seed=None, render=False):
                     env.grasp_obj.joints[0],
                     np.concatenate([eef_pos, np.array([1, 0, 0, 0])])
                 )
-                # Force-close gripper fingers and stabilize, matching _reset_internal
-                for i in range(env.sim.model.njnt):
-                    if "finger_joint" in env.sim.model.joint_id2name(i):
-                        env.sim.data.qpos[env.sim.model.jnt_qposadr[i]] = 0.0
-                for i in range(env.sim.model.nu):
-                    if "finger_joint" in env.sim.model.actuator_id2name(i):
-                        env.sim.data.ctrl[i] = 0.0
                 env.sim.forward()
+                # Hold arm at joint_start via full controller while closing gripper to stabilize grasp
+                hold_act = np.concatenate([joint_start, [1.0]])
                 for _ in range(50):
-                    env.sim.step()
-                env.sim.forward()
-                # Hold current joint positions (JOINT_POSITION controller) and close gripper
-                hold_act = np.concatenate([env.sim.data.qpos[:n_joints], [1.0]])
+                    env.step(hold_act)
                 obs, _, _, _ = env.step(hold_act)
 
                 gripper_cmd = 1.0
@@ -795,6 +861,9 @@ def eval_robosuite(policy, cfg, seed=None, render=False):
                             print(f"image range: [{img.min():.3f}, {img.max():.3f}]")
                         print("=================================")
 
+                    if n_viz_samples > 0 and step == 0:
+                        _viz_sampled_trajectories(env, obs, policy, obs_batch, n_viz_samples, n_joints, chunk_size, policy.config.n_obs_steps - 1, device)
+
                     with torch.no_grad():
                         _, full_trajs = policy.run_inference(obs_batch, methods=['ddim'], return_full=True)
                     start = policy.config.n_obs_steps - 1
@@ -822,6 +891,8 @@ def eval_robosuite(policy, cfg, seed=None, render=False):
                         prev_action = delta.astype(np.float32)
                         state_buf.append(get_state(obs, gripper_cmd, prev_action))
                         image_buf.append(get_image(obs))
+                        if gripper_cmd < 0.5:
+                            print(f"  ep={ep_i} step={step} gripper_cmd={gripper_cmd:.3f}")
                         step += 1
                         if step >= max_steps or any(env.placement_success(b) for b in range(n_bins)):
                             break
