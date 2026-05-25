@@ -603,6 +603,9 @@ class BinPlacing(ManipulationEnv):
 def _composite_cfg(controller_type):
     """Build a BASIC composite controller config for Panda with the given arm controller."""
     part = load_part_controller_config(default_controller=controller_type)
+    if controller_type == "JOINT_POSITION":
+        # Send absolute target joint positions; default "delta" mode expects [-1,1] normalized inputs
+        part["input_type"] = "absolute"
     part["gripper"] = {"type": "GRIP"}
     return {"type": "BASIC", "body_parts": {"right": part}}
 
