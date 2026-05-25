@@ -755,7 +755,7 @@ def eval_robosuite(policy, cfg, seed=None, render=False, n_viz_samples=0):
     steps_per_action = cfg.eval.get('steps_per_action', 2)
     is_goal_cond     = 'episode_goal' in policy.config.input_shapes
     chunk_sizes      = list(cfg.eval.get('action_chunk_sizes', [policy.config.n_action_steps]))
-    max_steps        = 1200
+    max_steps        = cfg.eval.get('max_episode_steps', 300)
     img_size         = cfg.eval.get('img_size', 84)
     obj              = OBJECT_MAP.get(cfg.eval.get('object', 'can'))
     device           = next(policy.parameters()).device
@@ -771,6 +771,23 @@ def eval_robosuite(policy, cfg, seed=None, render=False, n_viz_samples=0):
 
     obs_data = np.load(obs_file)
     n_joints = obs_data['start_joints'].shape[1]
+
+    metrics      = list(cfg.eval.get('metrics', []))
+    eval_methods = list(cfg.eval.get('methods', ['ddim']))
+    opt_params   = list(cfg.eval.get('opt_params') or [])
+
+    method_variants = []
+    if 'ired' in eval_methods:
+        for i, op in enumerate(opt_params):
+            label = f"ired_{op['n_opt']}steps"
+            if op.get('t_subset') is not None:
+                label += f"_last{op['t_subset']}"
+            if op.get('denoise'):
+                label += '_denoise'
+            method_variants.append((label, i))
+    if 'ddim' in eval_methods:
+        ddim_idx = len(opt_params) if 'ired' in eval_methods else 0
+        method_variants.append(('ddim', ddim_idx))
 
     conditions = _robosuite_conditions(is_goal_cond, train_prisms, test_prisms, train_bins, test_bins)
     if not conditions:
@@ -803,11 +820,13 @@ def eval_robosuite(policy, cfg, seed=None, render=False, n_viz_samples=0):
     all_metrics = {}
     env = make_eval_env(img_size=img_size, mujoco_object=obj, render=render)
 
-    for chunk_size in chunk_sizes:
+    for method_label, method_traj_idx in method_variants:
+      for chunk_size in chunk_sizes:
         rng = np.random.default_rng(seed)
         for cond_label, prisms, bins in conditions:
             indices = _sample_episode_indices(obs_data, prisms, bins, n_episodes, is_goal_cond, rng)
             location_bins, placement_bins, target_bins = [], [], []
+            feat_scores = {m: [] for m in metrics}
 
             for ep_i, idx in enumerate(indices):
                 target_bin  = int(obs_data['bin_idx'][idx])
@@ -841,6 +860,9 @@ def eval_robosuite(policy, cfg, seed=None, render=False, n_viz_samples=0):
                     goal[target_bin] = 1.0
                     goal_tensor = torch.tensor(goal).unsqueeze(0).to(device)
 
+                eef_pos_buf  = []
+                eef_quat_buf = []
+
                 step = 0
                 while step < max_steps:
                     obs_batch = {
@@ -865,9 +887,9 @@ def eval_robosuite(policy, cfg, seed=None, render=False, n_viz_samples=0):
                         _viz_sampled_trajectories(env, obs, policy, obs_batch, n_viz_samples, n_joints, chunk_size, policy.config.n_obs_steps - 1, device)
 
                     with torch.no_grad():
-                        _, full_trajs = policy.run_inference(obs_batch, methods=['ddim'], return_full=True)
+                        _, full_trajs = policy.run_inference(obs_batch, methods=eval_methods, opt_params=opt_params, return_full=True)
                     start = policy.config.n_obs_steps - 1
-                    chunk = full_trajs[0][0][start:start + chunk_size].cpu().numpy()
+                    chunk = full_trajs[method_traj_idx][0][start:start + chunk_size].cpu().numpy()
 
                     if ep_i == 0 and step == 0:
                         print(f"=== ACTION DEBUG (chunk_size={chunk_size}) ===")
@@ -891,6 +913,8 @@ def eval_robosuite(policy, cfg, seed=None, render=False, n_viz_samples=0):
                         prev_action = delta.astype(np.float32)
                         state_buf.append(get_state(obs, gripper_cmd, prev_action))
                         image_buf.append(get_image(obs))
+                        eef_pos_buf.append(obs["robot0_eef_pos"].copy())
+                        eef_quat_buf.append(obs["robot0_eef_quat"].copy())
                         if gripper_cmd < 0.5:
                             print(f"  ep={ep_i} step={step} gripper_cmd={gripper_cmd:.3f}")
                         step += 1
@@ -902,7 +926,31 @@ def eval_robosuite(policy, cfg, seed=None, render=False, n_viz_samples=0):
                 placement_bins.append(result['placement'])
                 target_bins.append(target_bin)
 
-            p = f'chunk{chunk_size}/{cond_label}'
+                if metrics and eef_pos_buf:
+                    from itps.trajectory_opt.geometric_features import (
+                        BinXAlignment, BinYAlignment, ZTableDistance, GoalProgress
+                    )
+                    from itps.scripts.bin_placing import BinTableArena
+                    positions = np.array(eef_pos_buf)
+                    quats     = np.array(eef_quat_buf)
+                    bx, by    = BinTableArena.BIN_XY[target_bin]
+                    goal_pos  = obs_data['goal_pos'][idx]
+                    feat_map  = {
+                        'x_alignment':   BinXAlignment(x_bin=bx),
+                        'y_alignment':   BinYAlignment(y_bin=by),
+                        'z_table_dist':  ZTableDistance(table_z=0.8),
+                        'goal_progress': GoalProgress(goal_pos=goal_pos),
+                    }
+                    for m in metrics:
+                        if m in feat_map:
+                            scores = feat_map[m](positions, quats)
+                            feat_scores[m].append({'mean': float(scores.mean()), 'sum': float(scores.sum())})
+
+            p = f'{method_label}/chunk{chunk_size}/{cond_label}'
+            for m, ep_list in feat_scores.items():
+                if ep_list:
+                    all_metrics[f'{p}/{m}_mean'] = float(np.mean([e['mean'] for e in ep_list]))
+                    all_metrics[f'{p}/{m}_sum']  = float(np.mean([e['sum']  for e in ep_list]))
             all_metrics[f'{p}/location_rate']        = float(np.mean([b is not None for b in location_bins]))
             all_metrics[f'{p}/placement_rate']       = float(np.mean([b is not None for b in placement_bins]))
             for i in range(n_bins):
