@@ -745,9 +745,7 @@ def eval_robosuite(policy, cfg, seed=None, render=False, n_viz_samples=0):
     rng = np.random.default_rng(seed)
 
     from collections import deque
-    import sys, os
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
-    from scripts.bin_placing import make_eval_env, OBJECT_MAP
+    from itps.scripts.bin_placing import make_eval_env, OBJECT_MAP
 
     n_episodes       = cfg.eval.n_episodes
     n_bins           = 4
