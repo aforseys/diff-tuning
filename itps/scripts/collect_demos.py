@@ -215,7 +215,7 @@ def main():
     parser.add_argument("--record-every",   type=int, default=2,
                         help="Record a snapshot every N physics steps (default 2, gives 10 Hz at 20 Hz control)")
     parser.add_argument("--n-spline-pts",   type=int, default=150,
-                        help="Spline interpolation points for path following (default 200)")
+                        help="Spline interpolation points for path following (default 150)")
     parser.add_argument("--gripper-steps",  type=int, default=25,
                         help="Gripper-open steps after reaching goal (default 25, ~1.25s at 20 Hz)")
     parser.add_argument("--img-size",       type=int, default=84,
