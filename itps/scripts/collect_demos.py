@@ -85,15 +85,15 @@ def _snapshot(obs, use_wrist):
     return snap
 
 
-def collect_episode(env, init_obs, waypoints, goal_xyz, target_bin, record_every=5,
-                    gripper_steps=30, use_wrist=True, n_spline_pts=200):
+def collect_episode(env, init_obs, waypoints, goal_xyz, target_bin, record_every=2,
+                    gripper_steps=60, use_wrist=True, n_spline_pts=75):
     """
     Execute a spline and record observations at a fixed physics-step rate.
 
-    Snapshots are taken every `record_every` physics steps, so longer
-    trajectories naturally produce more observations.  The spline is
-    interpolated to `n_spline_pts` targets purely for path-following
-    resolution; recording is decoupled from that count.
+    Snapshots are taken every `record_every` physics steps (default 2 → 10 Hz at 20 Hz control).
+    The spline is interpolated to `n_spline_pts` targets purely for path-following resolution;
+    recording is decoupled from that count. Early exit triggers when EEF is within 3 cm of goal.
+    Gripper opens for `gripper_steps` steps after reaching goal (default 60 → ~3s at 20 Hz).
 
     Returns:
         snapshots   : list of T+1 snapshot dicts (initial + one per record)
@@ -130,7 +130,7 @@ def collect_episode(env, init_obs, waypoints, goal_xyz, target_bin, record_every
     # --- Spline phase: gripper closed ---
     goal_xyz = targets[-1]
     for target_xyz in targets:
-        if np.linalg.norm(goal_xyz - env._eef_pos()) < 0.010:
+        if np.linalg.norm(goal_xyz - env._eef_pos()) < 0.030:
             break
 
         moved = False
@@ -140,7 +140,7 @@ def collect_episode(env, init_obs, waypoints, goal_xyz, target_bin, record_every
             if np.linalg.norm(delta) < 0.010:
                 break
             action     = np.zeros(action_dim)
-            action[:3] = np.clip(delta / 0.10, -1.0, 1.0)
+            action[:3] = np.clip(delta / 0.05, -1.0, 1.0)
             action[-1] = 1.0
             _step(action, 1.0)
             moved = True
@@ -214,10 +214,10 @@ def main():
                         help="Output HDF5 file path")
     parser.add_argument("--record-every",   type=int, default=2,
                         help="Record a snapshot every N physics steps (default 2, gives 10 Hz at 20 Hz control)")
-    parser.add_argument("--n-spline-pts",   type=int, default=150,
-                        help="Spline interpolation points for path following (default 150)")
-    parser.add_argument("--gripper-steps",  type=int, default=25,
-                        help="Gripper-open steps after reaching goal (default 25, ~1.25s at 20 Hz)")
+    parser.add_argument("--n-spline-pts",   type=int, default=75,
+                        help="Spline interpolation points for path following (default 75)")
+    parser.add_argument("--gripper-steps",  type=int, default=60,
+                        help="Gripper-open steps after reaching goal (default 60, ~3s at 20 Hz)")
     parser.add_argument("--img-size",       type=int, default=84,
                         help="Camera image resolution (default 84)")
     parser.add_argument("--no-wrist",       action="store_true",
