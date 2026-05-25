@@ -913,8 +913,6 @@ def eval_robosuite(policy, cfg, seed=None, render=False, n_viz_samples=0):
                         image_buf.append(get_image(obs))
                         eef_pos_buf.append(obs["robot0_eef_pos"].copy())
                         eef_quat_buf.append(obs["robot0_eef_quat"].copy())
-                        if gripper_cmd < 0.5:
-                            print(f"  ep={ep_i} step={step} gripper_cmd={gripper_cmd:.3f}")
                         step += 1
                         if step >= max_steps or any(env.placement_success(b) for b in range(n_bins)):
                             break
