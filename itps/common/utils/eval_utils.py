@@ -743,9 +743,27 @@ def eval_robosuite(policy, cfg, seed=None, render=False):
                 env.sim.data.qpos[:n_joints] = joint_start
                 env.sim.data.qvel[:n_joints] = 0.0
                 env.sim.forward()
-                zero_act = np.zeros(env.action_spec[0].shape)
-                zero_act[-1] = 1.0
-                obs, _, _, _ = env.step(zero_act)
+                # Re-place object at new EEF so the robot is grasping it
+                # (_reset_internal placed it at the default rest-pose EEF, which moved when we teleported)
+                eef_pos = env._eef_pos()
+                env.sim.data.set_joint_qpos(
+                    env.grasp_obj.joints[0],
+                    np.concatenate([eef_pos, np.array([1, 0, 0, 0])])
+                )
+                # Force-close gripper fingers and stabilize, matching _reset_internal
+                for i in range(env.sim.model.njnt):
+                    if "finger_joint" in env.sim.model.joint_id2name(i):
+                        env.sim.data.qpos[env.sim.model.jnt_qposadr[i]] = 0.0
+                for i in range(env.sim.model.nu):
+                    if "finger_joint" in env.sim.model.actuator_id2name(i):
+                        env.sim.data.ctrl[i] = 0.0
+                env.sim.forward()
+                for _ in range(50):
+                    env.sim.step()
+                env.sim.forward()
+                # Hold current joint positions (JOINT_POSITION controller) and close gripper
+                hold_act = np.concatenate([env.sim.data.qpos[:n_joints], [1.0]])
+                obs, _, _, _ = env.step(hold_act)
 
                 gripper_cmd = 1.0
                 prev_action = np.zeros(8, dtype=np.float32)
@@ -781,6 +799,16 @@ def eval_robosuite(policy, cfg, seed=None, render=False):
                         _, full_trajs = policy.run_inference(obs_batch, methods=['ddim'], return_full=True)
                     start = policy.config.n_obs_steps - 1
                     chunk = full_trajs[0][0][start:start + chunk_size].cpu().numpy()
+
+                    if ep_i == 0 and step == 0:
+                        print(f"=== ACTION DEBUG (chunk_size={chunk_size}) ===")
+                        print(f"full_traj shape: {full_trajs[0][0].shape}")
+                        print(f"chunk[0] (first action): {chunk[0]}")
+                        print(f"chunk mean: {chunk.mean(axis=0).round(4)}")
+                        print(f"chunk std:  {chunk.std(axis=0).round(4)}")
+                        print(f"current joint_pos: {obs['robot0_joint_pos'].round(4)}")
+                        print(f"target_joints[0]:  {(obs['robot0_joint_pos'] + chunk[0, :7]).round(4)}")
+                        print("=========================================")
 
                     for t in range(chunk_size):
                         delta         = chunk[t]
