@@ -22,7 +22,7 @@ hydra:
   job:
     name: $maze_general_tune_base_DDIM_{now:%H.%M.%S}_${env.name}_${policy.name}
 
-device: "cuda"  # cpu
+device: "cuda:1"  # cpu
 
 training:
   offline_steps: 100
