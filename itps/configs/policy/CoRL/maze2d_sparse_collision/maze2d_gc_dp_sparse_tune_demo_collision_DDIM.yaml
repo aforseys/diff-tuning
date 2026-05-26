@@ -6,7 +6,7 @@ condition_type: conditional
 env_type: sparse
 dataset_root:
   base: data/maze2d-sparse-v3.hdf5
-  demos: data/maze_comparisons/sparse_gc_collision_avoidance__maze_demos_20260517_180811.npz
+  demo: data/maze_comparisons/sparse_gc_collision_avoidance__maze_demos_20260517_180811.npz
 pretrained_policy_path: data/maze2d_dp/sparse/gc/train/2026.05.13/02.28.05_maze2d_diffusion/checkpoints/last/pretrained_model
 
 wandb:
