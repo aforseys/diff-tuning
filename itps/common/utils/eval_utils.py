@@ -569,13 +569,21 @@ def eval_maze(policy, cfg, split='test', seed=None):
             elif m == 'obs_goal_dist':
                 assert policy.use_goal_cond, "obs_goal_dist requires a goal-conditioned policy"
                 goals_repeated = np.repeat(goal_pos, n_samples, axis=0)
-                dists = np.linalg.norm(traj[:, -1, :]- goals_repeated, axis=1)
+                dists = np.linalg.norm(traj[:, -1, :] - goals_repeated, axis=1)
                 per_obs[m] = dists.reshape(N_obs, n_samples).mean(axis=1).tolist()
+                ref_dist = np.linalg.norm(goals_repeated - states, axis=1)
+                progress = (ref_dist - dists) / ref_dist
+                per_obs[f'{m}_pct'] = progress.reshape(N_obs, n_samples).mean(axis=1).tolist()
+                per_obs[f'{m}_pct_clipped'] = np.clip(progress, 0, None).reshape(N_obs, n_samples).mean(axis=1).tolist()
             elif m == 'finetune_goal_dist':
                 assert cfg.eval.goal is not None, "finetune_goal_dist requires cfg.eval.goal to be set"
                 goal = np.array(cfg.eval.goal, dtype=np.float32)
                 dists = np.linalg.norm(traj[:, -1, :] - goal, axis=1)
                 per_obs[m] = dists.reshape(N_obs, n_samples).mean(axis=1).tolist()
+                ref_dist = np.linalg.norm(states - goal, axis=1)
+                progress = (ref_dist - dists) / ref_dist
+                per_obs[f'{m}_pct'] = progress.reshape(N_obs, n_samples).mean(axis=1).tolist()
+                per_obs[f'{m}_pct_clipped'] = np.clip(progress, 0, None).reshape(N_obs, n_samples).mean(axis=1).tolist()
             #Center preference — 1 minus mean normalized distance from maze center over all trajectory steps:
             elif m == 'center_rate':
                 rows, cols = maze.shape
