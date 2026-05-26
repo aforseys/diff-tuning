@@ -21,7 +21,7 @@ hydra:
   job:
     name: base_tune_collision_IRED_${now:%H.%M.%S}_${env.name}_${policy.name}
 
-device: "cuda"  # cpu
+device: "cuda:1"  # cpu
 
 training:
   offline_steps: 10000
