@@ -10,7 +10,7 @@ dataset_root:
 pretrained_policy_path: data/maze2d_dp/large/general/train/2026.04.28/16.25.20_maze2d_diffusion/checkpoints/last/pretrained_model
 
 wandb:
-  enable: false
+  enable: true
   project: maze2d-finetune-final
 
 hydra:
