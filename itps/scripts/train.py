@@ -411,6 +411,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
                         viz = False,
                         finetune=finetune,
                         opt_params = list(cfg.eval.opt_params),
+                        methods = list(cfg.eval.methods),
                         seed=cfg.seed,
                         )
 
