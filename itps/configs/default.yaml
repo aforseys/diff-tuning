@@ -39,6 +39,12 @@ training:
 
   batch_size: ???
 
+  # Optionally cap the number of preference pairs (winner/loser "queries") loaded for
+  # DPO (`finetune_dpo`) and energy-landscape (`finetune_energy_landscape`, the "base"
+  # tune configs) finetuning. `null` uses all available pairs; set to an int to study
+  # how finetuning behaves with less preference data. Keeps the first `n_queries` pairs.
+  n_queries: null
+
   eval_freq: ???
   log_freq: 200
   save_checkpoint: true

@@ -327,7 +327,10 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     demo_tune_dataset = None
     if finetune:
         if finetune_type in ["finetune_energy_landscape", "finetune_dpo"]:
-            pref_tune_dataset = PreferencePairDataset(offline_dataset['pos'], offline_dataset['neg'])
+            pref_tune_dataset = PreferencePairDataset(
+                offline_dataset['pos'], offline_dataset['neg'],
+                n_queries=cfg.training.get('n_queries', None),
+            )
         elif finetune_type == 'finetune_demos':
             demo_tune_dataset = offline_dataset['demo']
         offline_dataset = offline_dataset['base']
