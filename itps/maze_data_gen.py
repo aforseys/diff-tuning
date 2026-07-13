@@ -9,6 +9,12 @@ from collections import deque
 
 from interact_maze2d import MazeEnv
 from common.utils.maze_maps import MAZE_MAPS
+from common.utils.maze_scoring import (
+    score_center,
+    score_bottom_half,
+    score_goal_progress,
+    DEFAULT_SCORE_THRESHOLDS,
+)
 
 
 def pick_start_positions(maze_type='large', n_positions=None, savepath=None):
@@ -270,17 +276,15 @@ def _subsample_xy_path(xy_points, threshold):
     return np.array(kept)
 
 
-_DEFAULT_THRESHOLDS = {
-    'similarity_score': 0.5,
-    'endpoint_distance': 0.3,
-    'collision_rate': 0.9,
-}
-
-def extract_preference_pairs(loadpath, savepath, maze_type='large', score_threshold=None, metric='similarity_score', metric_kwargs=None, viz=False, prefix=None):
+def extract_preference_pairs(loadpath, savepath, maze_type='large', score_threshold=None, metric='similarity_score', metric_kwargs=None, viz=False, prefix=None, shuffle=False, shuffle_seed=None):
     prefix = (prefix + '_' if prefix else '') + 'maze_' + time.strftime("%Y%m%d_%H%M%S")
+    if shuffle:
+        # Mark shuffled datasets in the filename so it's obvious a subset (e.g. an
+        # n_queries cap) draws from a mix of observations rather than the first few.
+        prefix += '_shuffled'
 
     if score_threshold is None:
-        score_threshold = _DEFAULT_THRESHOLDS[metric]
+        score_threshold = DEFAULT_SCORE_THRESHOLDS[metric]
 
     maze_env = MazeEnv(maze_type)
     metric_kwargs = metric_kwargs or {}
@@ -290,6 +294,9 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
         trials = [json.loads(line) for line in f]
 
     for trial in trials:
+        # goal for gc policies: trial["obs"] is [x, y, goal_x, goal_y] in maze XY space
+        trial_goal = trial["obs"][2:] if "obs" in trial and len(trial["obs"]) >= 4 else None
+
         if metric == 'similarity_score':
             guide = np.array(trial["guide"])
             if len(guide) == 0:
@@ -300,6 +307,40 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
             xy_traj = np.array([[maze_env.gui2xy(p) for p in traj] for traj in trial["pred_traj"]])
             collisions = maze_env.check_collision(xy_traj)
             scores = (~collisions).astype(float)
+            samples = np.asarray(trial["pred_traj"], dtype=float)
+            guide = None
+        elif metric == 'center_rate':
+            xy_traj = np.array([[maze_env.gui2xy(p) for p in traj] for traj in trial["pred_traj"]])
+            scores = score_center(xy_traj, maze_env.maze)
+            samples = np.asarray(trial["pred_traj"], dtype=float)
+            guide = None
+        elif metric == 'bottom_half_rate':
+            xy_traj = np.array([[maze_env.gui2xy(p) for p in traj] for traj in trial["pred_traj"]])
+            scores = score_bottom_half(xy_traj, maze_env.maze)
+            samples = np.asarray(trial["pred_traj"], dtype=float)
+            guide = None
+        elif metric == 'obs_goal_dist':
+            # Percentage-to-goal toward the trial's own (goal-conditioned) goal.
+            # Same calc as eval_maze's obs_goal_dist_pct: (ref_dist - endpoint_dist)/ref_dist,
+            # where ref_dist is the start->goal distance. Higher = endpoint got closer.
+            assert trial_goal is not None, (
+                "'obs_goal_dist' requires a goal-conditioned trial (trial['obs'] of length 4)"
+            )
+            start_xy = np.asarray(trial["obs"][:2], dtype=float)
+            xy_traj = np.array([[maze_env.gui2xy(p) for p in traj] for traj in trial["pred_traj"]])
+            scores = score_goal_progress(xy_traj, trial_goal, start_xy)
+            samples = np.asarray(trial["pred_traj"], dtype=float)
+            guide = None
+        elif metric == 'finetune_goal_dist':
+            # Percentage-to-goal toward a fixed goal (metric_kwargs={'goal': [x, y]} in maze XY,
+            # matching cfg.eval.goal). Same calc as eval_maze's finetune_goal_dist_pct.
+            goal_xy = metric_kwargs.get("goal")
+            assert goal_xy is not None, (
+                "'finetune_goal_dist' requires metric_kwargs={'goal': [x, y]} (maze XY space)"
+            )
+            start_xy = np.asarray(trial["obs"][:2], dtype=float)
+            xy_traj = np.array([[maze_env.gui2xy(p) for p in traj] for traj in trial["pred_traj"]])
+            scores = score_goal_progress(xy_traj, goal_xy, start_xy)
             samples = np.asarray(trial["pred_traj"], dtype=float)
             guide = None
         elif metric == 'endpoint_distance':
@@ -313,9 +354,6 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
             samples = pred_traj
         else:
             raise NotImplementedError(f"Metric '{metric}' is not implemented.")
-
-        # goal for gc policies: trial["obs"] is [x, y, goal_x, goal_y] in maze XY space
-        trial_goal = trial["obs"][2:] if "obs" in trial and len(trial["obs"]) >= 4 else None
 
         trial_pairs = []
         for i in range(len(scores)):
@@ -374,6 +412,15 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
     if not pairs:
         print("No pairs to save.")
         return []
+
+    # Pairs are generated grouped by trial (all pairs from one observation are
+    # contiguous). Optionally shuffle so that indexing a subset (e.g. an n_queries
+    # cap, which keeps the first pairs) draws from a mix of observations. The
+    # winners/losers arrays and _meta.json are all built from `pairs` below, so
+    # shuffling the list here keeps them aligned.
+    if shuffle:
+        rng = np.random.default_rng(shuffle_seed)
+        rng.shuffle(pairs)
 
     T = len(pairs[0]['winner_traj'])
     N = len(pairs)
@@ -671,9 +718,13 @@ if __name__ == "__main__":
     parser.add_argument('--gen-pref', action='store_true', help="Generate preference pairs from saved trials")
     parser.add_argument('-l', '--loadpath', type=str, default=None, help="Path to trials file for preference generation")
     parser.add_argument('--score-threshold', type=float, default=None, help="Score threshold for preference pairs (default: metric-specific)")
-    parser.add_argument('--metric', type=str, default='similarity_score')
+    parser.add_argument('--metric', type=str, default='similarity_score',
+                        help="One of: similarity_score, endpoint_distance, collision_rate, "
+                             "center_rate, bottom_half_rate, obs_goal_dist, finetune_goal_dist")
     parser.add_argument('--viz-pref', action='store_true', help="Visualize preference pairs during generation")
     parser.add_argument('--prefix', type=str, default=None, help="Optional prefix to prepend to output filenames")
+    parser.add_argument('--shuffle', action='store_true', help="Shuffle saved preference pairs (adds '_shuffled' to the filename) so a subset isn't all from the same observations")
+    parser.add_argument('--shuffle-seed', type=int, default=0, help="Seed for --shuffle, for reproducible shuffles (default: 0)")
     parser.add_argument('--seed', type=int, default=0, help="Random seed for reproducibility (used by --gen-obs)")
     parser.add_argument('--split', type=float, default=None, help="Train fraction for train/test split (e.g. 0.8 for 80/20)")
     parser.add_argument('--viz-pairs', action='store_true', help="Visualize saved preference pairs from .npz files")
@@ -762,7 +813,10 @@ if __name__ == "__main__":
             maze_type=args.maze_type,
             score_threshold=args.score_threshold,
             metric=args.metric,
+            metric_kwargs={'goal': args.goal} if args.goal is not None else None,
             viz=args.viz_pref,
             prefix=args.prefix,
+            shuffle=args.shuffle,
+            shuffle_seed=args.shuffle_seed,
         )
         sys.exit(0)

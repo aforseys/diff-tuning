@@ -588,7 +588,7 @@ def create_lerobot_dataset_card(tags: list | None = None, text: str | None = Non
     return card
 
 class PreferencePairDataset(torch.utils.data.Dataset):
-    def __init__(self, pos_ds, neg_ds):
+    def __init__(self, pos_ds, neg_ds, n_queries=None):
         assert len(pos_ds) == len(neg_ds), \
             f"Positive ({len(pos_ds)}) and negative ({len(neg_ds)}) datasets must be same length."
         self.pos_ds = pos_ds
@@ -601,8 +601,16 @@ class PreferencePairDataset(torch.utils.data.Dataset):
         # given datasets are the same, set index to match one dataset (used for samplers)
         #self.episode_data_index = pos_ds.episode_data_index
 
-        # start index of each episode
+        # start index of each episode (one entry per preference pair / "query")
         self.start_indices = pos_ds.episode_data_index["from"].clone()
+
+        # Optionally cap how many preference pairs are used for training, to study how
+        # DPO / energy-landscape finetuning behaves with less data. Keeps the first
+        # `n_queries` pairs; None uses all. Slicing is clamp-safe if n_queries exceeds
+        # the number of available pairs.
+        if n_queries is not None:
+            assert n_queries >= 1, f"n_queries must be >= 1, got {n_queries}"
+            self.start_indices = self.start_indices[:n_queries]
 
         # expose episode boundaries in the same "dataset-level" convention
         # one dataset item == one episode start

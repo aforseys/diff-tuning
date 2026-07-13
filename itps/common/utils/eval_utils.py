@@ -462,24 +462,13 @@ def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=No
 # -- MAZE2D EVALUATION --
 
 from itps.common.utils.maze_maps import MAZE_MAPS
-
-
-def check_maze_collision(xy_traj, maze):
-    """
-    xy_traj: (batch, steps, 2) numpy array in maze coordinate space
-    maze: 2D boolean array where True = wall
-    Returns: (batch,) boolean array, True if trajectory has any collision
-    """
-    batch_size, num_steps, _ = xy_traj.shape
-    xy_flat = xy_traj.reshape(-1, 2)
-    nan_mask = np.any(np.isnan(xy_flat), axis=1)
-    xy_flat = np.nan_to_num(xy_flat, nan=0.0)
-    xy_flat = np.clip(xy_flat, [0, 0], [maze.shape[0] - 1, maze.shape[1] - 1])
-    mx = np.round(xy_flat[:, 0]).astype(int)
-    my = np.round(xy_flat[:, 1]).astype(int)
-    collisions = maze[mx, my].reshape(batch_size, num_steps)
-    collisions |= nan_mask.reshape(batch_size, num_steps)
-    return np.any(collisions, axis=1)
+from itps.common.utils.maze_scoring import (
+    check_maze_collision,
+    score_center,
+    score_bottom_half,
+    score_goal_dist,
+    score_goal_progress,
+)
 
 
 def eval_maze(policy, cfg, split='test', seed=None):
@@ -569,36 +558,24 @@ def eval_maze(policy, cfg, split='test', seed=None):
             elif m == 'obs_goal_dist':
                 assert policy.use_goal_cond, "obs_goal_dist requires a goal-conditioned policy"
                 goals_repeated = np.repeat(goal_pos, n_samples, axis=0)
-                dists = np.linalg.norm(traj[:, -1, :] - goals_repeated, axis=1)
+                dists = score_goal_dist(traj, goals_repeated)
                 per_obs[m] = dists.reshape(N_obs, n_samples).mean(axis=1).tolist()
-                ref_dist = np.linalg.norm(goals_repeated - states, axis=1)
-                progress = (ref_dist - dists) / ref_dist
+                progress = score_goal_progress(traj, goals_repeated, states, clip=False)
                 per_obs[f'{m}_pct'] = progress.reshape(N_obs, n_samples).mean(axis=1).tolist()
                 per_obs[f'{m}_pct_clipped'] = np.clip(progress, 0, None).reshape(N_obs, n_samples).mean(axis=1).tolist()
             elif m == 'finetune_goal_dist':
                 assert cfg.eval.goal is not None, "finetune_goal_dist requires cfg.eval.goal to be set"
                 goal = np.array(cfg.eval.goal, dtype=np.float32)
-                dists = np.linalg.norm(traj[:, -1, :] - goal, axis=1)
+                dists = score_goal_dist(traj, goal)
                 per_obs[m] = dists.reshape(N_obs, n_samples).mean(axis=1).tolist()
-                ref_dist = np.linalg.norm(states - goal, axis=1)
-                progress = (ref_dist - dists) / ref_dist
+                progress = score_goal_progress(traj, goal, states, clip=False)
                 per_obs[f'{m}_pct'] = progress.reshape(N_obs, n_samples).mean(axis=1).tolist()
                 per_obs[f'{m}_pct_clipped'] = np.clip(progress, 0, None).reshape(N_obs, n_samples).mean(axis=1).tolist()
-            #Center preference — 1 minus mean normalized distance from maze center over all trajectory steps:
             elif m == 'center_rate':
-                rows, cols = maze.shape
-                x_center = (rows - 1) / 2.0
-                y_center = (cols - 1) / 2.0
-                max_dist = np.sqrt(x_center**2 + y_center**2)
-                dx = traj[:, :, 0] - x_center  # (N_obs*n_samples, horizon)
-                dy = traj[:, :, 1] - y_center
-                scores = 1 - np.sqrt(dx**2 + dy**2).mean(axis=1) / max_dist  # (N_obs*n_samples,)
+                scores = score_center(traj, maze)  # (N_obs*n_samples,)
                 per_obs[m] = scores.reshape(N_obs, n_samples).mean(axis=1).tolist()
-            #Bottom half preference — fraction of trajectory steps with x > x_mid (higher row index = bottom of maze):
             elif m == 'bottom_half_rate':
-                rows, cols = maze.shape
-                x_mid = (rows - 1) / 2.0
-                scores = (traj[:, :, 0] > x_mid).astype(float).mean(axis=1)  # (N_obs*n_samples,)
+                scores = score_bottom_half(traj, maze)  # (N_obs*n_samples,)
                 per_obs[m] = scores.reshape(N_obs, n_samples).mean(axis=1).tolist()
 
             else:

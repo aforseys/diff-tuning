@@ -52,6 +52,7 @@ from common.policies.act.modeling_act import ACTPolicy
 from common.policies.rollout_wrapper import PolicyRolloutWrapper
 from common.utils.utils import seeded_context, init_hydra_config
 from common.utils.maze_maps import MAZE_MAPS
+from common.utils.maze_scoring import check_maze_collision
 from common.policies.factory import make_policy
 from common.datasets.factory import make_dataset
 from scipy.special import softmax
@@ -101,14 +102,9 @@ class MazeEnv:
 
     def check_collision(self, xy_traj):
         assert xy_traj.shape[2] == 2, "Input must be a 2D array of (x, y) coordinates."
-        batch_size, num_steps, _ = xy_traj.shape
-        xy_traj = xy_traj.reshape(-1, 2)
-        xy_traj = np.clip(xy_traj, [0, 0], [self.maze.shape[0] - 1, self.maze.shape[1] - 1])
-        maze_x = np.round(xy_traj[:, 0]).astype(int)
-        maze_y = np.round(xy_traj[:, 1]).astype(int)
-        collisions = self.maze[maze_x, maze_y]
-        collisions = collisions.reshape(batch_size, num_steps)
-        return np.any(collisions, axis=1)
+        # Single shared definition (maze_scoring.check_maze_collision): NaN steps
+        # count as collisions, consistent with eval_maze and preference selection.
+        return check_maze_collision(xy_traj, self.maze)
     
     def find_first_collision_from_GUI(self, gui_traj):
         assert gui_traj.shape[1] == 2, "Input must be a 2D array"
