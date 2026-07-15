@@ -519,7 +519,10 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
         pref_tune_dataloader = torch.utils.data.DataLoader(
             pref_tune_dataset,
             num_workers=cfg.training.num_workers,
-            batch_size=cfg.training.batch_size,
+            # Cap batch size at the dataset size (same as the demo loader above) so a
+            # small n_queries can't leave < batch_size pairs, which with drop_last=True
+            # would yield zero batches and make cycle() spin on an empty loader.
+            batch_size=min(cfg.training.batch_size, len(pref_tune_dataset)),
             shuffle=shuffle,
             sampler=sampler,
             pin_memory=device.type != "cpu",
