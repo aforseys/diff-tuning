@@ -19,7 +19,7 @@ hydra:
     # with the same value for `dir` its contents will be overwritten unless you set `resume` to true.
     dir: data/maze2d_dp/sparse/gc/tune/${now:%Y.%m.%d}/${hydra.job.name}
   job:
-    name: DPO_tune_down_IRED_${now:%H.%M.%S}_${env.name}_${policy.name}_ndemo${training.n_demo}
+    name: DPO_tune_down_IRED_${now:%H.%M.%S}_${env.name}_${policy.name}_nq${training.n_queries}
 
 device: "cuda"  # cpu
 
