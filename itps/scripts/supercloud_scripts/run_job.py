@@ -31,8 +31,12 @@ def main():
     parser.add_argument("--env", required=True, help="Environment name, passed as env={env_name}")
     args = parser.parse_args()
 
-    # Collect all generated config files, sorted so ordering is consistent across all processes
-    config_files = sorted(glob.glob(os.path.join(args.configs_dir, "run_*.yaml")))
+    # Collect all generated config files, sorted so ordering is consistent across all processes.
+    # Recursive so ONE submission can span per-experiment subdirs
+    # (e.g. runs/base_large/run_0.yaml, runs/base_collision/run_0.yaml, ...).
+    # `**` with recursive=True also matches files directly in configs_dir, so this
+    # stays compatible with a flat configs_dir.
+    config_files = sorted(glob.glob(os.path.join(args.configs_dir, "**", "run_*.yaml"), recursive=True))
     total = len(config_files)
 
     if total == 0:
