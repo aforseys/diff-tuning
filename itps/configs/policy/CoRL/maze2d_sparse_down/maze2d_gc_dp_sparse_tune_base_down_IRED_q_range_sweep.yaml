@@ -12,7 +12,7 @@ dataset_root:
   base: data/maze2d-sparse-v3.hdf5
   pos: data/maze_comparisons/maze_20260714_215046_shuffled_winners.npz
   neg: data/maze_comparisons/maze_20260714_215046_shuffled_losers.npz
-pretrained_policy_path: data/maze2d_dp/sparse/gc/train/2026.05.13/02.28.05_maze2d_diffusion/checkpoints/last/pretrained_model
+pretrained_policy_path: data/maze2d_dp/sparse/gc/train/pretrained_sparse_maze_100
 
 wandb:
   enable: true
