@@ -4,6 +4,7 @@ sweep:
     n_queries: [50, 100, 200, 500]
 
 seed: 100000
+config_name: null  # dead key; set at runtime by run_job.py (must exist for the override)
 dataset_repo_id: maze2d
 condition_type: conditional
 env_type: sparse
