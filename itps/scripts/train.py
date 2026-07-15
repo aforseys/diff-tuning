@@ -194,6 +194,8 @@ def log_train_info(logger: Logger, info, step, cfg, dataset, is_online):
         f"updt_s:{update_s:.3f}",
         f"data_s:{dataloading_s:.3f}",  # if not ~0, you are bottlenecked by cpu or io
     ]
+    if "tune_dataloading_s" in info:
+        log_items.append(f"tune_data_s:{info['tune_dataloading_s']:.3f}")
     logging.info(" ".join(log_items))
 
     info["step"] = step
@@ -476,10 +478,19 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     else:
         shuffle = True
         sampler = None
+    # In preference finetuning (DPO / energy) the pref batch is combined with the
+    # base batch per-sample in compute_loss (shared sampled timesteps + noise, and
+    # pos/neg MSE combined with the base MSE), so both dataloaders MUST yield the
+    # same batch size -- see the `pos_batch["action"].shape == trajectory.shape`
+    # assert. If a small n_queries leaves fewer pairs than batch_size, cap BOTH.
+    effective_batch_size = cfg.training.batch_size
+    if pref_tune_dataset is not None:
+        effective_batch_size = min(cfg.training.batch_size, len(pref_tune_dataset))
+
     dataloader = torch.utils.data.DataLoader(
         offline_dataset,
         num_workers=cfg.training.num_workers,
-        batch_size=cfg.training.batch_size,
+        batch_size=effective_batch_size,
         shuffle=shuffle,
         sampler=sampler,
         pin_memory=device.type != "cpu",
@@ -523,10 +534,11 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
         pref_tune_dataloader = torch.utils.data.DataLoader(
             pref_tune_dataset,
             num_workers=cfg.training.num_workers,
-            # Cap batch size at the dataset size (same as the demo loader above) so a
-            # small n_queries can't leave < batch_size pairs, which with drop_last=True
-            # would yield zero batches and make cycle() spin on an empty loader.
-            batch_size=min(cfg.training.batch_size, len(pref_tune_dataset)),
+            # Same batch size as the base loader above (effective_batch_size): the DPO/
+            # energy loss requires pos/neg batches to match the base trajectory batch,
+            # and capping at the dataset size also avoids an empty loader (< batch_size
+            # pairs + drop_last=True -> zero batches -> cycle() spins).
+            batch_size=effective_batch_size,
             shuffle=shuffle,
             sampler=sampler,
             pin_memory=device.type != "cpu",
