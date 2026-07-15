@@ -508,6 +508,10 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
             sampler=sampler,
             pin_memory=device.type != "cpu",
             drop_last=True,
+            # The tune dataset can be tiny (e.g. small n_queries), so cycle() exhausts it
+            # every few steps; without persistent workers each re-iter respawns all
+            # num_workers processes, which dominates wall-clock time.
+            persistent_workers=cfg.training.num_workers > 0,
         )
         dt_dl_iter = cycle(demo_tune_dataloader)
 
@@ -527,6 +531,10 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
             sampler=sampler,
             pin_memory=device.type != "cpu",
             drop_last=True,
+            # With n_queries capping the dataset, one epoch is only 1-3 batches, so
+            # cycle() re-iterates constantly; without persistent workers each re-iter
+            # respawns all num_workers processes, which dominates wall-clock time.
+            persistent_workers=cfg.training.num_workers > 0,
         )
         pt_dl_iter = cycle(pref_tune_dataloader)
 
@@ -554,8 +562,10 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
 
         # handle possibility of finetuning
         tune_batch = None
+        tune_dataloading_s = 0.0
 
         if finetune:
+            start_time = time.perf_counter()
             if demo_tune_dataset is not None:
                 demo_batch = next(dt_dl_iter)
                 for key in demo_batch:
@@ -567,6 +577,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
                 pos_batch = {k: v.to(device, non_blocking=True) for k, v in pref_batch["pos"].items()}
                 neg_batch = {k: v.to(device, non_blocking=True) for k, v in pref_batch["neg"].items()}
                 tune_batch = {"pref": (pos_batch, neg_batch)}
+            tune_dataloading_s = time.perf_counter() - start_time
 
         train_info = update_policy(
             policy,
@@ -580,6 +591,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
         )
 
         train_info["dataloading_s"] = dataloading_s
+        train_info["tune_dataloading_s"] = tune_dataloading_s
 
         if step % cfg.training.log_freq == 0:
             log_train_info(logger, train_info, step, cfg, offline_dataset, is_online=False)
