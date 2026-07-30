@@ -90,7 +90,8 @@ def score_metric(metric, xy_traj, maze, start=None, obs_goal=None, fixed_goal=No
 
 def eval_energy_ranking(pretrained_policy, finetuned_policy, obs_data, maze_type,
                          metrics, n_samples=32, sampler='ddim', goal=None,
-                         chunk_size=256, seed=None, energy_timesteps=(0,), avg=False):
+                         chunk_size=256, seed=None, energy_timesteps=(0,), avg=False,
+                         tie_tol=0.0):
     """
     obs_data: (N_obs, 2) or (N_obs, 4) array — [x,y] or [x,y,goal_x,goal_y], maze XY space.
     energy_timesteps: train-timestep indices of the energy landscapes to score
@@ -99,6 +100,12 @@ def eval_energy_ranking(pretrained_policy, finetuned_policy, obs_data, maze_type
     avg: if True, only the single "mean_energy" scorer is computed (candidates
         ranked by their energy averaged over energy_timesteps) instead of the
         per-timestep scorers plus mean_energy/mean_rank.
+    tie_tol: passed to pairwise_win_rate — ground-truth score pairs within this
+        tolerance are thrown out as ties rather than graded (default 0.0 =
+        only exact ties). Raise this to match a metric's training-time
+        DEFAULT_SCORE_THRESHOLDS (see maze_scoring.py) and check whether win
+        rate improves once close-margin pairs the model was never trained to
+        discriminate are excluded from grading.
 
     Returns: {metric: {scorer: {"per_obs": [...], "mean_win_rate": float, ...}}}
     where scorer is "t=<n>" per timestep, plus "mean_energy" and "mean_rank"
@@ -184,7 +191,7 @@ def eval_energy_ranking(pretrained_policy, finetuned_policy, obs_data, maze_type
                 start=start_pos[obs_idx], obs_goal=obs_goal, fixed_goal=goal,
             )
             for s, values in scorers.items():
-                win_rate, n_used, n_tied = pairwise_win_rate(scores, values[obs_idx])
+                win_rate, n_used, n_tied = pairwise_win_rate(scores, values[obs_idx], tie_tol=tie_tol)
                 results[m][s]["per_obs"].append({
                     "obs_idx": obs_idx, "win_rate": win_rate,
                     "n_pairs_used": n_used, "n_pairs_tied": n_tied,
@@ -246,6 +253,15 @@ def main():
                               "separately (plus mean_energy/mean_rank aggregates), average the "
                               "energies across all given landscapes first and report a single "
                               "ranking from that averaged energy.")
+    parser.add_argument("--tie-tol", type=float, default=0.0,
+                         help="Ground-truth score pairs within this tolerance are thrown out "
+                              "as ties instead of graded (default 0.0 = only exact ties). Set "
+                              "this to a metric's training-time score threshold (see "
+                              "DEFAULT_SCORE_THRESHOLDS in maze_scoring.py, e.g. 0.3 for "
+                              "center_rate/bottom_half_rate/obs_goal_dist/finetune_goal_dist, "
+                              "0.9 for collision_rate) to check win rate only on pairs at least "
+                              "that far apart -- i.e. pairs the model would actually have been "
+                              "trained to discriminate.")
     parser.add_argument("--sampler", default="ddim", choices=["ddim", "ired"],
                         help="Sampling method used to generate candidates from the "
                              "pretrained (non-fine-tuned) policy (default: ddim)")
@@ -296,12 +312,13 @@ def main():
         pretrained_policy, finetuned_policy, obs_data,
         maze_type=maze_type, metrics=args.metrics, n_samples=args.n_samples,
         sampler=args.sampler, goal=goal, seed=args.seed,
-        energy_timesteps=args.energy_timesteps, avg=args.avg,
+        energy_timesteps=args.energy_timesteps, avg=args.avg, tie_tol=args.tie_tol,
     )
 
     print(f"\n{len(obs_data)} obs  |  {args.n_samples} candidates/obs sampled from the pretrained "
           f"policy  |  energy scored under the fine-tuned policy at "
-          f"t={args.energy_timesteps}{' (averaged)' if args.avg else ''}\n")
+          f"t={args.energy_timesteps}{' (averaged)' if args.avg else ''}  |  "
+          f"tie_tol={args.tie_tol}\n")
     for m in args.metrics:
         print(f"  {m}:")
         for s, r in results[m].items():
