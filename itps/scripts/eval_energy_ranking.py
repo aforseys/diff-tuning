@@ -90,16 +90,20 @@ def score_metric(metric, xy_traj, maze, start=None, obs_goal=None, fixed_goal=No
 
 def eval_energy_ranking(pretrained_policy, finetuned_policy, obs_data, maze_type,
                          metrics, n_samples=32, sampler='ddim', goal=None,
-                         chunk_size=256, seed=None, energy_timesteps=(0,)):
+                         chunk_size=256, seed=None, energy_timesteps=(0,), avg=False):
     """
     obs_data: (N_obs, 2) or (N_obs, 4) array — [x,y] or [x,y,goal_x,goal_y], maze XY space.
     energy_timesteps: train-timestep indices of the energy landscapes to score
         candidates in. With num_inference_steps == num_train_timesteps (the
         default) the last k inference landscapes are simply t = 0..k-1.
+    avg: if True, only the single "mean_energy" scorer is computed (candidates
+        ranked by their energy averaged over energy_timesteps) instead of the
+        per-timestep scorers plus mean_energy/mean_rank.
 
     Returns: {metric: {scorer: {"per_obs": [...], "mean_win_rate": float, ...}}}
     where scorer is "t=<n>" per timestep, plus "mean_energy" and "mean_rank"
-    aggregates when more than one timestep is given.
+    aggregates when more than one timestep is given (or just "mean_energy"
+    when avg=True).
     """
     if seed is not None:
         set_global_seed(seed)
@@ -159,14 +163,17 @@ def eval_energy_ranking(pretrained_policy, finetuned_policy, obs_data, maze_type
 
     # Each scorer maps to a (N_obs, n_samples) value array where higher = more
     # preferred by the model, matching the `scores` convention.
-    scorers = {f"t={t}": -energy_all[i] for i, t in enumerate(energy_timesteps)}
-    if len(energy_timesteps) > 1:
-        scorers["mean_energy"] = -energy_all.mean(axis=0)
-        # Rank candidates within each (timestep, obs): rank 0 = lowest energy =
-        # most preferred. Averaging ranks is robust to the energy scale
-        # differing across timesteps.
-        ranks = energy_all.argsort(axis=-1).argsort(axis=-1)
-        scorers["mean_rank"] = -ranks.mean(axis=0)
+    if avg:
+        scorers = {"mean_energy": -energy_all.mean(axis=0)}
+    else:
+        scorers = {f"t={t}": -energy_all[i] for i, t in enumerate(energy_timesteps)}
+        if len(energy_timesteps) > 1:
+            scorers["mean_energy"] = -energy_all.mean(axis=0)
+            # Rank candidates within each (timestep, obs): rank 0 = lowest energy =
+            # most preferred. Averaging ranks is robust to the energy scale
+            # differing across timesteps.
+            ranks = energy_all.argsort(axis=-1).argsort(axis=-1)
+            scorers["mean_rank"] = -ranks.mean(axis=0)
 
     results = {m: {s: {"per_obs": []} for s in scorers} for m in metrics}
     for obs_idx in range(N_obs):
@@ -234,6 +241,11 @@ def main():
                              "num_train_timesteps by default). With multiple timesteps, "
                              "per-timestep win rates plus mean_energy/mean_rank aggregates "
                              "are reported.")
+    parser.add_argument("--avg", action="store_true",
+                         help="Instead of scoring/reporting each --energy-timesteps landscape "
+                              "separately (plus mean_energy/mean_rank aggregates), average the "
+                              "energies across all given landscapes first and report a single "
+                              "ranking from that averaged energy.")
     parser.add_argument("--sampler", default="ddim", choices=["ddim", "ired"],
                         help="Sampling method used to generate candidates from the "
                              "pretrained (non-fine-tuned) policy (default: ddim)")
@@ -284,12 +296,12 @@ def main():
         pretrained_policy, finetuned_policy, obs_data,
         maze_type=maze_type, metrics=args.metrics, n_samples=args.n_samples,
         sampler=args.sampler, goal=goal, seed=args.seed,
-        energy_timesteps=args.energy_timesteps,
+        energy_timesteps=args.energy_timesteps, avg=args.avg,
     )
 
     print(f"\n{len(obs_data)} obs  |  {args.n_samples} candidates/obs sampled from the pretrained "
           f"policy  |  energy scored under the fine-tuned policy at "
-          f"t={args.energy_timesteps}\n")
+          f"t={args.energy_timesteps}{' (averaged)' if args.avg else ''}\n")
     for m in args.metrics:
         print(f"  {m}:")
         for s, r in results[m].items():
