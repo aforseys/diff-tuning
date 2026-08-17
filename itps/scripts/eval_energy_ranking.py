@@ -9,8 +9,10 @@ For each observation in an obs file:
   2. Score each candidate under one or more maze preference metrics
      (collision_rate, center_rate, bottom_half_rate, obs_goal_dist,
      finetune_goal_dist).
-  3. Compute the energy of each candidate under the FINE-TUNED policy, at one
-     or more energy-landscape timesteps (--energy-timesteps, default just t=0).
+  3. Compute the energy of each candidate under the FINE-TUNED policy (or under
+     the pretrained one, with --score-with pretrained, for the pre-fine-tune
+     baseline on the very same candidates), at one or more energy-landscape
+     timesteps (--energy-timesteps, default just t=0).
      By default each energy is a Monte Carlo estimate: the candidate is noised
      to the timestep with --n-noise different eps draws (default 10, seeded by
      --energy-seed so runs are reproducible) and the resulting energies are
@@ -96,12 +98,18 @@ def score_metric(metric, xy_traj, maze, start=None, obs_goal=None, fixed_goal=No
 
 
 def eval_energy_ranking(pretrained_policy, finetuned_policy, obs_data, maze_type,
-                         metrics, n_samples=32, sampler='ddim', goal=None,
+                         metrics, scoring_policy=None, n_samples=32, sampler='ddim', goal=None,
                          chunk_size=256, seed=None, energy_timesteps=(0,), avg=False,
                          tie_tol=0.0, n_noise=DEFAULT_ENERGY_N_NOISE, deterministic=False,
                          energy_seed=DEFAULT_ENERGY_SEED):
     """
     obs_data: (N_obs, 2) or (N_obs, 4) array — [x,y] or [x,y,goal_x,goal_y], maze XY space.
+    scoring_policy: which policy computes the energies. Defaults to
+        finetuned_policy; pass pretrained_policy to get the pre-fine-tune baseline
+        win rate on the very same candidates. Candidates are always sampled from
+        pretrained_policy either way, and candidate sampling draws from the global
+        RNG while the energy noise uses its own generator -- so switching the
+        scoring policy leaves the candidate pool bit-identical for a given seed.
     energy_timesteps: train-timestep indices of the energy landscapes to score
         candidates in. With num_inference_steps == num_train_timesteps (the
         default) the last k inference landscapes are simply t = 0..k-1.
@@ -131,6 +139,9 @@ def eval_energy_ranking(pretrained_policy, finetuned_policy, obs_data, maze_type
     if seed is not None:
         set_global_seed(seed)
 
+    if scoring_policy is None:
+        scoring_policy = finetuned_policy
+
     maze = MAZE_MAPS[maze_type]
     device = next(pretrained_policy.parameters()).device
 
@@ -157,8 +168,8 @@ def eval_energy_ranking(pretrained_policy, finetuned_policy, obs_data, maze_type
         obs['episode_goal'] = goal_t.unsqueeze(1).clone()
 
     # Sample candidates from the ORIGINAL policy, score their energy under the
-    # FINE-TUNED policy at each requested landscape timestep, chunked to bound
-    # peak memory (same pattern as eval_maze).
+    # scoring policy (the fine-tuned one unless overridden) at each requested
+    # landscape timestep, chunked to bound peak memory (same pattern as eval_maze).
     energy_timesteps = list(energy_timesteps)
     total = state_t.shape[0]
     traj_chunks = []
@@ -172,7 +183,7 @@ def eval_energy_ranking(pretrained_policy, finetuned_policy, obs_data, maze_type
             chunk_traj = chunk_full_trajs[0]  # (chunk, horizon, 2), unnormalized maze XY space
             traj_chunks.append(chunk_traj.cpu())
             for t in energy_timesteps:
-                chunk_energy = finetuned_policy.get_energy(
+                chunk_energy = scoring_policy.get_energy(
                     action_batch={'action': chunk_traj}, t=t, observation_batch=chunk_obs,
                     n_noise=n_noise, deterministic=deterministic, seed=energy_seed,
                 )
@@ -254,6 +265,14 @@ def main():
                              "checkpoint's config.yaml.")
     parser.add_argument("--n-samples", type=int, default=32,
                         help="Candidate trajectories sampled per obs (default 32)")
+    parser.add_argument("--score-with", default="finetuned", choices=["finetuned", "pretrained"],
+                        help="Which policy computes the energies (default: finetuned). Use "
+                             "'pretrained' for the pre-fine-tune baseline win rate: candidates are "
+                             "still sampled from the pretrained policy and --finetuned-path is "
+                             "still used for the config.yaml defaults, so the run differs from the "
+                             "default only in which model does the scoring. With the same --seed "
+                             "the candidate pool is identical, making the two win rates directly "
+                             "comparable.")
     parser.add_argument("--metrics", nargs="+", required=True,
                         help="Metric(s) to check energy ranking against, e.g. "
                              "'--metrics collision_rate' or '--metrics collision_rate "
@@ -344,9 +363,12 @@ def main():
     with open(obs_file, "r") as f:
         obs_data = np.array(json.load(f), dtype=np.float32)
 
+    scoring_policy = pretrained_policy if args.score_with == "pretrained" else finetuned_policy
+
     results = eval_energy_ranking(
         pretrained_policy, finetuned_policy, obs_data,
-        maze_type=maze_type, metrics=args.metrics, n_samples=args.n_samples,
+        maze_type=maze_type, metrics=args.metrics, scoring_policy=scoring_policy,
+        n_samples=args.n_samples,
         sampler=args.sampler, goal=goal, seed=args.seed,
         energy_timesteps=args.energy_timesteps, avg=args.avg, tie_tol=args.tie_tol,
         n_noise=args.n_noise, deterministic=args.deterministic, energy_seed=args.energy_seed,
@@ -355,7 +377,7 @@ def main():
     noise_desc = ("deterministic (no noise)" if args.deterministic
                   else f"mean over {args.n_noise} noise draws (seed {args.energy_seed})")
     print(f"\n{len(obs_data)} obs  |  {args.n_samples} candidates/obs sampled from the pretrained "
-          f"policy  |  energy scored under the fine-tuned policy at "
+          f"policy  |  energy scored under the {args.score_with} policy at "
           f"t={args.energy_timesteps}{' (averaged)' if args.avg else ''}  |  "
           f"{noise_desc}  |  tie_tol={args.tie_tol}\n")
     for m in args.metrics:
