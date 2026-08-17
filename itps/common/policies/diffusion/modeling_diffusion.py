@@ -111,7 +111,10 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
 
     @torch.no_grad 
     def run_inference(self, observation_batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, return_full=False, return_energy=False, methods=['ired', 'ddim'], opt_params=[{'n_opt':1, 't_subset': None, 'denoise': False}], return_grad_steps=False) -> Tensor:
-        observation_batch = self.normalize_inputs(observation_batch)
+        # Normalize a shallow copy: Normalize writes into the dict it is given, so
+        # normalizing the caller's dict would double-normalize it if the caller also
+        # passes it to get_energy (or back here) afterwards.
+        observation_batch = self.normalize_inputs(dict(observation_batch))
         if guide is not None:
             guide = self.normalize_targets({"action": guide})["action"]
         if len(self.expected_image_keys) > 0:
@@ -207,8 +210,12 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
     def get_energy(self, action_batch: dict[str, Tensor], t: int, observation_batch: dict[str, Tensor],
                    n_noise: int = DEFAULT_ENERGY_N_NOISE, deterministic: bool = False,
                    seed: int | None = DEFAULT_ENERGY_SEED):
-        observation_batch = self.normalize_inputs(observation_batch)
-        action_batch = self.normalize_targets(action_batch)
+        # Shallow-copy before normalizing (see run_inference): callers routinely score
+        # the same observation_batch at several timesteps, and Normalize mutates the
+        # dict it is handed -- without the copy each call would re-normalize the last
+        # call's output.
+        observation_batch = self.normalize_inputs(dict(observation_batch))
+        action_batch = self.normalize_targets(dict(action_batch))
         # if len(self.expected_image_keys) > 0: #TODO: Update if necessary 
         #     observation_batch["observation.images"] = torch.stack(
         #         [observation_batch[k] for k in self.expected_image_keys], dim=-4
