@@ -10,9 +10,12 @@ For each observation in an obs file:
      (collision_rate, center_rate, bottom_half_rate, obs_goal_dist,
      finetune_goal_dist).
   3. Compute the energy of each candidate under the FINE-TUNED policy, at one
-     or more energy-landscape timesteps (--energy-timesteps, default just t=0;
-     trajectories are scaled to the timestep with no noise added, as in
-     get_traj_energies).
+     or more energy-landscape timesteps (--energy-timesteps, default just t=0).
+     By default each energy is a Monte Carlo estimate: the candidate is noised
+     to the timestep with --n-noise different eps draws (default 10, seeded by
+     --energy-seed so runs are reproducible) and the resulting energies are
+     averaged. Pass --deterministic for the old behavior, where the trajectory
+     is only rescaled to the timestep with no noise added.
   4. Report the pairwise win rate (see
      itps.common.utils.preference_scoring.pairwise_win_rate): over every pair of
      candidates, how often does the fine-tuned model's (negative) energy order
@@ -49,7 +52,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 import torch
 
-from itps.common.policies.diffusion.modeling_diffusion import DiffusionPolicy
+from itps.common.policies.diffusion.modeling_diffusion import (
+    DEFAULT_ENERGY_N_NOISE,
+    DEFAULT_ENERGY_SEED,
+    DiffusionPolicy,
+)
 from itps.common.utils.maze_maps import MAZE_MAPS
 from itps.common.utils.maze_scoring import (
     check_maze_collision,
@@ -91,7 +98,8 @@ def score_metric(metric, xy_traj, maze, start=None, obs_goal=None, fixed_goal=No
 def eval_energy_ranking(pretrained_policy, finetuned_policy, obs_data, maze_type,
                          metrics, n_samples=32, sampler='ddim', goal=None,
                          chunk_size=256, seed=None, energy_timesteps=(0,), avg=False,
-                         tie_tol=0.0):
+                         tie_tol=0.0, n_noise=DEFAULT_ENERGY_N_NOISE, deterministic=False,
+                         energy_seed=DEFAULT_ENERGY_SEED):
     """
     obs_data: (N_obs, 2) or (N_obs, 4) array — [x,y] or [x,y,goal_x,goal_y], maze XY space.
     energy_timesteps: train-timestep indices of the energy landscapes to score
@@ -100,6 +108,13 @@ def eval_energy_ranking(pretrained_policy, finetuned_policy, obs_data, maze_type
     avg: if True, only the single "mean_energy" scorer is computed (candidates
         ranked by their energy averaged over energy_timesteps) instead of the
         per-timestep scorers plus mean_energy/mean_rank.
+    n_noise: number of noise draws each candidate's energy is averaged over at
+        every timestep (see get_traj_energies). Ignored when deterministic=True.
+    deterministic: if True, score energies with no noise added (trajectories are
+        only rescaled to the timestep), i.e. one exact energy per candidate.
+    energy_seed: seed for those noise draws, so the estimate is stochastic but
+        reproducible across runs. Every chunk and timestep is scored against the
+        same noise vectors, keeping energies comparable.
     tie_tol: passed to pairwise_win_rate — ground-truth score pairs within this
         tolerance are thrown out as ties rather than graded (default 0.0 =
         only exact ties). Raise this to match a metric's training-time
@@ -157,7 +172,8 @@ def eval_energy_ranking(pretrained_policy, finetuned_policy, obs_data, maze_type
             traj_chunks.append(chunk_traj.cpu())
             for t in energy_timesteps:
                 chunk_energy = finetuned_policy.get_energy(
-                    action_batch={'action': chunk_traj}, t=t, observation_batch=chunk_obs
+                    action_batch={'action': chunk_traj}, t=t, observation_batch=chunk_obs,
+                    n_noise=n_noise, deterministic=deterministic, seed=energy_seed,
                 )
                 energy_chunks[t].append(chunk_energy.squeeze(-1).cpu())
 
@@ -253,6 +269,24 @@ def main():
                               "separately (plus mean_energy/mean_rank aggregates), average the "
                               "energies across all given landscapes first and report a single "
                               "ranking from that averaged energy.")
+    parser.add_argument("--n-noise", type=int, default=DEFAULT_ENERGY_N_NOISE,
+                         help=f"Number of noise draws each candidate's energy is averaged over, "
+                              f"at every --energy-timesteps landscape (default "
+                              f"{DEFAULT_ENERGY_N_NOISE}). Each draw adds a fresh eps ~ N(0, I) "
+                              f"scaled to that timestep, so the score estimates the expected "
+                              f"energy over the timestep's noise distribution rather than the "
+                              f"energy at a single point. Ignored with --deterministic. Runtime "
+                              f"scales linearly with this.")
+    parser.add_argument("--energy-seed", type=int, default=DEFAULT_ENERGY_SEED,
+                         help=f"Seed for the energy noise draws (default {DEFAULT_ENERGY_SEED}), so "
+                              f"scoring is stochastic but reproducible across runs. Every chunk and "
+                              f"timestep reuses the same noise vectors, keeping energies comparable. "
+                              f"Ignored with --deterministic.")
+    parser.add_argument("--deterministic", action="store_true",
+                         help="Score energies with no noise added — trajectories are only "
+                              "rescaled to the timestep, giving one exact energy per candidate. "
+                              "This is the old behavior, before energies were averaged over "
+                              "--n-noise draws.")
     parser.add_argument("--tie-tol", type=float, default=0.0,
                          help="Ground-truth score pairs within this tolerance are thrown out "
                               "as ties instead of graded (default 0.0 = only exact ties). Set "
@@ -313,12 +347,15 @@ def main():
         maze_type=maze_type, metrics=args.metrics, n_samples=args.n_samples,
         sampler=args.sampler, goal=goal, seed=args.seed,
         energy_timesteps=args.energy_timesteps, avg=args.avg, tie_tol=args.tie_tol,
+        n_noise=args.n_noise, deterministic=args.deterministic, energy_seed=args.energy_seed,
     )
 
+    noise_desc = ("deterministic (no noise)" if args.deterministic
+                  else f"mean over {args.n_noise} noise draws (seed {args.energy_seed})")
     print(f"\n{len(obs_data)} obs  |  {args.n_samples} candidates/obs sampled from the pretrained "
           f"policy  |  energy scored under the fine-tuned policy at "
           f"t={args.energy_timesteps}{' (averaged)' if args.avg else ''}  |  "
-          f"tie_tol={args.tie_tol}\n")
+          f"{noise_desc}  |  tie_tol={args.tie_tol}\n")
     for m in args.metrics:
         print(f"  {m}:")
         for s, r in results[m].items():

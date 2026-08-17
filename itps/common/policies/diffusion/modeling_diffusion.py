@@ -41,6 +41,11 @@ from itps.common.policies.utils import (
 )
 import time
 
+# Default number of noise draws a trajectory's energy is averaged over, and the
+# default seed those draws are generated from.
+DEFAULT_ENERGY_N_NOISE = 10
+DEFAULT_ENERGY_SEED = 0
+
 ## --- helper functions --- ##
 
 def extract(a, t, x_shape):
@@ -199,7 +204,9 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
 
         return trainable_params
 
-    def get_energy(self, action_batch: dict[str, Tensor], t: int, observation_batch: dict[str, Tensor]):
+    def get_energy(self, action_batch: dict[str, Tensor], t: int, observation_batch: dict[str, Tensor],
+                   n_noise: int = DEFAULT_ENERGY_N_NOISE, deterministic: bool = False,
+                   seed: int | None = DEFAULT_ENERGY_SEED):
         observation_batch = self.normalize_inputs(observation_batch)
         action_batch = self.normalize_targets(action_batch)
         # if len(self.expected_image_keys) > 0: #TODO: Update if necessary 
@@ -208,7 +215,8 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
         #     )
         # get_traj_energies(self, trajectories: Tensor, t: int, global_cond: Tensor | None = None, mask: Tensor | None = None):
         trajectory = action_batch["action"]
-        return self.diffusion.get_traj_energies(trajectory, t, observation_batch)
+        return self.diffusion.get_traj_energies(trajectory, t, observation_batch,
+                                                n_noise=n_noise, deterministic=deterministic, seed=seed)
 
 def _make_noise_scheduler(name: str, **kwargs: dict) -> DDPMScheduler | DDIMScheduler:
     """
@@ -554,28 +562,57 @@ class EBMDiffusionModel(nn.Module):
         return global_cond
 
 
-    def get_traj_energies(self, trajectories: Tensor, t: int, observation_batch: dict[str, Tensor], mask: Tensor | None = None):
+    def get_traj_energies(self, trajectories: Tensor, t: int, observation_batch: dict[str, Tensor], mask: Tensor | None = None,
+                          n_noise: int = DEFAULT_ENERGY_N_NOISE, deterministic: bool = False,
+                          seed: int | None = DEFAULT_ENERGY_SEED):
         """
             trajectory: (B, horizon, action_dim)
             mask gives trajectory padding mask.
             t: energy landscape timestep
+            n_noise: number of noise draws to average the energy over. Each draw adds
+                a fresh eps ~ N(0, I) at timestep t, so the returned value estimates
+                E_eps[energy(x_t)] rather than the energy of a single point.
+                Ignored when deterministic=True.
+            deterministic: if True, add no noise (eps=0) so trajectories are only
+                rescaled to timestep t, giving one exact energy per trajectory.
+            seed: seed for the noise draws, so the estimate is stochastic but
+                reproducible. The same seed is used on every call, which also means
+                every batch is scored against the same set of noise vectors (common
+                random numbers) -- energies stay comparable across chunks and
+                timesteps. Pass None to draw from the global RNG instead.
         }
         """
 
-        #timesteps = torch.full((trajectories.shape[0],), 0, device=trajectories.device).long()
-
-        # Transform trajectories to correct timestep (don't add noise for exact energy calc)
-        # timesteps = t.repeat(trajectories.shape[0])
-        eps = torch.zeros(trajectories.shape, device=trajectories.device)
         timesteps = torch.full((trajectories.shape[0],), t, device=trajectories.device).long()
-        noisy_trajectories = self.noise_scheduler.add_noise(trajectories, eps, timesteps)
-
         global_cond = self._prepare_global_conditioning(observation_batch)
-        #timesteps = torch.full((trajectories.shape[0],), t, device=trajectories.device).long()
-        energies = self.model(noisy_trajectories, timesteps, global_cond=global_cond, return_energy=True, mask=mask)
-        #sigma_t_sqr = 1 - self.noise_scheduler.alphas_cumprod[t]
 
-        return energies 
+        if deterministic:
+            # Transform trajectories to correct timestep (don't add noise for exact energy calc)
+            eps = torch.zeros(trajectories.shape, device=trajectories.device)
+            noisy_trajectories = self.noise_scheduler.add_noise(trajectories, eps, timesteps)
+            return self.model(noisy_trajectories, timesteps, global_cond=global_cond, return_energy=True, mask=mask)
+
+        assert n_noise >= 1, f"n_noise must be >= 1, got {n_noise}"
+
+        generator = None
+        if seed is not None:
+            generator = torch.Generator(device=trajectories.device)
+            generator.manual_seed(seed)
+
+        # One forward pass per noise draw, accumulating the sum, so peak memory
+        # matches the deterministic path instead of scaling with n_noise.
+        energy_sum = None
+        for _ in range(n_noise):
+            eps = torch.randn(trajectories.shape, device=trajectories.device, generator=generator)
+            noisy_trajectories = self.noise_scheduler.add_noise(trajectories, eps, timesteps)
+            energy = self.model(noisy_trajectories, timesteps, global_cond=global_cond, return_energy=True, mask=mask)
+            if not torch.is_grad_enabled():
+                # EBMWrapper.forward always builds a graph; drop it when scoring so
+                # we don't retain n_noise graphs at once.
+                energy = energy.detach()
+            energy_sum = energy if energy_sum is None else energy_sum + energy
+
+        return energy_sum / n_noise
 
 
     def generate_actions(self, batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, normalizer=None,return_full=False, opt_energy=True, steps_per_timestep=1, opt_subset: int | None = None, denoise=False, return_grad_steps=False) -> Tensor:
