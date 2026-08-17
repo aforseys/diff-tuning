@@ -576,10 +576,15 @@ class EBMDiffusionModel(nn.Module):
             deterministic: if True, add no noise (eps=0) so trajectories are only
                 rescaled to timestep t, giving one exact energy per trajectory.
             seed: seed for the noise draws, so the estimate is stochastic but
-                reproducible. The same seed is used on every call, which also means
-                every batch is scored against the same set of noise vectors (common
-                random numbers) -- energies stay comparable across chunks and
-                timesteps. Pass None to draw from the global RNG instead.
+                reproducible across runs. Pass None to draw from the global RNG
+                instead.
+
+        Every trajectory in the batch is noised with the SAME n_noise vectors
+        (common random numbers), and since the generator is re-seeded on each call,
+        so is every other batch and timestep. Each energy is still an unbiased
+        estimate of E_eps[energy(x_t)] on its own, but sharing the draws means the
+        *differences* between trajectories are far less sensitive to which vectors
+        came up -- which is what ranking trajectories against each other depends on.
         }
         """
 
@@ -601,9 +606,13 @@ class EBMDiffusionModel(nn.Module):
 
         # One forward pass per noise draw, accumulating the sum, so peak memory
         # matches the deterministic path instead of scaling with n_noise.
+        # eps is drawn once per pass and broadcast over the batch, so every
+        # trajectory is compared under the same noise (see docstring).
+        shared_noise_shape = (1, *trajectories.shape[1:])
         energy_sum = None
         for _ in range(n_noise):
-            eps = torch.randn(trajectories.shape, device=trajectories.device, generator=generator)
+            eps = torch.randn(shared_noise_shape, device=trajectories.device,
+                              generator=generator).expand_as(trajectories)
             noisy_trajectories = self.noise_scheduler.add_noise(trajectories, eps, timesteps)
             energy = self.model(noisy_trajectories, timesteps, global_cond=global_cond, return_energy=True, mask=mask)
             if not torch.is_grad_enabled():

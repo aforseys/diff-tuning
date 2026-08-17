@@ -113,8 +113,9 @@ def eval_energy_ranking(pretrained_policy, finetuned_policy, obs_data, maze_type
     deterministic: if True, score energies with no noise added (trajectories are
         only rescaled to the timestep), i.e. one exact energy per candidate.
     energy_seed: seed for those noise draws, so the estimate is stochastic but
-        reproducible across runs. Every chunk and timestep is scored against the
-        same noise vectors, keeping energies comparable.
+        reproducible across runs. All candidates are noised with the same vectors
+        (common random numbers), so a pair's energy difference -- the only thing
+        pairwise_win_rate looks at -- barely depends on which draws came up.
     tie_tol: passed to pairwise_win_rate — ground-truth score pairs within this
         tolerance are thrown out as ties rather than graded (default 0.0 =
         only exact ties). Raise this to match a metric's training-time
@@ -279,8 +280,9 @@ def main():
                               f"scales linearly with this.")
     parser.add_argument("--energy-seed", type=int, default=DEFAULT_ENERGY_SEED,
                          help=f"Seed for the energy noise draws (default {DEFAULT_ENERGY_SEED}), so "
-                              f"scoring is stochastic but reproducible across runs. Every chunk and "
-                              f"timestep reuses the same noise vectors, keeping energies comparable. "
+                              f"scoring is stochastic but reproducible across runs. All candidates "
+                              f"are noised with the same vectors (common random numbers), so a "
+                              f"pair's energy difference barely depends on which draws came up. "
                               f"Ignored with --deterministic.")
     parser.add_argument("--deterministic", action="store_true",
                          help="Score energies with no noise added — trajectories are only "
