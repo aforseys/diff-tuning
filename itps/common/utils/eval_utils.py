@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from matplotlib import pyplot as plt
 from itps.scripts.data_generation.gmm.gaussian_mm import get_weights, get_means, get_covs, mixture_pdf
-from itps.common.utils.utils import set_global_seed
+from itps.common.utils.utils import seeded_context
 from itps.common.policies.diffusion.modeling_diffusion import (
     DEFAULT_ENERGY_N_NOISE,
     DEFAULT_ENERGY_SEED,
@@ -366,9 +366,18 @@ def filter_samples(samples, finetune, conditional):
         return [np.concatenate(samples_by_obs)] #return list with concatenated np array
 
 def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=None, opt_params=[{'n_opt': 1, 't_subset': None, 'denoise': False}], methods=['ired', 'ddim'], viz_opt=False, save_samples_path=None, seed=None):
-    if seed is not None:
-        set_global_seed(seed)
+    if seed is None:
+        return _eval_GMM(policy, condition_type, finetune, N, viz, training_samples,
+                         opt_params, methods, viz_opt, save_samples_path)
+    # See eval_maze below: seeded_context restores the caller's RNG on exit, so an
+    # in-training eval doesn't reseed training's noise stream.
+    with seeded_context(seed):
+        return _eval_GMM(policy, condition_type, finetune, N, viz, training_samples,
+                         opt_params, methods, viz_opt, save_samples_path)
 
+
+def _eval_GMM(policy, condition_type, finetune, N, viz, training_samples,
+              opt_params, methods, viz_opt, save_samples_path):
     if condition_type == "conditional":
         conditional=True
     elif condition_type == "unconditional":
@@ -496,18 +505,36 @@ def eval_maze(policy, cfg, split='test', seed=None):
     """
     Offline trajectory evaluation for maze2d without running the gym env.
 
-    For each starting obs in eval_cfg.{split}_obs, generates n_samples_per_obs
-    trajectories via DDIM and computes the requested metrics.
+    For each starting obs in eval_cfg.{split}_obs, generates cfg.eval.n_samples
+    trajectories per obs and computes the requested metrics.
 
-    Config fields (under eval):
-      maze_type:         "large" | "sparse" | "open"
-      n_samples_per_obs: int
-      metrics:           list of "collision_rate" | "path_length" | "goal_dist"
-      train_obs / test_obs: list of [state_x, state_y, goal_x, goal_y]
+    Config fields:
+      env_type:          "large" | "sparse" | "open" (top level, not under eval)
+      eval.n_samples:    trajectories sampled per observation
+      eval.methods:      list of "ired" | "ddim"
+      eval.opt_params:   one entry per IRED variant to evaluate
+      eval.goal:         [x, y] target, required by "finetune_goal_dist"
+      eval.metrics:      list of "collision_rate" | "obs_goal_dist" |
+                         "finetune_goal_dist" | "center_rate" | "bottom_half_rate".
+                         The two goal metrics additionally report <metric>_pct
+                         (signed percentage-to-goal) and <metric>_pct_clipped.
+                         "nan_rate" is always reported.
+      eval.train_obs / eval.test_obs: JSON file of [state_x, state_y] or
+                         [state_x, state_y, goal_x, goal_y] for goal-conditioned policies
     """
-    if seed is not None:
-        set_global_seed(seed)
+    if seed is None:
+        return _eval_maze(policy, cfg, split)
+    # seeded_context, not set_global_seed: this is called from inside the training
+    # loop, so seeding globally would leave torch/numpy/random reseeded for every
+    # subsequent training step -- making the diffusion noise (torch.randn/randint in
+    # modeling_diffusion) repeat with period eval_freq. Restoring the caller's state
+    # on exit keeps eval reproducible -- the same trajectories are sampled every time
+    # -- without perturbing training's stream.
+    with seeded_context(seed):
+        return _eval_maze(policy, cfg, split)
 
+
+def _eval_maze(policy, cfg, split):
     obs_file = cfg.eval.train_obs if split == 'train' else cfg.eval.test_obs
     if obs_file is None:
         return {}
@@ -745,8 +772,15 @@ def eval_robosuite(policy, cfg, seed=None, render=False, n_viz_samples=0):
       test_bins:     list of bin indices NOT seen during finetuning (GC only; null for non-GC)
       n_episodes:    episodes sampled per condition
     """
-    if seed is not None:
-        set_global_seed(seed)
+    if seed is None:
+        return _eval_robosuite(policy, cfg, seed, render, n_viz_samples)
+    # See eval_maze above: seeded_context restores the caller's RNG on exit, so an
+    # in-training eval doesn't reseed training's noise stream.
+    with seeded_context(seed):
+        return _eval_robosuite(policy, cfg, seed, render, n_viz_samples)
+
+
+def _eval_robosuite(policy, cfg, seed, render, n_viz_samples):
     rng = np.random.default_rng(seed)
 
     from collections import deque
