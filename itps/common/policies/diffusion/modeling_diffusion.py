@@ -110,7 +110,7 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
         return set(self.config.input_shapes)
 
     @torch.no_grad 
-    def run_inference(self, observation_batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, return_full=False, return_energy=False, methods=['ired', 'ddim'], opt_params=[{'n_opt':1, 't_subset': None, 'denoise': False}], return_grad_steps=False) -> Tensor:
+    def run_inference(self, observation_batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, return_full=False, methods=['ired', 'ddim'], opt_params=[{'n_opt':1, 't_subset': None, 'denoise': False}], return_grad_steps=False) -> Tensor:
         # Normalize a shallow copy: Normalize writes into the dict it is given, so
         # normalizing the caller's dict would double-normalize it if the caller also
         # passes it to get_energy (or back here) afterwards.
@@ -136,20 +136,15 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
 
 
         #print('gen actions output:', gen_actions['actions'].shape)
-        if return_energy:
-            # Score whatever the caller asked to get back: the full horizon when
-            # return_full is set, otherwise the executed n_action_steps slice.
-            # Note the UNet is convolutional over time with two stride-2 downsamples,
-            # so per-step outputs depend on window length -- energies from a full-traj
-            # call and an actions-only call are each self-consistent but are NOT
-            # comparable to each other.
-            energy_key = 'full_traj' if return_full else 'actions'
-            # Still normalized here -- unnormalize_outputs runs below, after this.
-            energies = [self.diffusion.get_traj_energies(a[energy_key], t=0, observation_batch=observation_batch) for a in gen_actions]
-        #print(energies)
-        #print(np.min(energies))
-        #print(np.max(energies))
-        #print(np.mean(energies))
+
+        # Energies are deliberately NOT computed here. Callers that want them call
+        # `get_energy` explicitly on the array they intend to score, which forces them
+        # to name the timestep, the noise settings (n_noise/deterministic/seed) and the
+        # window. This used to be a `return_energy` flag that hardcoded t=0, silently
+        # took the noise defaults, and picked the window implicitly from `return_full` --
+        # and the UNet is convolutional over time with two stride-2 downsamples, so
+        # per-step outputs depend on window length: full-traj and actions-only energies
+        # are each self-consistent but are NOT comparable to each other.
 
         if return_grad_steps:
             grad_histories = []
@@ -171,13 +166,7 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
             return actions, grad_histories
         if return_full:
             full_traj = [self.unnormalize_outputs({"action": a['full_traj']})["action"] for a in gen_actions]
-            # Both flags -> 3-tuple. Previously return_full short-circuited return_energy,
-            # so energies were computed and then silently discarded.
-            if return_energy:
-                return actions, full_traj, energies
             return actions, full_traj
-        if return_energy:
-            return actions, energies
 
         return actions
 

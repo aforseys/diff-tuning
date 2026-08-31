@@ -218,7 +218,7 @@ class MazeEnv:
 class UnconditionalMaze(MazeEnv):
 
     # for dragging the agent around to explore motion manifold
-    def __init__(self, policy, policy_tag=None, vis_energy=False, maze_type="large", obs_list=None, opt_params=None, ddim=False):
+    def __init__(self, policy, policy_tag=None, vis_energy=False, maze_type="large", obs_list=None, opt_params=None, ddim=False, sample_seed=0):
         super().__init__(maze_type=maze_type)
         self.mouse_pos = None
         self.agent_in_collision = False
@@ -229,6 +229,10 @@ class UnconditionalMaze(MazeEnv):
         self.obs_list = obs_list
         self.opt_params = opt_params if opt_params is not None else [{'n_opt': 1, 't_subset': None, 'denoise': False}]
         self.sampling_methods = ['ddim'] if ddim else ["ired"]
+        # Seeds the initial diffusion noise on every infer_target call -- see there for
+        # what that implies. Default 0 is what every dataset collected before this was
+        # configurable used, so the default regenerates them exactly.
+        self.sample_seed = sample_seed
 
     def infer_target(self, guide=None, visualizer=None, return_energy=False, goal_pos=None):
         agent_hist_xy = self.agent_history_xy[-1] 
@@ -255,12 +259,28 @@ class UnconditionalMaze(MazeEnv):
             guide = torch.from_numpy(guide).float().cuda()
 
         start = time.perf_counter()
-        with torch.autocast(device_type="cuda"), seeded_context(0):
+        # seeded_context is re-entered on EVERY call, and batch_size is constant, so the
+        # initial noise is identical for every observation: one collection run explores
+        # the same `batch_size` draws from the prior throughout. That makes a run exactly
+        # reproducible; pass --sample-seed to collect a differently-seeded candidate pool
+        # (default 0 == every dataset collected before this flag existed).
+        with torch.autocast(device_type="cuda"), seeded_context(self.sample_seed):
             if self.policy_tag == 'act':
                 actions = self.policy.run_inference(obs_batch).cpu().numpy()
             elif return_energy:
-                actions, energy = self.policy.run_inference(obs_batch, guide=guide, visualizer=visualizer, return_energy=True) # directly call the policy in order to visualize the intermediate steps
-                return actions.detach().cpu().numpy(), energy.detach().cpu().numpy().squeeze()
+                # Not wired up. `run_inference` no longer returns energies -- scoring now
+                # goes through `policy.get_energy(...)`, which makes the timestep, the
+                # noise settings and the window explicit. This branch was already dead
+                # before that removal: it unpacked `run_inference`'s list return as a bare
+                # tensor, so `.detach()` raised AttributeError and `--vis_energy` has never
+                # run. Rebuild it as, on the same trajectory that gets drawn:
+                #     energy = self.policy.get_energy(
+                #         action_batch={'action': actions}, t=0,
+                #         observation_batch=obs_batch, deterministic=True)
+                raise NotImplementedError(
+                    "Energy visualization (--vis_energy) is not set up. Score the drawn "
+                    "trajectory with policy.get_energy(...) instead; see the comment above."
+                )
             else:
                 actions = self.policy.run_inference(obs_batch, guide=guide, visualizer=visualizer, opt_params=self.opt_params, methods=self.sampling_methods)[0].cpu().numpy() # directly call the policy in order to visualize the intermediate steps
         torch.cuda.synchronize()  # important — ensures GPU work is complete before stopping the clock
@@ -391,8 +411,8 @@ class UnconditionalMaze(MazeEnv):
 
 class ConditionalMaze(UnconditionalMaze):
     # for interactive guidance dataset collection
-    def __init__(self, policy, vis_dp_dynamics=False, savepath=None, alignment_strategy=None, policy_tag=None,  maze_type='large', obs_list=None, opt_params=None, ddim=False, point_guide=False):
-        super().__init__(policy, policy_tag=policy_tag,  maze_type=maze_type, obs_list=obs_list, opt_params=opt_params, ddim=ddim)
+    def __init__(self, policy, vis_dp_dynamics=False, savepath=None, alignment_strategy=None, policy_tag=None,  maze_type='large', obs_list=None, opt_params=None, ddim=False, point_guide=False, sample_seed=0):
+        super().__init__(policy, policy_tag=policy_tag,  maze_type=maze_type, obs_list=obs_list, opt_params=opt_params, ddim=ddim, sample_seed=sample_seed)
         self.drawing = False
         self.keep_drawing = False
         self.vis_dp_dynamics = vis_dp_dynamics
@@ -572,8 +592,8 @@ class ConditionalMaze(UnconditionalMaze):
 
 class MazeExp(ConditionalMaze):
     # for replaying the trials and benchmarking the alignment strategies
-    def __init__(self, policy, vis_dp_dynamics=False, savepath=None, alignment_strategy=None, policy_tag=None, loadpath=None, maze_type='large'):
-        super().__init__(policy, vis_dp_dynamics, savepath, policy_tag=policy_tag, maze_type=maze_type)
+    def __init__(self, policy, vis_dp_dynamics=False, savepath=None, alignment_strategy=None, policy_tag=None, loadpath=None, maze_type='large', sample_seed=0):
+        super().__init__(policy, vis_dp_dynamics, savepath, policy_tag=policy_tag, maze_type=maze_type, sample_seed=sample_seed)
         # Load saved trails
         assert loadpath is not None
         with open(args.loadpath, "r", buffering=1) as file:
@@ -1036,6 +1056,13 @@ if __name__ == "__main__":
     parser.add_argument('-s', '--savepath', type=str, default=None, help="Filename to save the drawing")
     parser.add_argument('-l', '--loadpath', type=str, default=None, help="Filename to load the drawing")
     parser.add_argument('-e', '--vis_energy', action='store_true', help="Visualize energy")
+    parser.add_argument('--sample-seed', type=int, default=0,
+                        help="Seed for the initial diffusion noise, re-applied on every "
+                             "inference call (default 0). Because it is re-applied per call "
+                             "with a constant batch size, one run explores the same batch_size "
+                             "draws from the prior for every observation. Change it to collect "
+                             "a different candidate pool; keep 0 to reproduce any dataset "
+                             "collected before this flag existed.")
     parser.add_argument('-mt',  '--maze_type', default="large", type=str, help="Maze Type")
     parser.add_argument('-gc', '--goal_conditioned', action='store_true', help="Condition on goal")
     parser.add_argument('-of', '--obs-file', default=None, help="Path to loaded observations")
@@ -1119,7 +1146,7 @@ if __name__ == "__main__":
     ddim = args.ddim
     
     if args.unconditional:
-        interactiveMaze = UnconditionalMaze(policy, policy_tag=policy_tag, vis_energy=args.vis_energy, maze_type=args.maze_type, obs_list=obs_list, opt_params=opt_params, ddim=ddim)
+        interactiveMaze = UnconditionalMaze(policy, policy_tag=policy_tag, vis_energy=args.vis_energy, maze_type=args.maze_type, obs_list=obs_list, opt_params=opt_params, ddim=ddim, sample_seed=args.sample_seed)
     elif args.loadpath is not None:
         if args.savepath is None:
             savepath = None
@@ -1134,9 +1161,9 @@ if __name__ == "__main__":
             elif alignment_strategy == 'stochastic-sampling':
                 alignment_tag = 'ss'
             savepath = f"{args.loadpath[:-5]}_{policy_tag}_{alignment_tag}{args.savepath}"
-        interactiveMaze = MazeExp(policy, args.vis_dp_dynamics, savepath, alignment_strategy, policy_tag=policy_tag, loadpath=args.loadpath, maze_type=args.maze_type)
+        interactiveMaze = MazeExp(policy, args.vis_dp_dynamics, savepath, alignment_strategy, policy_tag=policy_tag, loadpath=args.loadpath, maze_type=args.maze_type, sample_seed=args.sample_seed)
     else:
-        interactiveMaze = ConditionalMaze(policy, args.vis_dp_dynamics, args.savepath, alignment_strategy, policy_tag=policy_tag, maze_type=args.maze_type, obs_list=obs_list, opt_params=opt_params, ddim=ddim, point_guide=args.point_guide)
+        interactiveMaze = ConditionalMaze(policy, args.vis_dp_dynamics, args.savepath, alignment_strategy, policy_tag=policy_tag, maze_type=args.maze_type, obs_list=obs_list, opt_params=opt_params, ddim=ddim, point_guide=args.point_guide, sample_seed=args.sample_seed)
     if args.goal_conditioned:
         interactiveMaze.run_gc()
     else:
