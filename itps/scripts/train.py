@@ -48,7 +48,7 @@ from itps.common.utils.utils import (
     init_logging,
     set_global_seed,
 )
-from itps.scripts.eval import eval_policy
+from itps.scripts.eval.eval import eval_policy
 from itps.common.utils.eval_utils import eval_GMM, eval_maze, eval_robosuite
 
 def make_optimizer_and_scheduler(cfg, policy, train_FiLM_only=False):
@@ -478,19 +478,10 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     else:
         shuffle = True
         sampler = None
-    # In preference finetuning (DPO / energy) the pref batch is combined with the
-    # base batch per-sample in compute_loss (shared sampled timesteps + noise, and
-    # pos/neg MSE combined with the base MSE), so both dataloaders MUST yield the
-    # same batch size -- see the `pos_batch["action"].shape == trajectory.shape`
-    # assert. If a small n_queries leaves fewer pairs than batch_size, cap BOTH.
-    effective_batch_size = cfg.training.batch_size
-    if pref_tune_dataset is not None:
-        effective_batch_size = min(cfg.training.batch_size, len(pref_tune_dataset))
-
     dataloader = torch.utils.data.DataLoader(
         offline_dataset,
         num_workers=cfg.training.num_workers,
-        batch_size=effective_batch_size,
+        batch_size=cfg.training.batch_size,
         shuffle=shuffle,
         sampler=sampler,
         pin_memory=device.type != "cpu",
@@ -514,39 +505,38 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
         demo_tune_dataloader = torch.utils.data.DataLoader(
             demo_tune_dataset,
             num_workers=cfg.training.num_workers,
-            batch_size=min(cfg.training.batch_size, len(demo_tune_dataset)),
+            batch_size=cfg.training.batch_size,
             shuffle=shuffle,
             sampler=sampler,
             pin_memory=device.type != "cpu",
             drop_last=True,
-            # The tune dataset can be tiny (e.g. small n_queries), so cycle() exhausts it
-            # every few steps; without persistent workers each re-iter respawns all
-            # num_workers processes, which dominates wall-clock time.
-            persistent_workers=cfg.training.num_workers > 0,
         )
         dt_dl_iter = cycle(demo_tune_dataloader)
 
     elif pref_tune_dataset is not None:
-        # Use full trajectories so don't need to drop samples (#TODO: MAKE SURE CORRECT, LOADED CORRECTLY)
-        shuffle = True
-        sampler = None
-            
+        # PreferencePairDataset.__len__ counts PAIRS, not frames, so with a small
+        # n_queries a natural epoch is only 1-3 batches. cycle() would then rebuild the
+        # loader almost every step, and a 1-batch epoch makes prefetching structurally
+        # impossible (the workers can never run ahead), which is what pins tune_data_s
+        # well above updt_s.
+        #
+        # Fix: one "epoch" spans the whole run, so cycle() never re-iterates. Draws are
+        # repeated shuffled passes over the pair set (replacement=False), so every pair
+        # is seen equally often and batches are always full cfg.training.batch_size --
+        # keeping batch size decoupled from n_queries, which the DPO/energy losses
+        # require anyway (see the `pos_batch["action"].shape == trajectory.shape` assert).
+        pref_sampler = torch.utils.data.RandomSampler(
+            pref_tune_dataset,
+            replacement=False,
+            num_samples=cfg.training.batch_size * cfg.training.offline_steps,
+        )
         pref_tune_dataloader = torch.utils.data.DataLoader(
             pref_tune_dataset,
             num_workers=cfg.training.num_workers,
-            # Same batch size as the base loader above (effective_batch_size): the DPO/
-            # energy loss requires pos/neg batches to match the base trajectory batch,
-            # and capping at the dataset size also avoids an empty loader (< batch_size
-            # pairs + drop_last=True -> zero batches -> cycle() spins).
-            batch_size=effective_batch_size,
-            shuffle=shuffle,
-            sampler=sampler,
+            batch_size=cfg.training.batch_size,
+            sampler=pref_sampler,
             pin_memory=device.type != "cpu",
             drop_last=True,
-            # With n_queries capping the dataset, one epoch is only 1-3 batches, so
-            # cycle() re-iterates constantly; without persistent workers each re-iter
-            # respawns all num_workers processes, which dominates wall-clock time.
-            persistent_workers=cfg.training.num_workers > 0,
         )
         pt_dl_iter = cycle(pref_tune_dataloader)
 
