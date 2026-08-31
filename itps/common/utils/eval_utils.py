@@ -6,8 +6,12 @@ import json
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
-from itps.scripts.gaussian_mm import get_weights, get_means, get_covs, mixture_pdf
+from itps.scripts.data_generation.gmm.gaussian_mm import get_weights, get_means, get_covs, mixture_pdf
 from itps.common.utils.utils import set_global_seed
+from itps.common.policies.diffusion.modeling_diffusion import (
+    DEFAULT_ENERGY_N_NOISE,
+    DEFAULT_ENERGY_SEED,
+)
 
 ## -- RUN INFERENCE --
 def gen_obs(conditional, N, device):
@@ -89,7 +93,23 @@ def gen_xy_grid(x_range, y_range, device, return_tensor=True):
 
     return trajs
 
-def eval_energy(policy, trajs, t, conditional=False, batch_size=256):
+def eval_energy(policy, trajs, t, conditional=False, batch_size=256,
+                deterministic=True, n_noise=DEFAULT_ENERGY_N_NOISE, seed=DEFAULT_ENERGY_SEED):
+    """
+    Evaluate the policy's energy over `trajs` (a grid or sample set), one list
+    entry per observation context.
+
+    deterministic: defaults to True here, unlike the ranking scripts. These
+        energies are used as a LANDSCAPE -- summed over a 200x200 grid by
+        `kl_divergence`, or contoured for plots -- and get_traj_energies shares a
+        single eps draw across the whole batch (common random numbers). That
+        collapses the variance of *differences between* trajectories, which is
+        what ranking needs, but it leaves an integral over the grid carrying only
+        `n_noise` independent samples instead of n_points * n_noise, so the error
+        no longer cancels across the sum. Deterministic scoring also keeps these
+        values comparable with every GMM result produced before 2026-08-17.
+        Pass deterministic=False to average over `n_noise` draws instead.
+    """
     device = next(policy.parameters()).device
     observations = gen_obs(conditional=conditional, N=len(trajs), device=device)
     energies = []
@@ -98,7 +118,8 @@ def eval_energy(policy, trajs, t, conditional=False, batch_size=256):
         for i in range(0, trajs.size(0), batch_size):
             batch_traj = {'action': trajs[i:i+batch_size]}
             batch_obs = {k: v[i:i+batch_size] for k, v in obs.items()}
-            out = policy.get_energy(action_batch=batch_traj, t=t, observation_batch=batch_obs)
+            out = policy.get_energy(action_batch=batch_traj, t=t, observation_batch=batch_obs,
+                                    n_noise=n_noise, deterministic=deterministic, seed=seed)
             outputs.append(out.detach().cpu().numpy())
         energies.append(np.concatenate(outputs, axis=0))
     return energies
@@ -550,7 +571,6 @@ def eval_maze(policy, cfg, split='test', seed=None):
         nan_traj = nan_steps.any(axis=-1)         # (N_obs*n_samples,)
         per_obs['nan_rate'] = nan_traj.reshape(N_obs, n_samples).mean(axis=1).tolist()
 
-        #TODO: check all this math with numpy and the batches etc. executes / lines up correctly
         for m in metrics:
             if m == 'collision_rate':
                 collisions = check_maze_collision(traj, maze)
@@ -730,7 +750,7 @@ def eval_robosuite(policy, cfg, seed=None, render=False, n_viz_samples=0):
     rng = np.random.default_rng(seed)
 
     from collections import deque
-    from itps.scripts.bin_placing import make_eval_env, OBJECT_MAP
+    from itps.scripts.data_generation.robosuite.bin_placing import make_eval_env, OBJECT_MAP
 
     n_episodes       = cfg.eval.n_episodes
     n_bins           = 4
@@ -912,7 +932,7 @@ def eval_robosuite(policy, cfg, seed=None, render=False, n_viz_samples=0):
                     from itps.trajectory_opt.geometric_features import (
                         BinXAlignment, BinYAlignment, ZTableDistance, GoalProgress
                     )
-                    from itps.scripts.bin_placing import BinTableArena
+                    from itps.scripts.data_generation.robosuite.bin_placing import BinTableArena
                     positions = np.array(eef_pos_buf)
                     quats     = np.array(eef_quat_buf)
                     bx, by    = BinTableArena.BIN_XY[target_bin]
