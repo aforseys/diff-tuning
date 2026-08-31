@@ -137,7 +137,15 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
 
         #print('gen actions output:', gen_actions['actions'].shape)
         if return_energy:
-            energies = [self.diffusion.get_traj_energies(a['actions'], t=0, observation_batch=observation_batch) for a in gen_actions]
+            # Score whatever the caller asked to get back: the full horizon when
+            # return_full is set, otherwise the executed n_action_steps slice.
+            # Note the UNet is convolutional over time with two stride-2 downsamples,
+            # so per-step outputs depend on window length -- energies from a full-traj
+            # call and an actions-only call are each self-consistent but are NOT
+            # comparable to each other.
+            energy_key = 'full_traj' if return_full else 'actions'
+            # Still normalized here -- unnormalize_outputs runs below, after this.
+            energies = [self.diffusion.get_traj_energies(a[energy_key], t=0, observation_batch=observation_batch) for a in gen_actions]
         #print(energies)
         #print(np.min(energies))
         #print(np.max(energies))
@@ -161,10 +169,14 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
         #print('actions after unnormalization output:', actions.shape)
         if return_grad_steps:
             return actions, grad_histories
-        elif return_full:
+        if return_full:
             full_traj = [self.unnormalize_outputs({"action": a['full_traj']})["action"] for a in gen_actions]
+            # Both flags -> 3-tuple. Previously return_full short-circuited return_energy,
+            # so energies were computed and then silently discarded.
+            if return_energy:
+                return actions, full_traj, energies
             return actions, full_traj
-        elif return_energy:
+        if return_energy:
             return actions, energies
 
         return actions
@@ -208,6 +220,7 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
         return trainable_params
 
     def get_energy(self, action_batch: dict[str, Tensor], t: int, observation_batch: dict[str, Tensor],
+                   mask: Tensor | None = None,
                    n_noise: int = DEFAULT_ENERGY_N_NOISE, deterministic: bool = False,
                    seed: int | None = DEFAULT_ENERGY_SEED):
         # Shallow-copy before normalizing (see run_inference): callers routinely score
@@ -222,7 +235,7 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
         #     )
         # get_traj_energies(self, trajectories: Tensor, t: int, global_cond: Tensor | None = None, mask: Tensor | None = None):
         trajectory = action_batch["action"]
-        return self.diffusion.get_traj_energies(trajectory, t, observation_batch,
+        return self.diffusion.get_traj_energies(trajectory, t, observation_batch, mask=mask,
                                                 n_noise=n_noise, deterministic=deterministic, seed=seed)
 
 def _make_noise_scheduler(name: str, **kwargs: dict) -> DDPMScheduler | DDIMScheduler:
@@ -908,10 +921,12 @@ class EBMDiffusionModel(nn.Module):
         else:
             mask = None
 
-        # Compute loss 
-        loss_mse = self._compute_denoising_mse_loss(batch, timesteps, eps, mask=mask)
-        loss_mse = loss_mse * extract(self.loss_weight, timesteps, loss_mse.shape) # weight MSE loss by timestep
-        
+        # Compute loss. Keep the raw (unweighted) squared error around: the DPO branch
+        # applies the SNR weight OUTSIDE its sigmoid, so it needs the unweighted margin.
+        loss_mse_raw = self._compute_denoising_sq_error(batch, timesteps, eps, mask=mask)
+        snr_w = extract(self.loss_weight, timesteps, loss_mse_raw.shape)  # (B, 1), same for every term at this timestep
+        loss_mse = loss_mse_raw * snr_w # weight MSE loss by timestep
+
 
         ## Contrastive Energy Loss ##
         if getattr(self.config, 'supervise_energy_landscape', False): 
@@ -925,9 +940,14 @@ class EBMDiffusionModel(nn.Module):
             else:
                 mask_concat = None
 
-            # Compute loss 
+            # Compute loss. NOTE: deliberately NOT multiplied by extract(self.loss_weight, ...)
+            # -- unlike every other loss term here. This follows IRED, where the landscape
+            # supervision is applied uniformly across timesteps. Consequence: its weight
+            # relative to gradient_loss_weight rises at high t, where snr_w -> 0.
+            # The shared eps (scaled by neg_eps_weight for the negative) is also load-bearing:
+            # the "negative" IS this same trajectory at 2x noise, so the draws must match.
             neg_eps_weight=2.0 # Negative batch will just be corrupted version of positive. Can test various ways (here 2x noise). Starting point in IRED and used in itps was 3x.
-            loss_energy = self._compute_comparison_energy_loss(batch, batch, eps, timesteps, mask=mask_concat, neg_eps_weight=neg_eps_weight)
+            loss_energy = self._compute_comparison_energy_loss(batch, batch, eps, eps*neg_eps_weight, timesteps, mask=mask_concat)
 
 
         #### RETURN LOSS IF NO TUNING LOSSES ####
@@ -958,12 +978,15 @@ class EBMDiffusionModel(nn.Module):
             assert pos_batch["action"].shape == trajectory.shape
             assert pos_batch["action"].device == trajectory.device
 
-            # Add same amount of noise to both positive and negative comparisons
-            eps = torch.randn(trajectory.shape, device=trajectory.device)
+            # Draw the positive and negative noise INDEPENDENTLY, matching the DPO branch
+            # so both methods are compared under the same noise protocol. Timesteps stay
+            # shared across base/pos/neg -- that is what the shape assert protects.
+            eps_pos = torch.randn(pos_batch["action"].shape, device=trajectory.device)
+            eps_neg = torch.randn(neg_batch["action"].shape, device=trajectory.device)
             mask = None # No mask needed when working with pref dataset
 
-            # Compute loss 
-            loss_energy_finetune = self._compute_comparison_energy_loss(pos_batch, neg_batch, eps, timesteps, mask=mask)
+            # Compute loss
+            loss_energy_finetune = self._compute_comparison_energy_loss(pos_batch, neg_batch, eps_pos, eps_neg, timesteps, mask=mask)
             loss_energy_finetune = loss_energy_finetune * extract(self.loss_weight, timesteps, loss_energy_finetune.shape) # weight pref loss by timestep 
             
             # Process loss
@@ -983,20 +1006,25 @@ class EBMDiffusionModel(nn.Module):
             assert pos_batch["action"].shape == trajectory.shape
             assert pos_batch["action"].device == trajectory.device
 
-            # Add same amount of noise to both positive and negative comparisons
-            eps = torch.randn(trajectory.shape, device=trajectory.device)
+            # Draw eps^+ and eps^- INDEPENDENTLY, as the objective specifies. Timesteps
+            # stay shared across base/pos/neg -- that is what the shape assert protects,
+            # and it makes loss_mse_raw a one-sample estimate of the regularization
+            # expectation at this sample's own timestep.
+            eps_pos = torch.randn(pos_batch["action"].shape, device=trajectory.device)
+            eps_neg = torch.randn(neg_batch["action"].shape, device=trajectory.device)
             mask = None # Pref dataset contains full horizon trajectories so no mask needed
 
-            # Calculate positive and negative sample MSE 
-            pos_mse_loss = self._compute_denoising_mse_loss(pos_batch, timesteps, eps, mask=mask)
-            neg_mse_loss = self._compute_denoising_mse_loss(neg_batch, timesteps, eps, mask=mask)
-            # Weight MSE according to timestep (as all MSE calculations)
-            pos_mse_loss = pos_mse_loss * extract(self.loss_weight, timesteps, pos_mse_loss.shape)
-            neg_mse_loss = neg_mse_loss * extract(self.loss_weight, timesteps, neg_mse_loss.shape)
+            # Calculate positive and negative sample squared error (unweighted: the SNR
+            # weight is applied outside the sigmoid, below).
+            pos_mse_loss = self._compute_denoising_sq_error(pos_batch, timesteps, eps_pos, mask=mask)
+            neg_mse_loss = self._compute_denoising_sq_error(neg_batch, timesteps, eps_neg, mask=mask)
 
-            # Process loss. Loss is a weighted combination of pos/neg MSE with base samples MSE
-            loss_dpo_finetune = pos_mse_loss-neg_mse_loss
-            loss = -F.sigmoid(-self.config.dpo_params['rho'] * (loss_dpo_finetune + self.config.dpo_params['mu']*loss_mse - self.config.dpo_params['b']))
+            # Process loss. One sigmoid per preference pair, on a (B, 1) margin.
+            # The SNR weight multiplies the per-sample loss rather than the sigmoid's
+            # argument: weighting inside would scale the margin but not `b`, making the
+            # sigmoid's centre (and hence what `b` means) depend on the sampled timestep.
+            loss_dpo_finetune = pos_mse_loss - neg_mse_loss
+            loss = -snr_w * F.sigmoid(-self.config.dpo_params['rho'] * (loss_dpo_finetune + self.config.dpo_params['mu']*loss_mse_raw - self.config.dpo_params['b']))
 
         ## Demonstration Finetuning Loss ##
         elif getattr(self.config, 'finetune_demos', False):
@@ -1027,8 +1055,10 @@ class EBMDiffusionModel(nn.Module):
             else:
                 mask = None
             
-            # Compute loss 
-            loss_demo_finetune = self._compute_denoising_mse_loss(demo_batch, demo_timesteps, demo_eps, mask=mask)
+            # Compute loss. Weighted per-term (not factored out like the other branches):
+            # the demo batch has its OWN demo_timesteps, so its SNR weight differs from
+            # the base batch's snr_w.
+            loss_demo_finetune = self._compute_denoising_sq_error(demo_batch, demo_timesteps, demo_eps, mask=mask)
             loss_demo_finetune = loss_demo_finetune * extract(self.loss_weight, demo_timesteps, loss_demo_finetune.shape) # weight MSE loss by timestep
 
             # Process loss 
@@ -1044,7 +1074,7 @@ class EBMDiffusionModel(nn.Module):
         }
 
         
-    def _compute_denoising_mse_loss(self, batch, timesteps, eps, mask=None):
+    def _compute_denoising_sq_error(self, batch, timesteps, eps, mask=None):
 
         # Assuming noise prediction
         assert self.config.prediction_type == "epsilon", "Assumes target prediction is noise."
@@ -1063,13 +1093,26 @@ class EBMDiffusionModel(nn.Module):
         if mask is not None:
             loss = loss * mask.unsqueeze(-1)
 
-        # Reduce loss to one item per trajectory
-        loss = einops.reduce(loss, 'b ... -> b (...)', 'mean')
+        # Reduce to one item per trajectory: the MEAN over the horizon x action_dim
+        # entries, i.e. ||eps - eps_theta||^2 / D with D = horizon * action_dim.
+        # (Was 'b ... -> b (...)', which keeps every input axis on the output side, so
+        # 'mean' reduced nothing -- it was a reshape to (B, D), not a reduction.)
+        # NOTE on units: any hyperparameter multiplying this is in "mean units".
+        # Against the squared L2 norm the DPO objective specifies: rho_L2 = rho / D.
+        loss = einops.reduce(loss, 'b ... -> b 1', 'mean')
         return loss
 
 
-    def _compute_comparison_energy_loss(self, pos_batch, neg_batch, eps, timesteps, mask=None, neg_eps_weight=1):
-
+    def _compute_comparison_energy_loss(self, pos_batch, neg_batch, eps_pos, eps_neg, timesteps, mask=None):
+        """
+        eps_pos / eps_neg are passed explicitly rather than derived from one draw, so the
+        caller decides the relationship between them:
+          - preference finetuning draws them INDEPENDENTLY (matching the DPO branch, so the
+            two methods are compared under the same noise protocol);
+          - landscape supervision passes `eps` and `eps * neg_eps_weight` from the SAME
+            draw, because there the "negative" is definitionally this trajectory at
+            higher noise -- independent draws would make it a different sample entirely.
+        """
         global_cond_pos = self._prepare_global_conditioning(pos_batch)
         global_cond_neg = self._prepare_global_conditioning(neg_batch)
         assert torch.equal(global_cond_pos, global_cond_neg), "Global conditions of pref comparisons must match"
@@ -1077,9 +1120,8 @@ class EBMDiffusionModel(nn.Module):
         positive_trajs = pos_batch["action"]
         negative_trajs = neg_batch["action"]
 
-        # Add same amount of noise to both positive and negative comparisons, unless weighting negative sample noise for corruption
-        positive_sample = self.noise_scheduler.add_noise(positive_trajs, eps, timesteps)
-        negative_sample = self.noise_scheduler.add_noise(negative_trajs, eps*neg_eps_weight, timesteps)
+        positive_sample = self.noise_scheduler.add_noise(positive_trajs, eps_pos, timesteps)
+        negative_sample = self.noise_scheduler.add_noise(negative_trajs, eps_neg, timesteps)
 
         # Compute energy of both samples 
         global_cond_concat = torch.cat([global_cond_pos, global_cond_neg], dim=0) #comparisons must have same global cond
