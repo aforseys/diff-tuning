@@ -487,6 +487,15 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
         pin_memory=device.type != "cpu",
         drop_last=True,
     )
+    # An empty loader is not an error torch reports: with drop_last=True a dataset
+    # shorter than batch_size yields zero batches, and cycle() re-iterates on
+    # StopIteration forever -- so the run hangs with no traceback. Fail here instead.
+    assert len(dataloader) > 0, (
+        f"Base loader yields 0 batches: {len(offline_dataset)} frames "
+        f"(the sampler yields fewer when drop_n_last_frames is set) < "
+        f"training.batch_size {cfg.training.batch_size} with drop_last=True. "
+        f"Lower training.batch_size."
+    )
     dl_iter = cycle(dataloader)
 
     # Make finetuning datasets.
@@ -510,6 +519,17 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
             sampler=sampler,
             pin_memory=device.type != "cpu",
             drop_last=True,
+        )
+        # Same hang as the base loader above, and more likely here: the demo dataset is
+        # not capped by n_queries, so its size is whatever the data gives, and
+        # EpisodeAwareSampler yields fewer indices than len(dataset) when
+        # drop_n_last_frames is set. Unlike the pref loader below, this one has no
+        # whole-run sampler to decouple batch count from dataset size.
+        assert len(demo_tune_dataloader) > 0, (
+            f"Demo loader yields 0 batches: {len(demo_tune_dataset)} frames "
+            f"(the sampler yields fewer when drop_n_last_frames is set) < "
+            f"training.batch_size {cfg.training.batch_size} with drop_last=True. "
+            f"Lower training.batch_size."
         )
         dt_dl_iter = cycle(demo_tune_dataloader)
 
