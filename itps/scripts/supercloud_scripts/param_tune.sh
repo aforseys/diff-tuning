@@ -26,7 +26,6 @@ source /etc/profile
 
 # Load Anaconda Module
 module load conda/Python-ML-2026a-pytorch
-module load cuda/13.1
 
 export PYTHONPATH="/home/gridsan/aforsey/diff-tuning:$PYTHONPATH"
 export WANDB_MODE=offline
