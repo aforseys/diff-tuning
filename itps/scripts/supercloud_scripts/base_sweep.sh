@@ -19,8 +19,15 @@
 #
 # STEP 2 — inspect configs/policy/CoRL/runs/ (expect 12 run_*.yaml across 3 subdirs).
 #
-# STEP 3 — submit. LLSUB_SIZE = NODES*NPPN should be >= 12 to run all at once:
-#   LLsub ./base_sweep.sh [3,4,1]     # 3 nodes x 4 procs x 1 thread = 12 parallel
+# STEP 3 — submit. LLSUB_SIZE = NODES*NPPN should be >= 12 to run all at once.
+# Supercloud assigns processes to the node's GPUs from the triple itself -- nothing
+# here pins devices, and configs must NOT hardcode `device: cuda:N`.
+# GPU nodes have 2 GPUs, so NPPN=2 puts one run per GPU and NPPN=4 puts two per GPU
+# (per Supercloud's docs: only worth doubling up if GPU util/memory are both <50%).
+# NTPP must cover 1 main process + cfg.training.num_workers dataloader workers per
+# run (4 by default), so NTPP=1 starves the loader -- use >= 5.
+#   LLsub ./base_sweep.sh [6,2,5]     # 6 nodes x 2 procs x 5 threads = 12 runs, 1/GPU
+#   LLsub ./base_sweep.sh [3,4,5]     # 3 nodes x 4 procs x 5 threads = 12 runs, 2/GPU
 #
 # LLSUB_RANK: this process's index (0 .. LLSUB_SIZE-1)
 # LLSUB_SIZE: total number of processes (NODES * NPPN)

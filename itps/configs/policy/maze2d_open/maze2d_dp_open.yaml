@@ -16,7 +16,7 @@ hydra:
   job:
     name: ${now:%H.%M.%S}_${env.name}_${policy.name}
 
-device: "cuda:1"  # cpu
+device: "cuda"  # cpu
 
 training:
   offline_steps: 100000

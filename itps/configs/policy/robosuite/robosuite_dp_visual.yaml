@@ -18,7 +18,7 @@ hydra:
   job:
     name: ${now:%H.%M.%S}_${env.name}_${policy.name}_visual
 
-device: cuda:1
+device: cuda
 use_amp: True
 
 training:

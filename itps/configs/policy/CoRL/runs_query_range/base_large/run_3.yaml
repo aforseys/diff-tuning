@@ -16,7 +16,7 @@ hydra:
     dir: data/maze2d_dp/large/general/tune/${now:%Y.%m.%d}/${hydra.job.name}
   job:
     name: maze_general_tune_base_IRED_${now:%H.%M.%S}_${env.name}_${policy.name}_nq${training.n_queries}
-device: cuda:1
+device: cuda
 training:
   offline_steps: 10000
   online_steps: 0

@@ -15,7 +15,7 @@ hydra:
   job:
     name: gmm_${now:%Y.%m.%d.%H.%M.%S}_${env.name}_${policy.name}
 
-device: "cuda:1"  # cpu
+device: "cuda"  # cpu
 
 training:
   offline_steps: 5000

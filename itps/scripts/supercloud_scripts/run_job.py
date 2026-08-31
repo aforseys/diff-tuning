@@ -72,7 +72,7 @@ def main():
             f"policy={relative} "
             f"config_name={config_name}"
             )
-        
+
         print(f"\n[Rank {args.rank}/{args.size}] Running combo {i+1}/{len(my_configs)}:")
         print(f"  {cmd}\n")
 

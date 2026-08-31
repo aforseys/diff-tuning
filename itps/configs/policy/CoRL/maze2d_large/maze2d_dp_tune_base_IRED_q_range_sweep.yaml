@@ -26,7 +26,7 @@ hydra:
   job:
     name: maze_general_tune_base_IRED_${now:%H.%M.%S}_${env.name}_${policy.name}_nq${training.n_queries}
 
-device: "cuda:1"  # cpu
+device: "cuda"  # cpu
 
 training:
   offline_steps: 10000
