@@ -1019,12 +1019,20 @@ class EBMDiffusionModel(nn.Module):
             pos_mse_loss = self._compute_denoising_sq_error(pos_batch, timesteps, eps_pos, mask=mask)
             neg_mse_loss = self._compute_denoising_sq_error(neg_batch, timesteps, eps_neg, mask=mask)
 
-            # Process loss. One sigmoid per preference pair, on a (B, 1) margin.
-            # The SNR weight multiplies the per-sample loss rather than the sigmoid's
-            # argument: weighting inside would scale the margin but not `b`, making the
-            # sigmoid's centre (and hence what `b` means) depend on the sampled timestep.
+            # Process loss. One term per preference pair, on a (B, 1) margin.
+            # LOG-sigmoid, i.e. the Bradley-Terry negative log-likelihood -log sigmoid(.),
+            # which is the standard DPO form (and what the paper uses everywhere except
+            # one mis-stated equation). A raw sigmoid would be a smoothed 0-1 surrogate
+            # instead, with vanishing gradient on BOTH tails -- it gives up on exactly the
+            # pairs it ranks most wrongly. With log-sigmoid the gradient is sigmoid(-x):
+            # -> 1 for badly-ranked pairs, -> 0 only for already-correct ones.
+            # Note this matches _compute_comparison_energy_loss, whose softplus(E_pos-E_neg)
+            # is identically -log sigmoid(E_neg-E_pos): both objectives share the same link.
+            # The SNR weight multiplies the per-sample loss rather than the argument:
+            # weighting inside would scale the margin but not `b`, making what `b` means
+            # depend on the sampled timestep.
             loss_dpo_finetune = pos_mse_loss - neg_mse_loss
-            loss = -snr_w * F.sigmoid(-self.config.dpo_params['rho'] * (loss_dpo_finetune + self.config.dpo_params['mu']*loss_mse_raw - self.config.dpo_params['b']))
+            loss = -snr_w * F.logsigmoid(-self.config.dpo_params['rho'] * (loss_dpo_finetune + self.config.dpo_params['mu']*loss_mse_raw - self.config.dpo_params['b']))
 
         ## Demonstration Finetuning Loss ##
         elif getattr(self.config, 'finetune_demos', False):
