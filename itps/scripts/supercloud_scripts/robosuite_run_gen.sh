@@ -7,6 +7,8 @@ source /etc/profile
 module load conda/Python-ML-2026a-pytorch
 module load cuda/13.1
 
+export CUDA_VISIBLE_DEVICES=0
+export MUJOCO_EGL_DEVICE_ID=0
 export PYTHONPATH="/home/gridsan/aforsey/diff-tuning:$PYTHONPATH"
 export WANDB_MODE=offline
 
