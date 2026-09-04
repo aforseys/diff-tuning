@@ -422,6 +422,40 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
         rng = np.random.default_rng(shuffle_seed)
         rng.shuffle(pairs)
 
+    # Episode layout: 2 agent rows + T trajectory rows. The 2 is one more than the
+    # loader needs. `load_hf_dataset` builds action = observations[1:], and the t=-1
+    # obs slot is produced by clamping the delta_timestamps query to the episode's
+    # first frame -- so ONE agent row already yields obs.state == [agent, agent],
+    # exactly as a real episode-start frame does in the base hdf5.
+    #
+    # The extra row costs one step of phase: the training window comes out as
+    #   [agent, agent, pred_traj[0] ... pred_traj[T-3]]
+    # where a 1-row layout would give the exact sampled trajectory
+    #   [pred_traj[0], pred_traj[0], pred_traj[1] ... pred_traj[T-1]].
+    # So each trajectory carries one extra dwell frame at the start and its last
+    # waypoint never reaches the model -- including the endpoint the goal metrics
+    # (score_goal_dist / score_goal_progress) ranked the pair on.
+    #
+    # KEPT ON PURPOSE. Winner and loser share `agent_pos` and are distorted
+    # identically, and both preference losses act on a pos/neg difference, so it
+    # cancels; the residual is ~0.14 maze cells of endpoint shift against a
+    # selection threshold worth ~1.5-2 cells, far too small to flip labels. Every
+    # existing pair dataset uses this layout, so changing it here without
+    # regenerating all of them would silently split the two conventions.
+    # If it is ever fixed: use `1 + T` here AND the matching vstack in
+    # `extract_demo_dataset`, then regenerate every pair and demo dataset together --
+    # and bump the filename prefix (e.g. 'maze_v2_') in the same change, because the
+    # .npz files carry no layout marker and old/new sets are otherwise
+    # indistinguishable on disk. Do it at a natural regeneration boundary; flipping it
+    # mid-campaign splits results into non-comparable cohorts.
+    #
+    # This all assumes T == horizon - 1 (63), which holds because interact_maze2d sets
+    # n_action_steps = horizon - n_obs_steps + 1 before collecting trials. If trials are
+    # ever collected WITHOUT that override, T drops to the config default (8) and the
+    # deviation stops being small: 1 lost waypoint of 8 instead of 63, 2 stall slots out
+    # of 10 real ones, and ~54 of the 64 action slots become edge padding that the
+    # preference branches of compute_loss do NOT mask (they pass mask=None). Check T in
+    # the printout below before trusting a new pair set.
     T = len(pairs[0]['winner_traj'])
     N = len(pairs)
     winners = np.zeros((N, 2 + T, 2), dtype=np.float32)
@@ -467,7 +501,7 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
         json.dump(meta, f, indent=2)
 
     print(f"Saved {N} pairs → {prefix}_{{winners,losers}}.npz + _meta.json")
-    print(f"  observations shape: {winners.reshape(-1, 2).shape}  (N*(1+T)={N}*{step_size}, 2)")
+    print(f"  observations shape: {winners.reshape(-1, 2).shape}  (N*(2+T)={N}*{step_size}, 2)")
 
     return pairs
 
@@ -616,6 +650,10 @@ def extract_demo_dataset(loadpath, savepath, maze_type='large', step_threshold=0
         agent_xy = maze_env.gui2xy(np.array(trial['agent_pos'], dtype=float))
         guide_xy = np.array([maze_env.gui2xy(np.array(p, dtype=float)) for p in trial['guide']])
         subsampled = _subsample_xy_path(guide_xy, step_threshold)
+        # Two agent rows, matching `extract_preference_pairs` -- one more than the
+        # loader needs, so the guide picks up one extra dwell frame at the start and
+        # loses its last point. See the long note there for why this is kept; if it is
+        # ever fixed, both sites must change together and all datasets be regenerated.
         episode = np.vstack([agent_xy[None], agent_xy[None], subsampled]).astype(np.float32)
         episodes.append(episode)
         goal = trial["obs"][2:] if "obs" in trial and len(trial["obs"]) >= 4 else None
