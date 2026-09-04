@@ -6,7 +6,7 @@ attributes to each demo so its origin is traceable. Useful when demos were
 collected separately per strategy and need to be combined for training.
 
 Run from the itps/ directory:
-    conda run -n diffpreff python scripts/merge_demos.py \\
+    conda run -n diffpreff python scripts/data_generation/robosuite/merge_demos.py \\
         --inputs data/demos_a.hdf5 data/demos_b.hdf5 data/demos_c.hdf5 \\
         --save-path data/merged.hdf5
 """

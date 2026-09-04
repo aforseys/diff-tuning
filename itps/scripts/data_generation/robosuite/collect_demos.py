@@ -14,7 +14,7 @@ Observations saved at each keyframe (T+1 total per episode):
     agentview_image, wrist_image (optional)
 
 Run from the itps/ directory:
-    conda run -n diffpreff python scripts/collect_demos.py \\
+    conda run -n diffpreff python scripts/data_generation/robosuite/collect_demos.py \\
         --traj-file data/trajs.npz --save-path data/demos.hdf5
 """
 

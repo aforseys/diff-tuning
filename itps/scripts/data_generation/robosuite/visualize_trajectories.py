@@ -10,10 +10,10 @@ With --execute the robot physically follows each trajectory one by one while
 the tubes remain visible in the scene.
 
 Run from the itps/ directory:
-    conda run -n diffpreff python scripts/visualize_trajectories.py \\
+    conda run -n diffpreff python scripts/data_generation/robosuite/visualize_trajectories.py \\
         --traj-file data/trajs.npz --max-trajs 20
     # execute each trajectory with tubes visible:
-    conda run -n diffpreff python scripts/visualize_trajectories.py \\
+    conda run -n diffpreff python scripts/data_generation/robosuite/visualize_trajectories.py \\
         --traj-file data/trajs.npz --max-trajs 5 --execute
 """
 

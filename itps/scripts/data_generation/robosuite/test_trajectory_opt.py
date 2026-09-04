@@ -5,7 +5,7 @@ Tests both soft (feature) and hard (constraint) wall avoidance approaches.
 No renderer needed.
 
 Run from the itps/ directory:
-    conda run -n diffpreff python scripts/test_trajectory_opt.py
+    conda run -n diffpreff python scripts/data_generation/robosuite/test_trajectory_opt.py
 """
 
 import sys, os

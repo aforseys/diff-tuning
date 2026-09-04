@@ -23,7 +23,7 @@ Output .npz  (N = n_prisms * n_bins * n_obs):
     config_json    : string                    full feature/weight/constraint spec
 
 Run from the itps/ directory:
-    conda run -n diffpreff python scripts/generate_trajectories.py \\
+    conda run -n diffpreff python scripts/data_generation/robosuite/generate_trajectories.py \\
         --obs-file data/obs.npz --save-path data/trajs.npz \\
         --smoothness -1 0 1 --bin-wall-avoidance -5 \\
         --workspace-constraint --bin-wall-constraint

@@ -2,9 +2,9 @@
 Visualize saved EEF trajectories from a demo HDF5 file.
 
 Usage:
-    conda run -n diffpreff python scripts/visualize_demos.py --demo-file data/robosuite/demos.hdf5
-    conda run -n diffpreff python scripts/visualize_demos.py --demo-file data/robosuite/demos.hdf5 --demo 3
-    conda run -n diffpreff python scripts/visualize_demos.py --demo-file data/robosuite/demos.hdf5 --all
+    conda run -n diffpreff python scripts/data_generation/robosuite/visualize_demos.py --demo-file data/robosuite/demos.hdf5
+    conda run -n diffpreff python scripts/data_generation/robosuite/visualize_demos.py --demo-file data/robosuite/demos.hdf5 --demo 3
+    conda run -n diffpreff python scripts/data_generation/robosuite/visualize_demos.py --demo-file data/robosuite/demos.hdf5 --all
 """
 
 import argparse

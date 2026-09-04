@@ -21,18 +21,18 @@ Episode length similarly scales: episode_length=600 raw → 150 effective steps.
 Loader cap: only the first 1M raw frames are used; generating more is wasted.
 
 Usage:
-  python scripts/generate_maze_dataset.py --maze open --n-episodes 5000 \\
+  python scripts/data_generation/maze/generate_maze_dataset.py --maze open --n-episodes 5000 \\
       --save data/maze2d-open-custom.hdf5
 
-  python scripts/generate_maze_dataset.py --maze sparse --n-episodes 8000 \\
+  python scripts/data_generation/maze/generate_maze_dataset.py --maze sparse --n-episodes 8000 \\
       --save data/maze2d-sparse-custom.hdf5
 
   # Custom maze: .npy file with a 2D bool array (True=wall)
-  python scripts/generate_maze_dataset.py --maze-file my_maze.npy \\
+  python scripts/data_generation/maze/generate_maze_dataset.py --maze-file my_maze.npy \\
       --n-episodes 8000 --save data/maze2d-custom.hdf5
 
   # Preview trajectories before a full run
-  python scripts/generate_maze_dataset.py --maze open --n-episodes 10 --viz
+  python scripts/data_generation/maze/generate_maze_dataset.py --maze open --n-episodes 10 --viz
 """
 
 import argparse
