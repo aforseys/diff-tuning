@@ -13,6 +13,7 @@ from common.utils.maze_scoring import (
     score_center,
     score_bottom_half,
     score_goal_progress,
+    score_goal_dist_relative,
     DEFAULT_SCORE_THRESHOLDS,
 )
 
@@ -341,6 +342,21 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
             start_xy = np.asarray(trial["obs"][:2], dtype=float)
             xy_traj = np.array([[maze_env.gui2xy(p) for p in traj] for traj in trial["pred_traj"]])
             scores = score_goal_progress(xy_traj, goal_xy, start_xy)
+            samples = np.asarray(trial["pred_traj"], dtype=float)
+            guide = None
+        elif metric == 'finetune_goal_dist_relative':
+            # The original `endpoint_distance` selection rule against the fixed eval
+            # goal: 1 - dist/max(dist), normalized within the trial's own batch and
+            # NOT clipped. Same goal source as 'finetune_goal_dist' (so eval, which
+            # still reports finetune_goal_dist, is unchanged) -- only the selection
+            # rule differs. Generate both from the same trials file to A/B the rule
+            # with the candidate trajectories, starts and goal all held fixed.
+            goal_xy = metric_kwargs.get("goal")
+            assert goal_xy is not None, (
+                "'finetune_goal_dist_relative' requires metric_kwargs={'goal': [x, y]} (maze XY space)"
+            )
+            xy_traj = np.array([[maze_env.gui2xy(p) for p in traj] for traj in trial["pred_traj"]])
+            scores = score_goal_dist_relative(xy_traj, goal_xy)
             samples = np.asarray(trial["pred_traj"], dtype=float)
             guide = None
         elif metric == 'endpoint_distance':
@@ -758,7 +774,8 @@ if __name__ == "__main__":
     parser.add_argument('--score-threshold', type=float, default=None, help="Score threshold for preference pairs (default: metric-specific)")
     parser.add_argument('--metric', type=str, default='similarity_score',
                         help="One of: similarity_score, endpoint_distance, collision_rate, "
-                             "center_rate, bottom_half_rate, obs_goal_dist, finetune_goal_dist")
+                             "center_rate, bottom_half_rate, obs_goal_dist, finetune_goal_dist, "
+                             "finetune_goal_dist_relative")
     parser.add_argument('--viz-pref', action='store_true', help="Visualize preference pairs during generation")
     parser.add_argument('--prefix', type=str, default=None, help="Optional prefix to prepend to output filenames")
     parser.add_argument('--shuffle', action='store_true', help="Shuffle saved preference pairs (adds '_shuffled' to the filename) so a subset isn't all from the same observations")

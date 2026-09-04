@@ -110,6 +110,36 @@ def score_goal_progress(xy_traj, goal, start, clip=True):
     return progress
 
 
+def score_goal_dist_relative(xy_traj, goal):
+    """
+    Endpoint distance to a goal, normalized by the WORST endpoint distance in the
+    batch: `1 - dist / max(dist)`. Higher is better.
+
+    This is the original `endpoint_distance` formula (see
+    `extract_preference_pairs`), generalized to take an explicit goal instead of
+    reading one from a human-drawn guide. It differs from `score_goal_progress`
+    in two ways that matter for preference selection:
+
+      - Normalizer. The yardstick is the worst of the batch's own endpoint
+        distances, not the start->goal distance, so it is re-derived per trial
+        from whatever the sampler produced rather than from task geometry.
+      - No floor. Trajectories that ended FARTHER from the goal than they started
+        stay ordered relative to each other, where `score_goal_progress` clips
+        them all to 0 and makes them mutually untied. Pairs can therefore be
+        minted inside the "moved away from the goal" region.
+
+    Preference-generation only -- this is NOT an eval metric, and unlike
+    `score_goal_progress` its value depends on the other trajectories in the
+    batch, so it is not comparable across trials or against an eval log.
+
+    xy_traj: (batch, steps, 2) numpy array in maze coordinate space
+    goal: (2,) or (batch, 2) goal in maze coordinate space
+    Returns: (batch,) float array
+    """
+    dists = score_goal_dist(xy_traj, goal)
+    return 1.0 - dists / (dists.max() + 1e-6)
+
+
 # Minimum |score_i - score_j| for a pair to count as an informative preference
 # rather than a tie, per maze metric. Used by `extract_preference_pairs` to
 # decide which pairs to mint as winner/loser training data. (The energy-ranking
@@ -123,4 +153,9 @@ DEFAULT_SCORE_THRESHOLDS = {
     'bottom_half_rate': 0.3,
     'obs_goal_dist': 0.3,
     'finetune_goal_dist': 0.3,
+    # Same 0.3 as `endpoint_distance`, whose formula this metric reuses -- but note
+    # the two 0.3s gate different things. Here the bar is 0.3 * (worst endpoint
+    # distance in the batch); for `finetune_goal_dist` it is 0.3 * (start->goal
+    # distance). Only the second is a fixed function of the observation.
+    'finetune_goal_dist_relative': 0.3,
 }
