@@ -4,10 +4,20 @@
 # Supercloud LLsub triples submission script.
 # No SBATCH flags -- LLsub handles resource allocation via the triple [NODES,NPPN,NTPP].
 #
-# BEFORE submitting, generate your run configs once:
-#   python generate_configs.py --config configs/joint_config.yaml --out_dir configs/runs/
+# Currently pointed at the DPO param sweep on the NEW-PREF comparison set (pairs
+# selected by finetune_goal_dist_relative -- the unclipped, batch-normalized rule --
+# rather than the clipped finetune_goal_dist). Same grid as param_tuning_DPO/sweep_2,
+# which is its A/B partner on the clipped set; only dataset_root.pos/neg differ, and
+# the `new_pref` tag in the hydra dir and job name keeps the cohorts apart.
+# 144 runs = offline_steps(4) x lr(3) x batch_size(2) x train_only_FiLM(2) x mu(3).
 #
-# Then inspect configs/runs/ to verify the generated configs look correct.
+# BEFORE submitting, generate your run configs once (from the itps/ dir). The path
+# must match CONFIGS_DIR further down, which is what run_job.py actually globs:
+#   python scripts/data_generation/generate_configs.py \
+#       --config configs/policy/ICRA/maze/large_maze/param_tuning_DPO_new_pref/DPO_param_tune.yaml \
+#       --out_dir configs/policy/ICRA/maze/large_maze/param_tuning_DPO_new_pref/runs/
+#
+# Then inspect that dir (expect 144 run_*.yaml) to verify the generated configs look correct.
 #
 # Submit with:
 #   LLsub ./submit.sh [NODES,NPPN,NTPP]
@@ -32,7 +42,7 @@ export WANDB_MODE=offline
 #export WANDB_DIR=/home/gridsan/aforsey/wandb_logs/gmm/conditional/fine_tuning/param_tuning
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-CONFIGS_DIR="/home/gridsan/aforsey/diff-tuning/itps/configs/policy/ICRA/maze/large_maze/param_tuning_base/sweep_2"    # Directory containing generated run_*.yaml files
+CONFIGS_DIR="/home/gridsan/aforsey/diff-tuning/itps/configs/policy/ICRA/maze/large_maze/param_tuning_DPO_new_pref/runs"    # Directory containing generated run_*.yaml files
 SCRIPT="scripts/train.py"             # The python training script
 ENV_NAME="maze2d"                # env={ENV_NAME} passed to the script
 # ──────────────────────────────────────────────────────────────────────────────
