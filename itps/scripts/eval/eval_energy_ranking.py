@@ -37,7 +37,7 @@ eval.train_obs/test_obs, env_type, and eval.goal the fine-tuning run itself
 used. Pass any of --obs-file/--maze-type/--goal explicitly to override.
 
 Run from the itps/ directory:
-    conda run -n diffpreff python scripts/eval_energy_ranking.py \\
+    conda run -n diffpreff python scripts/eval/eval_energy_ranking.py \\
         --pretrained-path data/maze2d_dp/large/general/train/.../pretrained_model \\
         --finetuned-path  data/maze2d_dp/large/general/tune/.../pretrained_model \\
         --split test --n-samples 32 \\

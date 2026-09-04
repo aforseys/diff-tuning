@@ -15,7 +15,7 @@ cluster for a conditional one):
      does? Pairs with tied density are thrown out (fraction reported too).
 
 Run from the itps/ directory:
-    conda run -n diffpreff python scripts/eval_energy_ranking_gmm.py \\
+    conda run -n diffpreff python scripts/eval/eval_energy_ranking_gmm.py \\
         --pretrained-path data/gmm/general/train/.../pretrained_model \\
         --finetuned-path  data/gmm/general/tune/.../pretrained_model \\
         --pref-cluster 0 --n-samples 200
