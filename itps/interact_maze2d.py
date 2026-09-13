@@ -48,7 +48,6 @@ import einops
 from pathlib import Path
 from huggingface_hub import snapshot_download
 from common.policies.diffusion.modeling_diffusion import DiffusionPolicy
-from common.policies.act.modeling_act import ACTPolicy
 from common.policies.rollout_wrapper import PolicyRolloutWrapper
 from common.utils.utils import seeded_context, init_hydra_config
 from common.utils.maze_maps import MAZE_MAPS
@@ -265,9 +264,7 @@ class UnconditionalMaze(MazeEnv):
         # reproducible; pass --sample-seed to collect a differently-seeded candidate pool
         # (default 0 == every dataset collected before this flag existed).
         with torch.autocast(device_type="cuda"), seeded_context(self.sample_seed):
-            if self.policy_tag == 'act':
-                actions = self.policy.run_inference(obs_batch).cpu().numpy()
-            elif return_energy:
+            if return_energy:
                 # Not wired up. `run_inference` no longer returns energies -- scoring now
                 # goes through `policy.get_energy(...)`, which makes the timestep, the
                 # noise settings and the window explicit. This branch was already dead
@@ -1112,8 +1109,6 @@ if __name__ == "__main__":
         else:
              checkpoint_path = 'weights_dp_energy'
         # checkpoint_path = 'weights_maze2d_energy_dp_100k'
-    elif args.policy in ["act"]:
-        checkpoint_path = 'weights_act'
     else:
         policy = None
         #raise NotImplementedError(f"Policy with name {args.policy} is not implemented.")
@@ -1130,11 +1125,6 @@ if __name__ == "__main__":
         policy.diffusion.num_inference_steps = 10
         policy.config.n_action_steps = policy.config.horizon - policy.config.n_obs_steps + 1
         policy_tag = 'dp'
-        policy.cuda()
-        policy.eval()
-    elif args.policy in ["act"]:
-        policy = ACTPolicy.from_pretrained(pretrained_policy_path)
-        policy_tag = 'act'
         policy.cuda()
         policy.eval()
     else:
