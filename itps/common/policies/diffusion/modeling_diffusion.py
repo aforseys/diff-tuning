@@ -39,7 +39,6 @@ from itps.common.policies.utils import (
     get_device_from_parameters,
     get_dtype_from_parameters,
 )
-import time
 
 # Default number of noise draws a trajectory's energy is averaged over, and the
 # default seed those draws are generated from.
@@ -65,7 +64,6 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
         self,
         config: DiffusionConfig | None = None,
         dataset_stats: dict[str, dict[str, Tensor]] | None = None,
-        alignment_strategy: str = 'post-hoc',
     ):
         """
         Args:
@@ -95,7 +93,7 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
         # queues are populated during rollout of the policy, they contain the n latest observations and actions
         self._queues = None
 
-        self.diffusion = EBMDiffusionModel(config, alginment_strategy=alignment_strategy)
+        self.diffusion = EBMDiffusionModel(config)
 
         self.expected_image_keys = [k for k in config.input_shapes if k.startswith("observation.image")]
         self.use_env_state = "observation.environment_state" in config.input_shapes
@@ -110,13 +108,11 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
         return set(self.config.input_shapes)
 
     @torch.no_grad 
-    def run_inference(self, observation_batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, return_full=False, methods=['ired', 'ddim'], opt_params=[{'n_opt':1, 't_subset': None, 'denoise': False}], return_grad_steps=False) -> Tensor:
+    def run_inference(self, observation_batch: dict[str, Tensor], return_full=False, methods=['ired', 'ddim'], opt_params=[{'n_opt':1, 't_subset': None, 'denoise': False}], return_grad_steps=False) -> Tensor:
         # Normalize a shallow copy: Normalize writes into the dict it is given, so
         # normalizing the caller's dict would double-normalize it if the caller also
         # passes it to get_energy (or back here) afterwards.
         observation_batch = self.normalize_inputs(dict(observation_batch))
-        if guide is not None:
-            guide = self.normalize_targets({"action": guide})["action"]
         if len(self.expected_image_keys) > 0:
             observation_batch["observation.images"] = torch.stack(
                 [observation_batch[k] for k in self.expected_image_keys], dim=-4
@@ -127,11 +123,11 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
         if 'ired' in methods:
             for p in opt_params: 
                 n, subset, denoise = (p["n_opt"], p["t_subset"], p["denoise"])
-                gen_actions.append(self.diffusion.generate_actions(observation_batch, guide=guide, visualizer=visualizer, normalizer=self,return_full=return_full, steps_per_timestep=n, opt_subset=subset, denoise = denoise, return_grad_steps=return_grad_steps))
+                gen_actions.append(self.diffusion.generate_actions(observation_batch, return_full=return_full, steps_per_timestep=n, opt_subset=subset, denoise = denoise, return_grad_steps=return_grad_steps))
         
         # if returning both, use denoising-based sampling as well
         if 'ddim' in methods: 
-            gen_actions_denoise = self.diffusion.generate_actions(observation_batch, guide=guide, visualizer=visualizer, normalizer=self,return_full=return_full, opt_energy=False)
+            gen_actions_denoise = self.diffusion.generate_actions(observation_batch, return_full=return_full, opt_energy=False)
             gen_actions.append(gen_actions_denoise)
 
         # Energies are deliberately NOT computed here. Callers that want them call
@@ -274,7 +270,7 @@ class EBMWrapper(nn.Module):
 
 
 class EBMDiffusionModel(nn.Module):
-    def __init__(self, config: DiffusionConfig, alginment_strategy: str):
+    def __init__(self, config: DiffusionConfig):
         super().__init__()
         self.config = config
 
@@ -326,12 +322,9 @@ class EBMDiffusionModel(nn.Module):
         else:
             self.num_inference_steps = config.num_inference_steps
 
-        assert alginment_strategy in ['post-hoc', 'guided-diffusion', 'stochastic-sampling', 'biased-initialization', 'output-perturb'], 'Invalid alignment strategy: ' + str(alginment_strategy)
-        self.alignment_strategy = alginment_strategy
-
     # ========= inference  ============
     def conditional_sample(
-        self, batch_size: int, global_cond: Tensor | None = None, generator: torch.Generator | None = None, guide: Tensor | None = None, visualizer=None, normalizer=None
+        self, batch_size: int, global_cond: Tensor | None = None, generator: torch.Generator | None = None
     ) -> Tensor:
         device = get_device_from_parameters(self)
         dtype = get_dtype_from_parameters(self)
@@ -344,71 +337,18 @@ class EBMDiffusionModel(nn.Module):
             generator=generator,
         )
 
-        if guide is not None and self.alignment_strategy == 'biased-initialization':
-            indices = torch.linspace(0, guide.shape[0]-1, sample.shape[1], dtype=int)
-            init_sample = torch.unsqueeze(guide[indices], dim=0) # (1, pred_horizon, action_dim)
-            init_noise_std = 0.5
-            sample = init_noise_std * sample + init_sample
-            # return sample
-
         self.noise_scheduler.set_timesteps(self.num_inference_steps)
 
-        MCMC_steps = 1
-        if guide is not None and self.alignment_strategy == 'stochastic-sampling':
-            MCMC_steps = 4
-
-        start_influence_step = self.config.num_train_timesteps
-        if guide is not None and self.alignment_strategy == 'biased-initialization':
-            start_influence_step = 50
-
-        final_influence_step = self.config.num_train_timesteps
-        if self.alignment_strategy in ['guided-diffusion', 'stochastic-sampling']:
-            final_influence_step = 0
-
         for t in self.noise_scheduler.timesteps:
-            if visualizer is not None and normalizer is not None:
-                sample_viz = normalizer.unnormalize_outputs({"action": sample.clone().detach()})["action"]
-                sample_viz = sample_viz.cpu().numpy()
-                visualizer.update_screen(sample_viz, keep_drawing=True)
-                time.sleep(0.1)
+            # Predict model output.
+            model_output = self.model(
+                sample,
+                torch.full(sample.shape[:1], t, dtype=torch.long, device=sample.device),
+                global_cond=global_cond,
+            )
+            # Compute previous image: x_t -> x_t-1
+            sample = self.noise_scheduler.step(model_output, t, sample, generator=generator).prev_sample
 
-            if t > start_influence_step:
-                # print('SKIPPING TIMESTEP: ', t)
-                continue
-            for i in range(MCMC_steps):
-                # Predict model output.
-                model_output = self.model(
-                    sample,
-                    torch.full(sample.shape[:1], t, dtype=torch.long, device=sample.device),
-                    global_cond=global_cond,
-                )
-                # add interaction gradient
-                if guide is not None and t > final_influence_step:
-                    grad = self.guide_gradient(sample, guide)
-                    if self.alignment_strategy == 'guided-diffusion':
-                        guide_ratio = 20 
-                    elif self.alignment_strategy == 'stochastic-sampling':
-                        guide_ratio = 60 
-                    else:
-                        guide_ratio = 0
-                    model_output = model_output + guide_ratio * grad
-                else:
-                    pass
-                    # print('NOT ADDING INTERACTION GRADIENT AT TIMESTEP: ', t)
-
-                # Compute previous image: x_t -> x_t-1
-                scheduler_output = self.noise_scheduler.step(model_output, t, sample, generator=generator)
-                prev_sample = scheduler_output.prev_sample
-                clean_sample = scheduler_output.pred_original_sample
-
-                if i < MCMC_steps - 1:
-                    # print('mcmc step i: ', i, 'at t: ', t)
-                    std = 1
-                    noise = std * torch.randn(clean_sample.shape, device=clean_sample.device)
-                    sample = self.noise_scheduler.add_noise(clean_sample, noise, t)
-                else:
-                    # print('final diffusion step at t:', t)
-                    sample = prev_sample
         return sample
     
     def opt_energy(self, batch_size: int, global_cond: Tensor | None = None, generator: torch.Generator | None = None, steps_per_timestep: int = 1, opt_subset: int | None = None, denoise: bool = False, return_grad_steps: bool = False
@@ -478,25 +418,6 @@ class EBMDiffusionModel(nn.Module):
         
         return sample
 
-
-    def guide_gradient(self, naction, guide):
-        # naction: (B, pred_horizon, action_dim);
-        # guide: (guide_horizon, action_dim)
-        # print('noisy action shape:', naction.shape, 'guide shape:', guide.shape)
-        # print('mean and std of naction', naction.mean(), naction.std())
-        # print('mean and std of guide', guide.mean(), guide.std())
-
-        assert naction.shape[2] == 2 and guide.shape[1] == 2
-        indices = torch.linspace(0, guide.shape[0]-1, naction.shape[1], dtype=int)
-        guide = torch.unsqueeze(guide[indices], dim=0) # (1, pred_horizon, action_dim)
-        assert guide.shape == (1, naction.shape[1], naction.shape[2])
-        with torch.enable_grad():
-            naction = naction.clone().detach().requires_grad_(True)
-            dist = torch.linalg.norm(naction - guide, dim=2, ord=2) # (B, pred_horizon)
-            dist = dist.mean(dim=1) # (B,)
-            grad = torch.autograd.grad(dist, naction, grad_outputs=torch.ones_like(dist), create_graph=False)[0]
-            # naction.detach()
-        return grad    
 
     def _prepare_global_conditioning(self, batch: dict[str, Tensor]) -> Tensor:
         """Encode image features and concatenate them all together along with the state vector."""
@@ -590,7 +511,7 @@ class EBMDiffusionModel(nn.Module):
         return energy_sum / n_noise
 
 
-    def generate_actions(self, batch: dict[str, Tensor], guide: Tensor | None = None, visualizer=None, normalizer=None,return_full=False, opt_energy=True, steps_per_timestep=1, opt_subset: int | None = None, denoise=False, return_grad_steps=False) -> Tensor:
+    def generate_actions(self, batch: dict[str, Tensor], return_full=False, opt_energy=True, steps_per_timestep=1, opt_subset: int | None = None, denoise=False, return_grad_steps=False) -> Tensor:
         """
         This function expects `batch` to have:
         {
@@ -616,7 +537,7 @@ class EBMDiffusionModel(nn.Module):
             else:
                 actions=result
         else:
-            actions = self.conditional_sample(batch_size, global_cond=global_cond, guide=guide, visualizer=visualizer, normalizer=normalizer)
+            actions = self.conditional_sample(batch_size, global_cond=global_cond)
         if return_full:
             action_dict['full_traj'] = actions
 

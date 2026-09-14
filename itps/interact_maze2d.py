@@ -104,16 +104,6 @@ class MazeEnv:
         # Single shared definition (maze_scoring.check_maze_collision): NaN steps
         # count as collisions, consistent with eval_maze and preference selection.
         return check_maze_collision(xy_traj, self.maze)
-    
-    def find_first_collision_from_GUI(self, gui_traj):
-        assert gui_traj.shape[1] == 2, "Input must be a 2D array"
-        xy_traj = np.array([self.gui2xy(point) for point in gui_traj])
-        xy_traj = np.clip(xy_traj, [0, 0], [self.maze.shape[0] - 1, self.maze.shape[1] - 1])
-        maze_x = np.round(xy_traj[:, 0]).astype(int)
-        maze_y = np.round(xy_traj[:, 1]).astype(int)
-        collisions = self.maze[maze_x, maze_y]
-        first_collision_idx = np.argmax(collisions) # find the first index of many possible collisions
-        return first_collision_idx
 
     def blend_with_white(self, color, factor=0.5):
         white = np.array([255, 255, 255])
@@ -230,7 +220,7 @@ class UnconditionalMaze(MazeEnv):
         # configurable used, so the default regenerates them exactly.
         self.sample_seed = sample_seed
 
-    def infer_target(self, guide=None, visualizer=None, return_energy=False, goal_pos=None):
+    def infer_target(self, return_energy=False, goal_pos=None):
         agent_hist_xy = self.agent_history_xy[-1] 
         agent_hist_xy = np.array(agent_hist_xy).reshape(1, 2)
         if self.policy_tag == 'dp':
@@ -250,9 +240,6 @@ class UnconditionalMaze(MazeEnv):
             obs_batch["episode_goal"] = einops.repeat(
                 torch.from_numpy(goal).float().cuda(), "t d -> b t d", b=self.batch_size
             )
-        
-        if guide is not None:
-            guide = torch.from_numpy(guide).float().cuda()
 
         start = time.perf_counter()
         # seeded_context is re-entered on EVERY call, and batch_size is constant, so the
@@ -276,7 +263,7 @@ class UnconditionalMaze(MazeEnv):
                     "trajectory with policy.get_energy(...) instead; see the comment above."
                 )
             else:
-                actions = self.policy.run_inference(obs_batch, guide=guide, visualizer=visualizer, opt_params=self.opt_params, methods=self.sampling_methods)[0].cpu().numpy() # directly call the policy in order to visualize the intermediate steps
+                actions = self.policy.run_inference(obs_batch, opt_params=self.opt_params, methods=self.sampling_methods)[0].cpu().numpy()
         torch.cuda.synchronize()  # important — ensures GPU work is complete before stopping the clock
         elapsed = time.perf_counter() - start
 
@@ -405,17 +392,15 @@ class UnconditionalMaze(MazeEnv):
 
 class ConditionalMaze(UnconditionalMaze):
     # for interactive guidance dataset collection
-    def __init__(self, policy, vis_dp_dynamics=False, savepath=None, alignment_strategy=None, policy_tag=None,  maze_type='large', obs_list=None, opt_params=None, ddim=False, point_guide=False, sample_seed=0):
+    def __init__(self, policy, savepath=None, policy_tag=None,  maze_type='large', obs_list=None, opt_params=None, ddim=False, point_guide=False, sample_seed=0):
         super().__init__(policy, policy_tag=policy_tag,  maze_type=maze_type, obs_list=obs_list, opt_params=opt_params, ddim=ddim, sample_seed=sample_seed)
         self.drawing = False
         self.keep_drawing = False
-        self.vis_dp_dynamics = vis_dp_dynamics
         self.savepath = savepath
         self.draw_traj = [] # gui coordinates
         self.xy_pred = None # numpy array
         self.collisions = None # boolean array
         self.scores = None # numpy array
-        self.alignment_strategy = alignment_strategy
         self.point_guide = point_guide
 
     def run(self):
@@ -472,17 +457,15 @@ class ConditionalMaze(UnconditionalMaze):
                     guide = np.array([self.gui2xy(point) for point in self.draw_traj])
                 else:
                     guide = None
-                self.xy_pred = self.infer_target(guide, visualizer=(self if self.vis_dp_dynamics and self.keep_drawing else None))
+                self.xy_pred = self.infer_target()
                 self.scores = None
-                if self.alignment_strategy == 'post-hoc' and guide is not None:
+                if guide is not None:
                     xy_pred, scores = self.similarity_score(self.xy_pred, guide)
                     self.xy_pred = xy_pred
                     self.scores = scores
                 self.collisions = self.check_collision(self.xy_pred)
 
             self.update_screen(self.xy_pred, self.collisions, self.scores, (self.keep_drawing or self.drawing))
-            if self.vis_dp_dynamics and not self.drawing and self.keep_drawing:
-                time.sleep(1)
             self.clock.tick(30)
 
         pygame.quit()
@@ -584,117 +567,12 @@ class ConditionalMaze(UnconditionalMaze):
         print(f"Trial {self.trial_idx} saved to {self.savepath}.")
         self.trial_idx += 1
 
-class MazeExp(ConditionalMaze):
-    # for replaying the trials and benchmarking the alignment strategies
-    def __init__(self, policy, vis_dp_dynamics=False, savepath=None, alignment_strategy=None, policy_tag=None, loadpath=None, maze_type='large', sample_seed=0):
-        super().__init__(policy, vis_dp_dynamics, savepath, policy_tag=policy_tag, maze_type=maze_type, sample_seed=sample_seed)
-        # Load saved trails
-        assert loadpath is not None
-        with open(args.loadpath, "r", buffering=1) as file:
-            file.seek(0)
-            trials = [json.loads(line) for line in file]
-            # set random seed and shuffle the trials
-            np.random.seed(0)
-            np.random.shuffle(trials)
-
-        self.trials = trials
-        self.trial_idx = 0
-        # if savepath is not None:
-        #     # append loadpath to the savepath as prefix
-        #     self.savepath = loadpath[:-5] + '_' + policy_tag + '_' + savepath
-        #     self.savefile = open(self.savepath, "a+", buffering=1)
-        #     self.trial_idx = 0
-        self.alignment_strategy = alignment_strategy
-        print(f"Alignment strategy: {alignment_strategy}")
-
-    def run(self):
-        if self.savepath is not None:
-            self.savefile = open(savepath, "w+", buffering=1)
-            self.trial_idx = 0
-
-        while self.trial_idx < len(self.trials):
-            # Load the trial
-            self.draw_traj = self.trials[self.trial_idx]["guide"]
-            
-            # skip empty trials
-            if len(self.draw_traj) == 0: 
-                print(f"Skipping trial {self.trial_idx} which has no guide.")
-                self.trial_idx += 1
-                continue
-            
-            # skip trials with all collisions
-            first_collision_idx = self.find_first_collision_from_GUI(np.array(self.draw_traj))
-            if first_collision_idx <= 0: # no collision or all collisions
-                if np.array(self.trials[self.trial_idx]["collisions"]).all():
-                    print(f"Skipping trial {self.trial_idx} which has all collisions.")
-                    self.trial_idx += 1
-                    continue
-
-            # initialize the agent position
-            if self.alignment_strategy == 'output-perturb':
-                # find the location before the first collision to initialize the agent
-                if first_collision_idx <= 0: # no collision or all collisions
-                    perturbed_pos = self.draw_traj[20]
-                else:
-                    first_collision_idx = min(first_collision_idx, 20)
-                    perturbed_pos = self.draw_traj[first_collision_idx - 1]
-                self.update_agent_pos(perturbed_pos)
-            else:
-                self.update_agent_pos(self.trials[self.trial_idx]["agent_pos"])
-
-            # infer the target based on the guide
-            if self.policy is not None:
-                guide = np.array([self.gui2xy(point) for point in self.draw_traj])
-                self.xy_pred = self.infer_target(guide, visualizer=(self if self.vis_dp_dynamics else None))
-                if self.alignment_strategy in ['output-perturb', 'post-hoc']:
-                    self.xy_pred, scores = self.similarity_score(self.xy_pred, guide)
-                else:
-                    scores = None
-                self.collisions = self.check_collision(self.xy_pred)
-                self.update_screen(self.xy_pred, self.collisions, scores=scores, keep_drawing=True, traj_in_gui_space=False)
-                if self.vis_dp_dynamics:
-                    time.sleep(1)
-                    
-                # save the experiment trial
-                if self.savepath is not None:
-                    self.save_trials()
-
-            # just replay the trials without inference    
-            else:
-                collisions = self.trials[self.trial_idx]["collisions"]
-                pred_traj = np.array(self.trials[self.trial_idx]["pred_traj"])
-                if self.alignment_strategy in ['output-perturb', 'post-hoc']:
-                    _, scores = self.similarity_score(pred_traj, np.array(self.trials[self.trial_idx]["guide"])) # this is a hack as both pred_traj and guide are in gui space, don't use this score for absolute statistics calculation
-                else:
-                    scores = None
-                self.update_screen(pred_traj, collisions, scores=scores, keep_drawing=True, traj_in_gui_space=True)
-
-            # Handle events
-            for event in pygame.event.get():
-                if event.type == pygame.KEYDOWN:
-                    assert self.savefile is None
-                    if event.key == pygame.K_n and self.savefile is None: # visualization mode rather than saving mode
-                        print("manual skip to the next trial")
-                        self.trial_idx += 1
-
-            self.clock.tick(10)
-
-        pygame.quit()
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', "--checkpoint", type=str, default=None,  help="Path to the checkpoint")
     parser.add_argument('-p', '--policy', default=None, type=str, help="Policy name")
     parser.add_argument('-u', '--unconditional', action='store_true', help="Unconditional Maze")
-    parser.add_argument('-op', '--output-perturb', action='store_true', help="Output perturbation")
-    parser.add_argument('-ph', '--post-hoc', action='store_true', help="Post-hoc ranking")
-    parser.add_argument('-bi', '--biased-initialization', action='store_true', help="Biased initialization")
-    parser.add_argument('-gd', '--guided-diffusion', action='store_true', help="Guided diffusion")
-    parser.add_argument('-ss', '--stochastic-sampling', action='store_true', help="Stochastic sampling")
-    parser.add_argument('-v', '--vis_dp_dynamics', action='store_true', help="Visualize dynamics in DP")
     parser.add_argument('-s', '--savepath', type=str, default=None, help="Filename to save the drawing")
-    parser.add_argument('-l', '--loadpath', type=str, default=None, help="Filename to load the drawing")
     parser.add_argument('-e', '--vis_energy', action='store_true', help="Visualize energy")
     parser.add_argument('--sample-seed', type=int, default=0,
                         help="Seed for the initial diffusion noise, re-applied on every "
@@ -723,19 +601,6 @@ if __name__ == "__main__":
     else:
         obs_list = None
 
-    # Set alignment type 
-    alignment_strategy = 'post-hoc'
-    if args.post_hoc:
-        alignment_strategy = 'post-hoc'
-    elif args.output_perturb:
-        alignment_strategy = 'output-perturb'
-    elif args.biased_initialization:
-        alignment_strategy = 'biased-initialization'
-    elif args.guided_diffusion:
-        alignment_strategy = 'guided-diffusion'
-    elif args.stochastic_sampling:
-        alignment_strategy = 'stochastic-sampling'
-
     # Set policy type 
     if args.policy in ["diffusion", "dp"]:
         if args.checkpoint is not None:
@@ -753,7 +618,7 @@ if __name__ == "__main__":
 
     # Set policy parameters
     if args.policy in ["diffusion", "dp"]:
-        policy = DiffusionPolicy.from_pretrained(pretrained_policy_path, alignment_strategy=alignment_strategy)
+        policy = DiffusionPolicy.from_pretrained(pretrained_policy_path)
         policy.config.noise_scheduler_type = "DDIM"
         policy.diffusion.num_inference_steps = 10
         policy.config.n_action_steps = policy.config.horizon - policy.config.n_obs_steps + 1
@@ -770,23 +635,8 @@ if __name__ == "__main__":
     
     if args.unconditional:
         interactiveMaze = UnconditionalMaze(policy, policy_tag=policy_tag, vis_energy=args.vis_energy, maze_type=args.maze_type, obs_list=obs_list, opt_params=opt_params, ddim=ddim, sample_seed=args.sample_seed)
-    elif args.loadpath is not None:
-        if args.savepath is None:
-            savepath = None
-        else:
-            alignment_tag = 'ph'
-            if alignment_strategy == 'output-perturb':
-                alignment_tag = 'op'
-            elif alignment_strategy == 'biased-initialization':
-                alignment_tag = 'bi'
-            elif alignment_strategy == 'guided-diffusion':
-                alignment_tag = 'gd'
-            elif alignment_strategy == 'stochastic-sampling':
-                alignment_tag = 'ss'
-            savepath = f"{args.loadpath[:-5]}_{policy_tag}_{alignment_tag}{args.savepath}"
-        interactiveMaze = MazeExp(policy, args.vis_dp_dynamics, savepath, alignment_strategy, policy_tag=policy_tag, loadpath=args.loadpath, maze_type=args.maze_type, sample_seed=args.sample_seed)
     else:
-        interactiveMaze = ConditionalMaze(policy, args.vis_dp_dynamics, args.savepath, alignment_strategy, policy_tag=policy_tag, maze_type=args.maze_type, obs_list=obs_list, opt_params=opt_params, ddim=ddim, point_guide=args.point_guide, sample_seed=args.sample_seed)
+        interactiveMaze = ConditionalMaze(policy, savepath=args.savepath, policy_tag=policy_tag, maze_type=args.maze_type, obs_list=obs_list, opt_params=opt_params, ddim=ddim, point_guide=args.point_guide, sample_seed=args.sample_seed)
     if args.goal_conditioned:
         interactiveMaze.run_gc()
     else:
