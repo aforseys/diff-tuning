@@ -598,9 +598,6 @@ class PreferencePairDataset(torch.utils.data.Dataset):
         assert torch.equal(pos_ds.episode_data_index["from"], neg_ds.episode_data_index["from"])
         assert torch.equal(pos_ds.episode_data_index["to"], neg_ds.episode_data_index["to"])
 
-        # given datasets are the same, set index to match one dataset (used for samplers)
-        #self.episode_data_index = pos_ds.episode_data_index
-
         # start index of each episode (one entry per preference pair / "query")
         self.start_indices = pos_ds.episode_data_index["from"].clone()
 
@@ -619,24 +616,6 @@ class PreferencePairDataset(torch.utils.data.Dataset):
             "from": torch.arange(n, dtype=torch.long),
             "to": torch.arange(1, n + 1, dtype=torch.long),
         }
-
-    # def __len__(self):
-    #     # or `return min(len(self.pos_ds), len(self.neg_ds))`
-    #     return len(self.pos_ds)
-
-    # def __getitem__(self, idx):
-    #     pos_sample = self.pos_ds[idx]
-    #     neg_sample = self.neg_ds[idx]
-
-    #     # ensure samples are aligned
-    #     if "episode_index" in pos_sample and "episode_index" in neg_sample:
-    #         assert pos_sample["episode_index"].item() == neg_sample["episode_index"].item()
-    #         assert pos_sample["frame_index"].item() == neg_sample["frame_index"].item()
-
-    #     return {
-    #         "pos": pos_sample,
-    #         "neg": neg_sample,
-    #     }
 
     def __len__(self):
         # one item per episode, not per frame

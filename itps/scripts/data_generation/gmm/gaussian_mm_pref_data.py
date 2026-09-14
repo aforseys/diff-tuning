@@ -60,10 +60,3 @@ if __name__ == "__main__":
     # Filter dataset and visualize
     pref_dataset = generate_preference_data(dataset, args.pref_cluster)
     plot_pref_dataset(pref_dataset)
-
-    # save_dir = "data/"
-    # timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    # pref_pos_file = f"gmm_unconditional_pref_cluster_{args.pref_cluster}_positive_dataset_{timestamp}.npy"
-    # pref_neg_file = f"gmm_unconditional_pref_cluster_{args.pref_cluster}_negative_dataset_{timestamp}.npy"
-    # np.save(save_dir+pref_pos_file, pref_dataset['positive_observation'])
-    # np.save(save_dir+pref_neg_file, pref_dataset['negative_observation'])

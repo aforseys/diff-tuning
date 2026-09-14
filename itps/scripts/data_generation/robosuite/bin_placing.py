@@ -177,10 +177,7 @@ class BinPlacing(ManipulationEnv):
         use_camera_obs=True,
         use_object_obs=True,
         reward_shaping=False,
-        #target_bin=None,
         mujoco_object=None,
-       # n_starts=100,
-       # show_samples=False,
         has_renderer=False,
         has_offscreen_renderer=True,
         render_camera="frontview",
@@ -210,10 +207,6 @@ class BinPlacing(ManipulationEnv):
         self._marker_data      = None
         self._spline_data      = None   # (waypoints_list, colors_list) — set before reset()
         self._waypoint_data    = None   # (waypoints_list, colors_list) — raw optimizer waypoints
-        #self.n_starts          = n_starts
-        #self.show_samples      = show_samples
-        # self.start_positions   = None   # (n_starts, 3)
-        # self.goal_positions    = None   # list of 4 arrays, each (n_starts, 3)
 
         # World-space bin centres (table surface z = 0.8)
         self.bin_positions = np.array([
@@ -620,10 +613,7 @@ def make_env(has_renderer=True, camera="frontview",
     return BinPlacing(
         robots="Panda",
         controller_configs=_composite_cfg(controller),
-        # target_bin=target_bin,
         mujoco_object=mujoco_object,
-        # show_samples=show_samples,
-        # n_starts=n_starts,
         has_renderer=has_renderer,
         has_offscreen_renderer=False,
         render_camera=camera,

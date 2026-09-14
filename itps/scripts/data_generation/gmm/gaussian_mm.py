@@ -14,11 +14,7 @@ def sample_gmm(n_samples, weights, means, covs, seed=None):
     - seed: seed of rng
     """
     rng = np.random.default_rng(seed)
-    #weights = np.asarray(weights, dtype=float)
-    #weights = weights / weights.sum()  # ensure normalization
     K = len(means)
-    #n_samples_per_mean = [n_samples//K + (n_samples%K)*int(k==K-1) for k in range(K)] #hard coding even samples here
-    #comps = np.concatenate([[k]*n_samples_per_mean[k] for k in range(K)])
     # choose components for each sample
     w = np.asarray(weights, dtype=float)
     w = w / w.sum()
@@ -62,7 +58,6 @@ def gen_samples(weights, means, covs, N, seed):
 
 def get_weights():
      return np.array([1.0, 1.0, 1.0])
-#    return  np.array([0.45, 0.35, 0.20])
 
 def get_means():
     return [
@@ -82,16 +77,6 @@ def get_covs():
         np.array([[0.10, 0.0],
                   [0.0, 0.10]]),    # tighter version of [[0.6,0],[0,0.9]]
     ]
-    #return [
-      #  np.array([[0.5, 0.30],
-      #            [0.30, 0.60]]),   # tighter version of [[1.0, 0.6],[0.6,1.2]]
-
-     #   np.array([[0.40, -0.15],
-     #             [-0.15, 0.25]]),  # tighter version of [[0.8,-0.3],[-0.3,0.5]]
-
-    #    np.array([[0.30, 0.0],
-    #              [0.0, 0.45]]),    # tighter version of [[0.6,0],[0,0.9]]
-    #]
 
 
 def gen_dataset(N, seed):
@@ -134,16 +119,14 @@ def plot_samples(X, x_range=(-8,8), y_range=(-8,8)):
     plt.title("Samples")
     plt.xlabel("x")
     plt.ylabel("y")
-    #plt.axis('equal')
     plt.tight_layout()
     plt.show()
 
 # ------- Plot mixture density (contours) -------
 # grid over data range with padding
 def plot_gmm_pdf(weights, means, covs, x_range=(-8,8), y_range=(-8,8)):
-    #pad = 2.0
-    xmin, xmax = x_range #X.min(axis=0) - pad
-    ymin, ymax = y_range #X.max(axis=0) + pad
+    xmin, xmax = x_range
+    ymin, ymax = y_range
     xx, yy = np.meshgrid(
         np.linspace(xmin, xmax, 200),
         np.linspace(ymin, ymax, 200)

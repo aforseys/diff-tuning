@@ -69,18 +69,13 @@ def gen_xy_grid(x_range, y_range, torchify=True):
     return trajs
 
 
-def run_inference(policy, N=100, conditional=False): #, return_energy=False):
+def run_inference(policy, N=100, conditional=False):
 
     obs = gen_obs(conditional=conditional, N=N)
 
     inference_output = []
     for o in obs:
-        #print('obs shape:', o.shape) 
-        # if return_energy: 
-        #     actions, energy = policy.run_inference(o, return_energy=return_energy)
-        #     inference_output.append((actions.detach().cpu().squeeze(1).numpy(), energy.detach().cpu().numpy())) 
-        # else:
-        actions = policy.run_inference(o) #, return_energy=return_energy)
+        actions = policy.run_inference(o)
         inference_output.append(actions.detach().cpu().squeeze(1).numpy())
 
     return inference_output
@@ -209,8 +204,6 @@ def main(
 ):
     assert (pretrained_policy_path is None) ^ (hydra_cfg_path is None)
     if hydra_cfg_path is not None:
-    #     hydra_cfg = init_hydra_config(str(pretrained_policy_path / "config.yaml"), config_overrides)
-    # else:
         hydra_cfg = init_hydra_config(hydra_cfg_path, config_overrides)
     else: 
         hydra_cfg = None
@@ -221,12 +214,8 @@ def main(
         else:
             out_dir = f"outputs/eval/{dt.now().strftime('%Y-%m-%d/%H-%M-%S')}_{str(pretrained_policy_path).split('/')[-1]}"
     
-    # Check device is available
-    #device = get_safe_torch_device(hydra_cfg.device, log=True)
-
     logging.info("Making policy.")
     if hydra_cfg_path is None:
-        #policy = make_policy(hydra_cfg=hydra_cfg, pretrained_policy_name_or_path=str(pretrained_policy_path))
         policy = DiffusionPolicy.from_pretrained(pretrained_policy_path)
     else:
         # Note: We need the dataset stats to pass to the policy's normalization modules.

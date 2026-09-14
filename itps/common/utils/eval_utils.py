@@ -33,23 +33,15 @@ def run_inference(policy, N=100, conditional=False, methods=['ired', 'ddim'], op
 
     IRED_inference_output = [[] for _ in opt_params] if 'ired' in methods else None
     DDIM_inference_output = [] if 'ddim' in methods else None
-    #sample_times=[]
 
     for o in obs:
-        #start = time.perf_counter()
         actions = policy.run_inference(o, methods=methods, opt_params=opt_params)
-        #torch.cuda.synchronize()
-        # elapsed = time.perf_counter() - start
-
-        # sample_times.append(elapsed)
-        # print(f"Sample time: {elapsed*1000:.1f}ms")
         if 'ired' in methods:
             for i in range(len(opt_params)): 
                 IRED_inference_output[i].append(actions[i].detach().cpu().squeeze(1).numpy())
         if 'ddim' in methods:
             DDIM_inference_output.append(actions[-1].detach().cpu().squeeze(1).numpy())
 
-    # print(f"Avg sample time over {len(sample_times)} obs: {np.mean(sample_times)*1000:.1f}ms")
     results = []
     if 'ired' in methods: 
         results += IRED_inference_output
@@ -241,7 +233,6 @@ def viz_inference(policy, samples, conditional, learned_contour=True, t=0, x_ran
                     extent=[xx.min(), xx.max(), yy.min(), yy.max()],
                     aspect="auto"
                     )
-        #plt.heatmap(xx, yy, zz)
         # plot where sampled points are with x's 
         plt.scatter(samples[i][:,0], samples[i][:,1], s=8, alpha=0.6, edgecolor='none')
         plt.xlabel("X")
@@ -348,8 +339,6 @@ def viz_ired_grad_steps(policy, grad_history, t, conditional, opt_vals, x_range=
 
     title += f" ({n_inner_steps_label} inner steps/timestep, {t_time_steps_label} timesteps, denoise = {denoise})"      
                 
-    #   if conditional:
-    #       title += f"\nConditioned on obs {obs_i}"                                    
     plt.suptitle(title)                                                             
     plt.tight_layout()
     plt.show()   
