@@ -1177,8 +1177,12 @@ class DiffusionConditionalUnet1d(nn.Module):
 
         # Run decoder, using the skip features from the encoder.
         for resnet, resnet2, upsample in self.up_modules:
-            if x.shape[-1] != encoder_skip_features[-1].shape: # In case of dim mismatch for encode /decode outputs (happens in GMM given input size of 2)
-                x = F.interpolate(x, size=encoder_skip_features[-1].shape[-1], mode = "nearest")
+            # Added for GMM (horizon=1): each downsample halves the length (rounding up) and each
+            # upsample doubles it, so with horizon 1 the upsampled length (2) no longer matches the
+            # skip feature (1). Resize to the skip length before concatenating. Only triggers when the
+            # lengths actually differ, i.e. never for horizon=64 (maze, robosuite).
+            if x.shape[-1] != encoder_skip_features[-1].shape[-1]:
+                x = F.interpolate(x, size=encoder_skip_features[-1].shape[-1], mode="nearest")
             x = torch.cat((x, encoder_skip_features.pop()), dim=1)
             x = resnet(x, global_feature)
             x = resnet2(x, global_feature)
