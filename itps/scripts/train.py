@@ -95,14 +95,14 @@ def make_optimizer_and_scheduler(cfg, policy, train_FiLM_only=False):
             num_warmup_steps=cfg.training.lr_warmup_steps,
             num_training_steps=cfg.training.offline_steps,
         )
-    # elif policy.name == "tdmpc":
-    #     optimizer = torch.optim.Adam(policy.parameters(), cfg.training.lr)
-    #     lr_scheduler = None
-    # elif cfg.policy.name == "vqbet":
-    #     from lerobot.common.policies.vqbet.modeling_vqbet import VQBeTOptimizer, VQBeTScheduler
+    elif policy.name == "tdmpc":
+        optimizer = torch.optim.Adam(policy.parameters(), cfg.training.lr)
+        lr_scheduler = None
+    elif cfg.policy.name == "vqbet":
+        from itps.common.policies.vqbet.modeling_vqbet import VQBeTOptimizer, VQBeTScheduler
 
-    #     optimizer = VQBeTOptimizer(policy, cfg)
-    #     lr_scheduler = VQBeTScheduler(optimizer, cfg)
+        optimizer = VQBeTOptimizer(policy, cfg)
+        lr_scheduler = VQBeTScheduler(optimizer, cfg)
     else:
         raise NotImplementedError()
 

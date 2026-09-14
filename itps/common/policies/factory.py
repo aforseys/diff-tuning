@@ -46,12 +46,12 @@ def _policy_cfg_from_hydra_cfg(policy_cfg_class, hydra_cfg):
 
 def get_policy_and_config_classes(name: str) -> tuple[Policy, object]:
     """Get the policy's class and config class given a name (matching the policy class' `name` attribute)."""
-    # if name == "tdmpc":
-    #     from itps.common.policies.tdmpc.configuration_tdmpc import TDMPCConfig
-    #     from itps.common.policies.tdmpc.modeling_tdmpc import TDMPCPolicy
+    if name == "tdmpc":
+        from itps.common.policies.tdmpc.configuration_tdmpc import TDMPCConfig
+        from itps.common.policies.tdmpc.modeling_tdmpc import TDMPCPolicy
 
-    #     return TDMPCPolicy, TDMPCConfig
-    if name == "diffusion":
+        return TDMPCPolicy, TDMPCConfig
+    elif name == "diffusion":
         from itps.common.policies.diffusion.configuration_diffusion import DiffusionConfig
         from itps.common.policies.diffusion.modeling_diffusion import DiffusionPolicy
 
@@ -61,11 +61,11 @@ def get_policy_and_config_classes(name: str) -> tuple[Policy, object]:
         from itps.common.policies.act.modeling_act import ACTPolicy
 
         return ACTPolicy, ACTConfig
-    # elif name == "vqbet":
-    #     from itps.common.policies.vqbet.configuration_vqbet import VQBeTConfig
-    #     from itps.common.policies.vqbet.modeling_vqbet import VQBeTPolicy
+    elif name == "vqbet":
+        from itps.common.policies.vqbet.configuration_vqbet import VQBeTConfig
+        from itps.common.policies.vqbet.modeling_vqbet import VQBeTPolicy
 
-    #     return VQBeTPolicy, VQBeTConfig
+        return VQBeTPolicy, VQBeTConfig
     else:
         raise NotImplementedError(f"Policy with name {name} is not implemented.")
 
