@@ -74,7 +74,7 @@ def make_optimizer_and_scheduler(cfg, policy, train_FiLM_only=False):
             optimizer_params_dicts, lr=cfg.training.lr, weight_decay=cfg.training.weight_decay
         )
         lr_scheduler = None
-    elif cfg.policy.name == "diffusion":
+    elif cfg.policy.name in ("diffusion", "ebm_diffusion"):
         if train_FiLM_only:
             trainable_params = policy.freeze_nonFiLM()
         else:

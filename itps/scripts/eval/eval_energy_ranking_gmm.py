@@ -32,7 +32,7 @@ import numpy as np
 import torch
 
 from itps.common.policies.diffusion.modeling_diffusion import (
-    DiffusionPolicy,
+    EBMDiffusionPolicy,
     DEFAULT_ENERGY_N_NOISE,
     DEFAULT_ENERGY_SEED,
 )
@@ -139,8 +139,8 @@ def main():
     parser.add_argument("--save-path", default=None, help="Optional .json path to save detailed results")
     args = parser.parse_args()
 
-    pretrained_policy = DiffusionPolicy.from_pretrained(args.pretrained_path)
-    finetuned_policy = DiffusionPolicy.from_pretrained(args.finetuned_path)
+    pretrained_policy = EBMDiffusionPolicy.from_pretrained(args.pretrained_path)
+    finetuned_policy = EBMDiffusionPolicy.from_pretrained(args.finetuned_path)
     for p in (pretrained_policy, finetuned_policy):
         p.to(args.device)
         p.eval()

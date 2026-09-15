@@ -56,6 +56,10 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
     """
     Diffusion Policy as per "Diffusion Policy: Visuomotor Policy Learning via Action Diffusion"
     (paper: https://arxiv.org/abs/2303.04137, code: https://github.com/real-stanford/diffusion_policy).
+
+    Extends LeRobot's implementation with goal conditioning, batched trajectory sampling (`run_inference`),
+    fine-tuning batches in `forward`, and FiLM-only fine-tuning (`freeze_nonFiLM`). These work with or
+    without the energy-based model; `EBMDiffusionPolicy` below adds the energy-specific parts.
     """
 
     name = "diffusion"
@@ -76,13 +80,13 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
         if config is None:
             config = DiffusionConfig()
         self.config = config
+        # Goal observations ("episode_goal") can reuse the observation.state normalization statistics.
         self.normalize_inputs = Normalize(
             config.input_shapes,
             config.input_normalization_modes,
             dataset_stats,
-            stats_mapping={"episode_goal": "observation.state"} if config.use_stats_mapping else {}
+            stats_mapping={"episode_goal": "observation.state"} if config.use_stats_mapping else {},
         )
-        
         self.normalize_targets = Normalize(
             config.output_shapes, config.output_normalization_modes, dataset_stats
         )
@@ -90,15 +94,16 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
             config.output_shapes, config.output_normalization_modes, dataset_stats
         )
 
-        # queues are populated during rollout of the policy, they contain the n latest observations and actions
-        self._queues = None
-
-        self.diffusion = EBMDiffusionModel(config)
+        self.diffusion = self._make_diffusion_model(config)
 
         self.expected_image_keys = [k for k in config.input_shapes if k.startswith("observation.image")]
         self.use_env_state = "observation.environment_state" in config.input_shapes
         self.use_goal_cond = "episode_goal" in config.input_shapes
-    
+
+    def _make_diffusion_model(self, config: DiffusionConfig) -> "DiffusionModel":
+        """Build the underlying diffusion model. Subclasses override this to use a different model."""
+        return DiffusionModel(config)
+
     @property
     def n_obs_steps(self) -> int:
         return self.config.n_obs_steps
@@ -107,60 +112,33 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
     def input_keys(self) -> set[str]:
         return set(self.config.input_shapes)
 
-    @torch.no_grad 
-    def run_inference(self, observation_batch: dict[str, Tensor], return_full=False, methods=['ired', 'ddim'], opt_params=[{'n_opt':1, 't_subset': None, 'denoise': False}], return_grad_steps=False) -> Tensor:
+    @torch.no_grad
+    def run_inference(self, observation_batch: dict[str, Tensor], return_full: bool = False):
+        """
+        Sample one action trajectory per observation with the configured noise scheduler (DDPM/DDIM).
+
+        Returns the unnormalized `n_action_steps` actions starting at the current observation, and with
+        `return_full=True` also the full `horizon`-length trajectories.
+        """
         observation_batch = self.normalize_inputs(observation_batch)
         if len(self.expected_image_keys) > 0:
             observation_batch["observation.images"] = torch.stack(
                 [observation_batch[k] for k in self.expected_image_keys], dim=-4
             )
-
-        # default: use optimization-based sampling
-        gen_actions = []
-        if 'ired' in methods:
-            for p in opt_params: 
-                n, subset, denoise = (p["n_opt"], p["t_subset"], p["denoise"])
-                gen_actions.append(self.diffusion.generate_actions(observation_batch, return_full=return_full, steps_per_timestep=n, opt_subset=subset, denoise = denoise, return_grad_steps=return_grad_steps))
-        
-        # if returning both, use denoising-based sampling as well
-        if 'ddim' in methods: 
-            gen_actions_denoise = self.diffusion.generate_actions(observation_batch, return_full=return_full, opt_energy=False)
-            gen_actions.append(gen_actions_denoise)
-
-        # Energies are deliberately NOT computed here. Callers that want them call
-        # `get_energy` explicitly on the array they intend to score, which forces them
-        # to name the timestep, the noise settings (n_noise/deterministic/seed) and the
-        # window. This used to be a `return_energy` flag that hardcoded t=0, silently
-        # took the noise defaults, and picked the window implicitly from `return_full` --
-        # and the UNet is convolutional over time with two stride-2 downsamples, so
-        # per-step outputs depend on window length: full-traj and actions-only energies
-        # are each self-consistent but are NOT comparable to each other.
-
-        if return_grad_steps:
-            grad_histories = []
-            for ga in gen_actions[:len(opt_params)]:
-                if 'grad_history' in ga:
-                    unnorm_hist={}
-                    for t_key, steps in ga['grad_history'].items():
-                        unnorm_hist[t_key]=[
-                            {'pos': self.unnormalize_outputs({"action":s['pos']})["action"].detach(),                                                     
-                             'next_pos': self.unnormalize_outputs({"action":s['next_pos']})["action"].detach(),                                        
-                            }                                                          
-                          for s in steps
-                        ]
-                    grad_histories.append(unnorm_hist)
-                        
-        actions = [self.unnormalize_outputs({"action": a['actions']})["action"] for a in gen_actions]
-        if return_grad_steps:
-            return actions, grad_histories
+        generated = self.diffusion.generate_actions(observation_batch, return_full=return_full)
+        actions = self.unnormalize_outputs({"action": generated["actions"]})["action"]
         if return_full:
-            full_traj = [self.unnormalize_outputs({"action": a['full_traj']})["action"] for a in gen_actions]
+            full_traj = self.unnormalize_outputs({"action": generated["full_traj"]})["action"]
             return actions, full_traj
-
         return actions
 
-    def forward(self, batch: dict[str, Tensor], tune_batch: dict[str, Tensor]= None) -> dict[str, Tensor]:
-        """Run the batch through the model and compute the loss for training or validation."""
+    def forward(self, batch: dict[str, Tensor], tune_batch: dict | None = None) -> dict[str, Tensor]:
+        """
+        Run the batch through the model and compute the loss for training or validation.
+
+        `tune_batch` optionally carries fine-tuning data, {"pref": (pos_batch, neg_batch)} or
+        {"demo": demo_batch}, normalized the same way as `batch`. Returns the loss and its logged components.
+        """
         batch = self.normalize_inputs(batch)
         if len(self.expected_image_keys) > 0:
             batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
@@ -168,29 +146,30 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
         batch = self.normalize_targets(batch)
         if tune_batch is not None:
             tune_batch = dict(tune_batch)  # shallow copy so the caller's tune_batch isn't modified
-            if 'demo' in tune_batch:
-                demo_batch = tune_batch['demo']
+            if "demo" in tune_batch:
+                demo_batch = tune_batch["demo"]
                 demo_batch = self.normalize_inputs(demo_batch)
                 demo_batch = self.normalize_targets(demo_batch)
-                tune_batch['demo'] = demo_batch
-            if 'pref' in tune_batch:
-                pos_batch, neg_batch = tune_batch['pref']
+                tune_batch["demo"] = demo_batch
+            if "pref" in tune_batch:
+                pos_batch, neg_batch = tune_batch["pref"]
                 pos_batch = self.normalize_inputs(pos_batch)
                 pos_batch = self.normalize_targets(pos_batch)
                 neg_batch = self.normalize_inputs(neg_batch)
                 neg_batch = self.normalize_targets(neg_batch)
-                tune_batch['pref'] = (pos_batch, neg_batch) 
+                tune_batch["pref"] = (pos_batch, neg_batch)
         loss, loss_components = self.diffusion.compute_loss(batch, tune_batch)
         return {"loss": loss, **loss_components}
-   
+
     def freeze_nonFiLM(self):
+        """Freeze every parameter except the UNet's FiLM conditioning layers; returns the trainable parameters."""
 
         # Freeze all parameters
         for p in self.parameters():
             p.requires_grad = False
 
         # Unfreeze FiLM layers
-        trainable_params=[]
+        trainable_params = []
         for module in self.modules():
             if isinstance(module, DiffusionConditionalResidualBlock1d):
                 for p in module.cond_encoder.parameters():
@@ -199,20 +178,6 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
 
         return trainable_params
 
-    def get_energy(self, action_batch: dict[str, Tensor], t: int, observation_batch: dict[str, Tensor],
-                   mask: Tensor | None = None,
-                   n_noise: int = DEFAULT_ENERGY_N_NOISE, deterministic: bool = False,
-                   seed: int | None = DEFAULT_ENERGY_SEED):
-        observation_batch = self.normalize_inputs(observation_batch)
-        action_batch = self.normalize_targets(action_batch)
-        # if len(self.expected_image_keys) > 0: #TODO: Update if necessary 
-        #     observation_batch["observation.images"] = torch.stack(
-        #         [observation_batch[k] for k in self.expected_image_keys], dim=-4
-        #     )
-        # get_traj_energies(self, trajectories: Tensor, t: int, global_cond: Tensor | None = None, mask: Tensor | None = None):
-        trajectory = action_batch["action"]
-        return self.diffusion.get_traj_energies(trajectory, t, observation_batch, mask=mask,
-                                                n_noise=n_noise, deterministic=deterministic, seed=seed)
 
 def _make_noise_scheduler(name: str, **kwargs: dict) -> DDPMScheduler | DDIMScheduler:
     """
@@ -226,67 +191,39 @@ def _make_noise_scheduler(name: str, **kwargs: dict) -> DDPMScheduler | DDIMSche
     else:
         raise ValueError(f"Unsupported noise scheduler type {name}")
 
-class EBMWrapper(nn.Module):
-    def __init__(self, ebm):
-        super(EBMWrapper, self).__init__()
-        self.model = ebm
-        
-    def forward(self, x: Tensor, timestep: Tensor | int, global_cond=None, return_energy=False, return_both=False, mask=None):
-        
-        
-        x.requires_grad_(True)
 
-        with torch.enable_grad(): #need to enable grad to take energy grad wrt x
+class DiffusionModel(nn.Module):
+    # Loss terms reported by `compute_loss` for logging (-1 when a term isn't used).
+    loss_component_names = ("loss_mse", "loss_dpo_finetune", "loss_demo_finetune")
 
-            assert torch.is_grad_enabled(), "torch.enable_grad() failed"
-
-            out = self.model(x, timestep, global_cond)
-
-            # Check differentiability
-            assert out.requires_grad, "model output is not differentiable — autograd graph broken!"
-
-            energy_per_state = out.pow(2)  #TODO: Why is energy squared? Keep positive? 
-
-            # Don't use padding actions in energy calculation
-            if mask is not None:
-                energy_per_state = (energy_per_state * mask.unsqueeze(-1))
-
-            energy = energy_per_state.sum(dim=1).sum(dim=1)[:, None] #(B, 1)
-
-            if return_energy:
-                return energy 
-
-            opt_grad = torch.autograd.grad([energy.sum()], [x], create_graph=self.training)[0]
-
-            if return_both:
-                return energy, opt_grad
-            else:
-                return opt_grad 
-
-
-class EBMDiffusionModel(nn.Module):
     def __init__(self, config: DiffusionConfig):
         super().__init__()
         self.config = config
 
         # Build observation encoders (depending on which observations are provided).
-        global_cond_dim = config.input_shapes["observation.state"][0] * config.n_obs_steps
+        global_cond_dim = config.input_shapes["observation.state"][0]
         num_images = len([k for k in config.input_shapes if k.startswith("observation.image")])
         self._use_images = False
         self._use_env_state = False
-        self._use_goal_cond = False
         if num_images > 0:
             self._use_images = True
             self.rgb_encoder = DiffusionRgbEncoder(config)
-            global_cond_dim += self.rgb_encoder.feature_dim * num_images *config.n_obs_steps
+            global_cond_dim += self.rgb_encoder.feature_dim * num_images
         if "observation.environment_state" in config.input_shapes:
             self._use_env_state = True
-            global_cond_dim += config.input_shapes["observation.environment_state"][0] * config.n_obs_steps
-        if "episode_goal" in config.input_shapes:
-            self._use_goal_cond = True
+            global_cond_dim += config.input_shapes["observation.environment_state"][0]
+        global_cond_dim *= config.n_obs_steps
+
+        # Goal conditioning: the goal is given once per sample (not once per observation step), so its
+        # dimension is added after scaling by n_obs_steps.
+        self._use_goal_cond = "episode_goal" in config.input_shapes
+        if self._use_goal_cond:
             global_cond_dim += config.input_shapes["episode_goal"][0]
-        self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim) 
-        self.model = EBMWrapper(self.unet)
+
+        self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim)
+        # Noise predictor used for sampling and training. Here it is the UNet itself; EBMDiffusionModel
+        # replaces it with the gradient of an energy computed from the UNet.
+        self.model = self.unet
 
         self.noise_scheduler = _make_noise_scheduler(
             config.noise_scheduler_type,
@@ -299,18 +236,18 @@ class EBMDiffusionModel(nn.Module):
             prediction_type=config.prediction_type,
         )
 
-        register_buffer = lambda name, val: self.register_buffer(name, val.to(torch.float32))
-
-        # save noise weighting, no effect when doing noise prediction
-        alphas_cumprod=self.noise_scheduler.alphas_cumprod
-        snr = alphas_cumprod / (1-alphas_cumprod)
-        if self.config.prediction_type == "epsilon":
-            loss_weight= snr/(snr+1) # = alphas_cumprod / (1 - alphas_cumprod)
-        elif self.config.prediction_type == "sample":
-            loss_weight = snr
-        else:
-            raise NotImplementedError("Prediction type not recognized")
-        register_buffer('loss_weight', loss_weight)
+        # Per-timestep weights applied to the training losses (see `_timestep_weight`). Saved with the model.
+        # Currently uniform; alternatives below.
+        loss_weight = torch.ones(config.num_train_timesteps)
+        # alphas_cumprod = self.noise_scheduler.alphas_cumprod
+        # snr = alphas_cumprod / (1 - alphas_cumprod)
+        # if self.config.prediction_type == "epsilon":
+        #     loss_weight = snr / (snr + 1)  # = alphas_cumprod
+        # elif self.config.prediction_type == "sample":
+        #     loss_weight = snr
+        # else:
+        #     raise NotImplementedError("Prediction type not recognized")
+        self.register_buffer("loss_weight", loss_weight.to(torch.float32))
 
         if config.num_inference_steps is None:
             self.num_inference_steps = self.noise_scheduler.config.num_train_timesteps
@@ -335,7 +272,7 @@ class EBMDiffusionModel(nn.Module):
         self.noise_scheduler.set_timesteps(self.num_inference_steps)
 
         for t in self.noise_scheduler.timesteps:
-            # Predict model output.
+            # Predict model output (noise estimate).
             model_output = self.model(
                 sample,
                 torch.full(sample.shape[:1], t, dtype=torch.long, device=sample.device),
@@ -345,7 +282,313 @@ class EBMDiffusionModel(nn.Module):
             sample = self.noise_scheduler.step(model_output, t, sample, generator=generator).prev_sample
 
         return sample
-    
+
+    def _prepare_global_conditioning(self, batch: dict[str, Tensor]) -> Tensor:
+        """Encode image features and concatenate them all together along with the state vector."""
+        batch_size, n_obs_steps = batch["observation.state"].shape[:2]
+        global_cond_feats = [batch["observation.state"]]
+        # Extract image feature (first combine batch, sequence, and camera index dims).
+        if self._use_images:
+            img_features = self.rgb_encoder(
+                einops.rearrange(batch["observation.images"], "b s n ... -> (b s n) ...")
+            )
+            # Separate batch dim and sequence dim back out. The camera index dim gets absorbed into the
+            # feature dim (effectively concatenating the camera features).
+            img_features = einops.rearrange(
+                img_features, "(b s n) ... -> b s (n ...)", b=batch_size, s=n_obs_steps
+            )
+            global_cond_feats.append(img_features)
+
+        if self._use_env_state:
+            global_cond_feats.append(batch["observation.environment_state"])
+
+        # Concatenate features then flatten to (B, global_cond_dim).
+        global_cond = torch.cat(global_cond_feats, dim=-1).flatten(start_dim=1)
+
+        # If goal conditioned, flatten the goal separately and append it.
+        if self._use_goal_cond:
+            flat_goal = batch["episode_goal"].flatten(start_dim=1)
+            return torch.cat([global_cond, flat_goal], dim=-1)
+
+        return global_cond
+
+    def generate_actions(self, batch: dict[str, Tensor], return_full: bool = False) -> dict[str, Tensor]:
+        """
+        This function expects `batch` to have:
+        {
+            "observation.state": (B, n_obs_steps, state_dim)
+
+            "observation.images": (B, n_obs_steps, num_cameras, C, H, W)
+                AND/OR
+            "observation.environment_state": (B, environment_dim)
+        }
+
+        Returns {"actions": (B, n_action_steps, action_dim)}, plus "full_traj": (B, horizon, action_dim)
+        when `return_full=True`.
+        """
+        action_dict = {}
+        batch_size, n_obs_steps = batch["observation.state"].shape[:2]
+        assert n_obs_steps == self.config.n_obs_steps
+
+        # Encode image features and concatenate them all together along with the state vector.
+        global_cond = self._prepare_global_conditioning(batch)  # (B, global_cond_dim)
+
+        # run sampling
+        actions = self.conditional_sample(batch_size, global_cond=global_cond)
+        if return_full:
+            action_dict["full_traj"] = actions
+
+        # Extract `n_action_steps` steps worth of actions (from the current observation).
+        start = n_obs_steps - 1
+        end = start + self.config.n_action_steps
+        action_dict["actions"] = actions[:, start:end]
+
+        return action_dict
+
+    # ========= training  ============
+    def compute_loss(
+        self, batch: dict[str, Tensor], tune_batch: dict | None = None
+    ) -> tuple[Tensor, dict[str, Tensor]]:
+        """
+        This function expects `batch` to have (at least):
+        {
+            "observation.state": (B, n_obs_steps, state_dim)
+
+            "observation.images": (B, n_obs_steps, num_cameras, C, H, W)
+                AND/OR
+            "observation.environment_state": (B, environment_dim)
+
+            "action": (B, horizon, action_dim)
+            "action_is_pad": (B, horizon)
+        }
+
+        `tune_batch` optionally holds fine-tuning data, {"pref": (pos_batch, neg_batch)} or
+        {"demo": demo_batch}; the objective is chosen by the config (see `_finetune_loss`).
+        Returns the scalar loss and a dict of its components for logging.
+        """
+        self._validate_batches(batch, tune_batch)
+
+        # Sample a random noising timestep for each item in the batch, shared by every loss term.
+        trajectory = batch["action"]
+        timesteps = torch.randint(
+            low=0,
+            high=self.noise_scheduler.config.num_train_timesteps,
+            size=(trajectory.shape[0],),
+            device=trajectory.device,
+        ).long()
+
+        components = {name: torch.tensor(-1, dtype=torch.float32) for name in self.loss_component_names}
+
+        if tune_batch is None:
+            eps = torch.randn(trajectory.shape, device=trajectory.device)
+            loss_mse = self._timestep_weight(timesteps) * self._compute_denoising_sq_error(
+                batch, timesteps, eps, mask=self._padding_mask(batch)
+            )
+            loss = self.config.gradient_loss_weight * loss_mse
+            components["loss_mse"] = loss_mse.mean()
+        else:
+            loss, finetune_components = self._finetune_loss(batch, tune_batch, timesteps)
+            components.update(finetune_components)
+
+        auxiliary_loss, auxiliary_components = self._auxiliary_loss(batch, timesteps)
+        loss = loss + auxiliary_loss
+        components.update(auxiliary_components)
+
+        return loss.mean(), components
+
+    def _finetune_loss(self, batch: dict[str, Tensor], tune_batch: dict, timesteps: Tensor):
+        """Loss for the fine-tuning objective selected in the config. Returns (per-sample loss, components)."""
+        if self.config.finetune_dpo:
+            return self._dpo_loss(batch, tune_batch, timesteps)
+        elif self.config.finetune_demos:
+            return self._demo_loss(batch, tune_batch, timesteps)
+        raise ValueError("A tune_batch was given, but no fine-tuning objective this model supports is enabled.")
+
+    def _dpo_loss(self, batch: dict[str, Tensor], tune_batch: dict, timesteps: Tensor):
+        """DPO fine-tuning on preference pairs, with the denoising error on `batch` as a regularizer."""
+        assert "pref" in tune_batch, "Tuning batch must contain pairwise preferences"
+        pos_batch, neg_batch = tune_batch["pref"]
+        trajectory = batch["action"]
+
+        # Use same sampled timesteps
+        # Assert batch sizes the same to allow this
+        assert pos_batch["action"].shape == trajectory.shape
+        assert pos_batch["action"].device == trajectory.device
+
+        # Sharing timesteps across base/pos/neg makes this a one-sample estimate of the
+        # regularization expectation at this sample's own timestep.
+        eps = torch.randn(trajectory.shape, device=trajectory.device)
+        loss_mse_raw = self._compute_denoising_sq_error(batch, timesteps, eps, mask=self._padding_mask(batch))
+
+        # Draw eps^+ and eps^- INDEPENDENTLY, as the objective specifies.
+        eps_pos = torch.randn(pos_batch["action"].shape, device=trajectory.device)
+        eps_neg = torch.randn(neg_batch["action"].shape, device=trajectory.device)
+        # Pref dataset contains full horizon trajectories so no mask needed
+        pos_mse_loss = self._compute_denoising_sq_error(pos_batch, timesteps, eps_pos)
+        neg_mse_loss = self._compute_denoising_sq_error(neg_batch, timesteps, eps_neg)
+
+        # One term per preference pair, (B, 1).
+        # The timestep weight multiplies the per-pair loss.
+        loss_dpo_finetune = pos_mse_loss - neg_mse_loss
+        dpo = self.config.dpo_params
+        w = self._timestep_weight(timesteps)
+        loss = -w * F.logsigmoid(-dpo["rho"] * (loss_dpo_finetune + dpo["mu"] * loss_mse_raw - dpo["b"]))
+
+        return loss, {"loss_mse": (w * loss_mse_raw).mean(), "loss_dpo_finetune": loss_dpo_finetune.mean()}
+
+    def _demo_loss(self, batch: dict[str, Tensor], tune_batch: dict, timesteps: Tensor):
+        """Fine-tuning on new demonstrations: denoising loss on `batch` plus denoising loss on the demos."""
+        assert "demo" in tune_batch, "Tuning batch must contain new demonstrations"
+        demo_batch = tune_batch["demo"]
+        trajectory = batch["action"]
+
+        # The demo batch uses the same sampled timesteps as the base batch.
+        assert demo_batch["action"].shape == trajectory.shape
+        assert demo_batch["action"].device == trajectory.device
+
+        w = self._timestep_weight(timesteps)
+        eps = torch.randn(trajectory.shape, device=trajectory.device)
+        loss_mse = w * self._compute_denoising_sq_error(batch, timesteps, eps, mask=self._padding_mask(batch))
+
+        demo_eps = torch.randn(demo_batch["action"].shape, device=trajectory.device)
+        loss_demo_finetune = w * self._compute_denoising_sq_error(
+            demo_batch, timesteps, demo_eps, mask=self._padding_mask(demo_batch)
+        )
+
+        loss = self.config.gradient_loss_weight * loss_mse + self.config.demo_finetune_loss_weight * loss_demo_finetune
+        return loss, {"loss_mse": loss_mse.mean(), "loss_demo_finetune": loss_demo_finetune.mean()}
+
+    def _auxiliary_loss(self, batch: dict[str, Tensor], timesteps: Tensor):
+        """Optional additional loss component. None for the base model (see EBMDiffusionModel)."""
+        return 0.0, {}
+
+    def _validate_batches(self, batch: dict[str, Tensor], tune_batch: dict | None):
+        # Validate main batch input
+        assert set(batch).issuperset({"observation.state", "action"})
+        assert "observation.images" in batch or "observation.environment_state" in batch or "observation.state" in batch
+        assert batch["action"].shape[1] == self.config.horizon
+        assert batch["observation.state"].shape[1] == self.config.n_obs_steps
+
+        # Validate tune batch input
+        if tune_batch is not None:
+            if "pref" in tune_batch:
+                pos_batch, neg_batch = tune_batch["pref"]
+                for b in (pos_batch, neg_batch):
+                    assert set(b).issuperset({"observation.state", "action"})
+                    assert "observation.images" in b or "observation.environment_state" in b or "observation.state" in b
+                    assert b["action"].shape[1] == self.config.horizon
+                    assert b["observation.state"].shape[1] == self.config.n_obs_steps
+            if "demo" in tune_batch:
+                demo_batch = tune_batch["demo"]
+                assert set(demo_batch).issuperset({"observation.state", "action"})
+                assert "observation.images" in demo_batch or "observation.environment_state" in demo_batch or "observation.state" in demo_batch
+                assert demo_batch["action"].shape[1] == self.config.horizon
+                assert demo_batch["observation.state"].shape[1] == self.config.n_obs_steps
+
+    def _padding_mask(self, batch: dict[str, Tensor]) -> Tensor | None:
+        """(B, horizon) mask of real (non-padded) actions, or None if config.do_mask_loss_for_padding is off."""
+        if not self.config.do_mask_loss_for_padding:
+            return None
+        if "action_is_pad" not in batch:
+            raise ValueError(
+                "You need to provide 'action_is_pad' in the batch when "
+                f"{self.config.do_mask_loss_for_padding=}."
+            )
+        return ~batch["action_is_pad"]
+
+    def _timestep_weight(self, timesteps: Tensor) -> Tensor:
+        """(B, 1) loss weight at the sampled timesteps (from `self.loss_weight`)."""
+        return extract(self.loss_weight, timesteps, (timesteps.shape[0], 1))
+
+    def _compute_denoising_sq_error(self, batch, timesteps, eps, mask=None):
+
+        # Assuming noise prediction
+        assert self.config.prediction_type == "epsilon", "Assumes target prediction is noise."
+        target = eps
+
+        # Forward diffusion
+        global_cond = self._prepare_global_conditioning(batch)
+        trajectory = batch["action"]
+        noisy_trajectory = self.noise_scheduler.add_noise(trajectory, eps, timesteps)
+
+        # Predict noise and compare to target
+        pred = self.model(noisy_trajectory, timesteps, global_cond=global_cond, mask=mask)
+        loss = F.mse_loss(pred, target, reduction="none")
+
+        # Mask loss wherever the action is padded with copies (edges of the dataset trajectory).
+        if mask is not None:
+            loss = loss * mask.unsqueeze(-1)
+
+        # Reduce to one item per trajectory: the MEAN over the horizon x action_dim
+        # entries, i.e. ||eps - eps_theta||^2 / D with D = horizon * action_dim.
+        # NOTE on units: any hyperparameter multiplying this is in "mean units".
+        # Against the squared L2 norm the DPO objective specifies: rho_L2 = rho / D.
+        loss = einops.reduce(loss, "b ... -> b 1", "mean")
+        return loss
+
+
+# ================================================================================================
+# Energy-based diffusion model: EBMWrapper, EBMDiffusionModel, EBMDiffusionPolicy
+# ================================================================================================
+
+
+class EBMWrapper(nn.Module):
+    """
+    Turns the UNet into an energy-based model: the energy of a noisy trajectory is the squared UNet output
+    summed over the trajectory, and the noise prediction is the gradient of that energy w.r.t. the input.
+    """
+
+    def __init__(self, ebm):
+        super(EBMWrapper, self).__init__()
+        self.model = ebm
+
+    def forward(self, x: Tensor, timestep: Tensor | int, global_cond=None, return_energy=False, return_both=False, mask=None):
+
+        x.requires_grad_(True)
+
+        with torch.enable_grad(): #need to enable grad to take energy grad wrt x
+
+            assert torch.is_grad_enabled(), "torch.enable_grad() failed"
+
+            out = self.model(x, timestep, global_cond)
+
+            # Check differentiability
+            assert out.requires_grad, "model output is not differentiable — autograd graph broken!"
+
+            energy_per_state = out.pow(2)
+
+            # Don't use padding actions in energy calculation
+            if mask is not None:
+                energy_per_state = (energy_per_state * mask.unsqueeze(-1))
+
+            energy = energy_per_state.sum(dim=1).sum(dim=1)[:, None] #(B, 1)
+
+            if return_energy:
+                return energy
+
+            opt_grad = torch.autograd.grad([energy.sum()], [x], create_graph=self.training)[0]
+
+            if return_both:
+                return energy, opt_grad
+            else:
+                return opt_grad
+
+
+class EBMDiffusionModel(DiffusionModel):
+    """
+    DiffusionModel parameterized as an energy-based model (see EBMWrapper). Adds IRED-style sampling by
+    gradient descent on the energy (`opt_energy`), trajectory energy evaluation (`get_traj_energies`),
+    energy-landscape supervision, and energy-based preference fine-tuning. Sampling with the noise scheduler
+    (DDIM/DDPM) and the DPO / demonstration losses are inherited, using the energy gradient as the noise.
+    """
+
+    loss_component_names = DiffusionModel.loss_component_names + ("loss_energy", "loss_energy_finetune")
+
+    def __init__(self, config: DiffusionConfig):
+        super().__init__(config)
+        self.model = EBMWrapper(self.unet)
+
+    # ========= inference  ============
     def opt_energy(self, batch_size: int, global_cond: Tensor | None = None, generator: torch.Generator | None = None, steps_per_timestep: int = 1, opt_subset: int | None = None, denoise: bool = False, return_grad_steps: bool = False
     ) -> Tensor:
         device = get_device_from_parameters(self)
@@ -413,36 +656,37 @@ class EBMDiffusionModel(nn.Module):
         
         return sample
 
+    def generate_actions(self, batch: dict[str, Tensor], return_full=False, opt_energy=True, steps_per_timestep=1, opt_subset: int | None = None, denoise=False, return_grad_steps=False) -> dict[str, Tensor]:
+        """
+        Same as DiffusionModel.generate_actions, but samples with `opt_energy` (IRED) by default. Pass
+        opt_energy=False to sample with the noise scheduler instead. With return_grad_steps, the IRED
+        gradient-step history is returned under "grad_history".
+        """
+        if not opt_energy:
+            return super().generate_actions(batch, return_full=return_full)
 
-    def _prepare_global_conditioning(self, batch: dict[str, Tensor]) -> Tensor:
-        """Encode image features and concatenate them all together along with the state vector."""
+        action_dict = {}
         batch_size, n_obs_steps = batch["observation.state"].shape[:2]
-        global_cond_feats = [batch["observation.state"]]
-        # Extract image feature (first combine batch, sequence, and camera index dims).
-        if self._use_images:
-            img_features = self.rgb_encoder(
-                einops.rearrange(batch["observation.images"], "b s n ... -> (b s n) ...")
-            )
-            # Separate batch dim and sequence dim back out. The camera index dim gets absorbed into the
-            # feature dim (effectively concatenating the camera features).
-            img_features = einops.rearrange(
-                img_features, "(b s n) ... -> b s (n ...)", b=batch_size, s=n_obs_steps
-            )
-            global_cond_feats.append(img_features)
+        assert n_obs_steps == self.config.n_obs_steps, f"{n_obs_steps=} {self.config.n_obs_steps=}"
 
-        if self._use_env_state:
-            global_cond_feats.append(batch["observation.environment_state"])
+        # Encode image features and concatenate them all together along with the state vector.
+        global_cond = self._prepare_global_conditioning(batch)  # (B, global_cond_dim)
 
-        # Concatenate features then flatten to (B, global_cond_dim).
-        global_cond = torch.cat(global_cond_feats, dim=-1).flatten(start_dim=1)
+        # run sampling
+        result = self.opt_energy(batch_size, global_cond=global_cond, steps_per_timestep=steps_per_timestep, opt_subset=opt_subset, denoise=denoise, return_grad_steps=return_grad_steps)
+        if return_grad_steps:
+            actions, action_dict["grad_history"] = result
+        else:
+            actions = result
+        if return_full:
+            action_dict["full_traj"] = actions
 
-        # If goal conditioned, flatten goal separately and add
-        if self._use_goal_cond:
-             flat_goal = batch["episode_goal"].flatten(start_dim=1)
-             return torch.cat([global_cond, flat_goal], dim=-1)
+        # Extract `n_action_steps` steps worth of actions (from the current observation).
+        start = n_obs_steps - 1
+        end = start + self.config.n_action_steps
+        action_dict["actions"] = actions[:, start:end]
 
-        return global_cond
-
+        return action_dict
 
     def get_traj_energies(self, trajectories: Tensor, t: int, observation_batch: dict[str, Tensor], mask: Tensor | None = None,
                           n_noise: int = DEFAULT_ENERGY_N_NOISE, deterministic: bool = False,
@@ -505,306 +749,71 @@ class EBMDiffusionModel(nn.Module):
 
         return energy_sum / n_noise
 
+    # ========= training  ============
+    def _finetune_loss(self, batch: dict[str, Tensor], tune_batch: dict, timesteps: Tensor):
+        if self.config.finetune_energy_landscape:
+            return self._energy_preference_loss(batch, tune_batch, timesteps)
+        if self.config.finetune_dpo:
+            assert not self.config.supervise_energy_landscape, "DPO does not assume access to energy landscape"
+        if self.config.finetune_demos:
+            assert not self.config.supervise_energy_landscape, "Demonstration finetuning does not assume access to energy landscape"
+        return super()._finetune_loss(batch, tune_batch, timesteps)
 
-    def generate_actions(self, batch: dict[str, Tensor], return_full=False, opt_energy=True, steps_per_timestep=1, opt_subset: int | None = None, denoise=False, return_grad_steps=False) -> Tensor:
+    def _energy_preference_loss(self, batch: dict[str, Tensor], tune_batch: dict, timesteps: Tensor):
         """
-        This function expects `batch` to have:
-        {
-            "observation.state": (B, n_obs_steps, state_dim)
-
-            "observation.images": (B, n_obs_steps, num_cameras, C, H, W)
-                AND/OR
-            "observation.environment_state": (B, environment_dim)
-        }
+        Preference fine-tuning on the energy landscape: denoising loss on `batch` plus a contrastive loss
+        pushing each preferred trajectory's energy below its dispreferred pair's.
         """
-        action_dict={}
-        batch_size, n_obs_steps = batch["observation.state"].shape[:2]
-        assert n_obs_steps == self.config.n_obs_steps, f"{n_obs_steps=} {self.config.n_obs_steps=}"
+        assert "pref" in tune_batch, "Tuning batch must contain pairwise preferences"
+        pos_batch, neg_batch = tune_batch["pref"]
+        trajectory = batch["action"]
 
-        # Encode image features and concatenate them all together along with the state vector.
-        global_cond = self._prepare_global_conditioning(batch)  # (B, global_cond_dim)
+        # Use same sampled timesteps
+        # Assert batch sizes the same to allow this
+        assert pos_batch["action"].shape == trajectory.shape
+        assert pos_batch["action"].device == trajectory.device
 
-        # run sampling
-        if opt_energy:
-            result = self.opt_energy(batch_size, global_cond=global_cond, steps_per_timestep=steps_per_timestep, opt_subset=opt_subset, denoise=denoise, return_grad_steps=return_grad_steps)
-            if return_grad_steps:
-                actions, action_dict['grad_history'] = result
-            else:
-                actions=result
-        else:
-            actions = self.conditional_sample(batch_size, global_cond=global_cond)
-        if return_full:
-            action_dict['full_traj'] = actions
+        w = self._timestep_weight(timesteps)
+        eps = torch.randn(trajectory.shape, device=trajectory.device)
+        loss_mse = w * self._compute_denoising_sq_error(batch, timesteps, eps, mask=self._padding_mask(batch))
 
-        # Extract `n_action_steps` steps worth of actions (from the current observation).
-        start = n_obs_steps - 1
-        end = start + self.config.n_action_steps
-        action_dict['actions'] = actions[:, start:end]
+        # Draw the positive and negative noise INDEPENDENTLY, matching the DPO loss
+        # so both methods are compared under the same noise protocol. Timesteps stay
+        # shared across base/pos/neg -- that is what the shape assert protects.
+        eps_pos = torch.randn(pos_batch["action"].shape, device=trajectory.device)
+        eps_neg = torch.randn(neg_batch["action"].shape, device=trajectory.device)
+        # No mask needed when working with pref dataset
+        loss_energy_finetune = w * self._compute_comparison_energy_loss(pos_batch, neg_batch, eps_pos, eps_neg, timesteps)
 
-        return action_dict
+        loss = self.config.gradient_loss_weight * loss_mse + self.config.finetune_loss_weight * loss_energy_finetune
+        return loss, {"loss_mse": loss_mse.mean(), "loss_energy_finetune": loss_energy_finetune.mean()}
 
-    def compute_loss(self, batch: dict[str, Tensor], tune_batch: dict[str, Tensor] = None) -> Tensor:
-        #     """
-        #     This function expects `batch` to have (at least):
-        #     {
-        #         "observation.state": (B, n_obs_steps, state_dim)
+    def _auxiliary_loss(self, batch: dict[str, Tensor], timesteps: Tensor):
+        """
+        Energy-landscape supervision (config.supervise_energy_landscape): each trajectory noised at its
+        sampled timestep should have lower energy than the same trajectory with twice the noise.
+        """
+        if not self.config.supervise_energy_landscape:
+            return 0.0, {}
 
-        #         "observation.images": (B, n_obs_steps, num_cameras, C, H, W)
-        #             AND/OR
-        #         "observation.environment_state": (B, environment_dim)
-
-        #         "action": (B, horizon, action_dim)
-        #         "action_is_pad": (B, horizon)
-        #     }
-        #     """
-
-        ##### VALIDATE INPUT #### 
-
-        # Validate main batch input
-        assert set(batch).issuperset({"observation.state", "action"})
-        assert "observation.images" in batch or "observation.environment_state" in batch or "observation.state" in batch
-        n_obs_steps = batch["observation.state"].shape[1]
-        horizon = batch["action"].shape[1]
-        assert horizon == self.config.horizon
-        assert n_obs_steps == self.config.n_obs_steps
-
-        # Validate tune batch input
-        if tune_batch is not None:
-            if 'pref' in tune_batch:
-                pos_batch, neg_batch = tune_batch['pref']
-                for b in (pos_batch, neg_batch):
-                    assert set(b).issuperset({"observation.state", "action"})
-                    assert "observation.images" in b or "observation.environment_state" in b or "observation.state" in b
-                    assert b["action"].shape[1] == self.config.horizon
-                    assert b["observation.state"].shape[1] == self.config.n_obs_steps
-            if 'demo' in tune_batch:
-                demo_batch = tune_batch['demo']
-                assert set(demo_batch).issuperset({"observation.state", "action"})
-                assert "observation.images" in demo_batch or "observation.environment_state" in demo_batch or "observation.state" in demo_batch
-                assert demo_batch["action"].shape[1] == self.config.horizon
-                assert demo_batch["observation.state"].shape[1] == self.config.n_obs_steps
-
-        # Set default loss values
-        loss_energy=torch.tensor(-1, dtype=torch.float32)
-        loss_energy_finetune=torch.tensor(-1, dtype=torch.float32)
-        loss_dpo_finetune=torch.tensor(-1, dtype=torch.float32)
-        loss_demo_finetune=torch.tensor(-1, dtype=torch.float32)
-
-
-        #### COMPUTE MAIN BATCH LOSSES ####
-
-        ## MSE Loss ##
-        # Sample noise to add to batch.
+        # Resample trajectory noise, keep same timesteps (same as in IRED)
         trajectory = batch["action"]
         eps = torch.randn(trajectory.shape, device=trajectory.device)
-        # Sample a random noising timestep for each item in the batch.
-        timesteps = torch.randint(
-            low=0,
-            high=self.noise_scheduler.config.num_train_timesteps,
-            size=(trajectory.shape[0],),
-            device=trajectory.device,
-        ).long()
 
-        # Get batch mask for energy calculation (don't use repeated actions)
-        if self.config.do_mask_loss_for_padding:
-            if "action_is_pad" not in batch:
-                raise ValueError(
-                    "You need to provide 'action_is_pad' in the batch when "
-                    f"{self.config.do_mask_loss_for_padding=}."
-                )
-            mask = ~batch["action_is_pad"]
-        else:
-            mask = None
+        # Use existing batch mask
+        mask = self._padding_mask(batch)
+        mask_concat = torch.cat([mask, mask], dim=0) if mask is not None else None
 
-        # Compute loss. Keep the raw (unweighted) squared error around: the DPO branch
-        # applies the SNR weight OUTSIDE its sigmoid, so it needs the unweighted margin.
-        loss_mse_raw = self._compute_denoising_sq_error(batch, timesteps, eps, mask=mask)
-        snr_w = extract(self.loss_weight, timesteps, loss_mse_raw.shape)  # (B, 1), same for every term at this timestep
-        loss_mse = loss_mse_raw * snr_w # weight MSE loss by timestep
+        # NOTE: deliberately NOT multiplied by the timestep weight -- unlike every other loss
+        # term. This follows IRED, where the landscape supervision is applied uniformly across
+        # timesteps. Consequence: its weight relative to gradient_loss_weight rises at high t,
+        # where the timestep weight -> 0.
+        # The shared eps (scaled by neg_eps_weight for the negative) is also load-bearing:
+        # the "negative" IS this same trajectory at 2x noise, so the draws must match.
+        neg_eps_weight = 2.0  # Negative batch will just be corrupted version of positive. Can test various ways (here 2x noise). Starting point in IRED and used in itps was 3x.
+        loss_energy = self._compute_comparison_energy_loss(batch, batch, eps, eps * neg_eps_weight, timesteps, mask=mask_concat)
 
-
-        ## Contrastive Energy Loss ##
-        if getattr(self.config, 'supervise_energy_landscape', False): 
-
-            # Resample trajectory noise, keep same timesteps (same as in IRED)
-            eps = torch.randn(trajectory.shape, device=trajectory.device)
-        
-            # Use existing batch mask
-            if mask is not None:
-                mask_concat = torch.cat([mask, mask], dim=0)
-            else:
-                mask_concat = None
-
-            # Compute loss. NOTE: deliberately NOT multiplied by extract(self.loss_weight, ...)
-            # -- unlike every other loss term here. This follows IRED, where the landscape
-            # supervision is applied uniformly across timesteps. Consequence: its weight
-            # relative to gradient_loss_weight rises at high t, where snr_w -> 0.
-            # The shared eps (scaled by neg_eps_weight for the negative) is also load-bearing:
-            # the "negative" IS this same trajectory at 2x noise, so the draws must match.
-            neg_eps_weight=2.0 # Negative batch will just be corrupted version of positive. Can test various ways (here 2x noise). Starting point in IRED and used in itps was 3x.
-            loss_energy = self._compute_comparison_energy_loss(batch, batch, eps, eps*neg_eps_weight, timesteps, mask=mask_concat)
-
-
-        #### RETURN LOSS IF NO TUNING LOSSES ####
-        if tune_batch is None:
-            loss = loss_mse * self.config.gradient_loss_weight
-            if getattr(self.config, 'supervise_energy_landscape', False):
-                loss += loss_energy * self.config.energy_landscape_loss_weight
-
-            return loss.mean(), {
-                "loss_mse": loss_mse.mean(),
-                "loss_energy": loss_energy.mean(),
-                "loss_energy_finetune": loss_energy_finetune.mean(),
-                "loss_dpo_finetune": loss_dpo_finetune.mean(),
-                "loss_demo_finetune": loss_demo_finetune.mean(),
-            }
-        
-        
-        #### COMPUTE TUNE BATCH LOSSES ####
-
-        ## Preference Energy Finetuning Loss ##
-        elif getattr(self.config, 'finetune_energy_landscape', False): 
-
-            assert 'pref' in tune_batch, "Tuning batch must contain pairwise preferences"
-            pos_batch, neg_batch = tune_batch['pref']
-
-            # Use same sampled timesteps
-            # Assert batch sizes the same to allow this
-            assert pos_batch["action"].shape == trajectory.shape
-            assert pos_batch["action"].device == trajectory.device
-
-            # Draw the positive and negative noise INDEPENDENTLY, matching the DPO branch
-            # so both methods are compared under the same noise protocol. Timesteps stay
-            # shared across base/pos/neg -- that is what the shape assert protects.
-            eps_pos = torch.randn(pos_batch["action"].shape, device=trajectory.device)
-            eps_neg = torch.randn(neg_batch["action"].shape, device=trajectory.device)
-            mask = None # No mask needed when working with pref dataset
-
-            # Compute loss
-            loss_energy_finetune = self._compute_comparison_energy_loss(pos_batch, neg_batch, eps_pos, eps_neg, timesteps, mask=mask)
-            loss_energy_finetune = loss_energy_finetune * extract(self.loss_weight, timesteps, loss_energy_finetune.shape) # weight pref loss by timestep 
-            
-            # Process loss
-            loss = loss_mse * self.config.gradient_loss_weight + loss_energy_finetune * self.config.finetune_loss_weight
-            if getattr(self.config, 'supervise_energy_landscape', False): 
-                loss += loss_energy * self.config.energy_landscape_loss_weight
-
-        ## DPO Finetuning Loss ##
-        elif getattr(self.config, 'finetune_dpo', False):
-            
-            assert not getattr(self.config, 'supervise_energy_landscape', False), "DPO does not assume access to energy landscape"
-            assert 'pref' in tune_batch, "Tuning batch must contain pairwise preferences"
-            pos_batch, neg_batch = tune_batch['pref']
-
-            # Use same sampled timesteps
-            # Assert batch sizes the same to allow this
-            assert pos_batch["action"].shape == trajectory.shape
-            assert pos_batch["action"].device == trajectory.device
-
-            # Draw eps^+ and eps^- INDEPENDENTLY, as the objective specifies. Timesteps
-            # stay shared across base/pos/neg -- that is what the shape assert protects,
-            # and it makes loss_mse_raw a one-sample estimate of the regularization
-            # expectation at this sample's own timestep.
-            eps_pos = torch.randn(pos_batch["action"].shape, device=trajectory.device)
-            eps_neg = torch.randn(neg_batch["action"].shape, device=trajectory.device)
-            mask = None # Pref dataset contains full horizon trajectories so no mask needed
-
-            # Calculate positive and negative sample squared error (unweighted: the SNR
-            # weight is applied outside the sigmoid, below).
-            pos_mse_loss = self._compute_denoising_sq_error(pos_batch, timesteps, eps_pos, mask=mask)
-            neg_mse_loss = self._compute_denoising_sq_error(neg_batch, timesteps, eps_neg, mask=mask)
-
-            # Process loss. One term per preference pair, on a (B, 1) margin.
-            # LOG-sigmoid, i.e. the Bradley-Terry negative log-likelihood -log sigmoid(.),
-            # which is the standard DPO form (and what the paper uses everywhere except
-            # one mis-stated equation). A raw sigmoid would be a smoothed 0-1 surrogate
-            # instead, with vanishing gradient on BOTH tails -- it gives up on exactly the
-            # pairs it ranks most wrongly. With log-sigmoid the gradient is sigmoid(-x):
-            # -> 1 for badly-ranked pairs, -> 0 only for already-correct ones.
-            # Note this matches _compute_comparison_energy_loss, whose softplus(E_pos-E_neg)
-            # is identically -log sigmoid(E_neg-E_pos): both objectives share the same link.
-            # The SNR weight multiplies the per-sample loss rather than the argument:
-            # weighting inside would scale the margin but not `b`, making what `b` means
-            # depend on the sampled timestep.
-            loss_dpo_finetune = pos_mse_loss - neg_mse_loss
-            loss = -snr_w * F.logsigmoid(-self.config.dpo_params['rho'] * (loss_dpo_finetune + self.config.dpo_params['mu']*loss_mse_raw - self.config.dpo_params['b']))
-
-        ## Demonstration Finetuning Loss ##
-        elif getattr(self.config, 'finetune_demos', False):
-
-            assert not getattr(self.config, 'supervise_energy_landscape', False), "Demonstration finetuning does not assume access to energy landscape"
-            assert 'demo' in tune_batch, "Tuning batch must contain new demonstrations"
-            demo_batch = tune_batch['demo']
-
-            # Forward diffusion. 
-            demo = demo_batch["action"]
-
-            # Resample eps and timesteps as batch size may differ
-            demo_eps = torch.randn(demo.shape, device=demo.device)
-            demo_timesteps = torch.randint(
-                low=0,
-                high=self.noise_scheduler.config.num_train_timesteps,
-                size=(demo.shape[0],),
-                device=demo.device,
-            ).long()
-
-            if self.config.do_mask_loss_for_padding:
-                if "action_is_pad" not in demo_batch:
-                    raise ValueError(
-                        "You need to provide 'action_is_pad' in the batch when "
-                        f"{self.config.do_mask_loss_for_padding=}."
-                    )
-                mask = ~demo_batch["action_is_pad"]
-            else:
-                mask = None
-            
-            # Compute loss. Weighted per-term (not factored out like the other branches):
-            # the demo batch has its OWN demo_timesteps, so its SNR weight differs from
-            # the base batch's snr_w.
-            loss_demo_finetune = self._compute_denoising_sq_error(demo_batch, demo_timesteps, demo_eps, mask=mask)
-            loss_demo_finetune = loss_demo_finetune * extract(self.loss_weight, demo_timesteps, loss_demo_finetune.shape) # weight MSE loss by timestep
-
-            # Process loss 
-            loss = loss_mse * self.config.gradient_loss_weight + loss_demo_finetune * self.config.demo_finetune_loss_weight
-
-
-        return loss.mean(), {
-            "loss_mse": loss_mse.mean(),
-            "loss_energy": loss_energy.mean(),
-            "loss_energy_finetune": loss_energy_finetune.mean(),
-            "loss_dpo_finetune": loss_dpo_finetune.mean(),
-            "loss_demo_finetune": loss_demo_finetune.mean(),
-        }
-
-        
-    def _compute_denoising_sq_error(self, batch, timesteps, eps, mask=None):
-
-        # Assuming noise prediction
-        assert self.config.prediction_type == "epsilon", "Assumes target prediction is noise."
-        target = eps
-
-        # Forward diffusion
-        global_cond = self._prepare_global_conditioning(batch)
-        trajectory = batch['action']
-        noisy_trajectory = self.noise_scheduler.add_noise(trajectory, eps, timesteps)
-
-        # Predict noise and compare to target
-        pred = self.model(noisy_trajectory, timesteps, global_cond=global_cond, mask=mask)
-        loss = F.mse_loss(pred, target, reduction="none")
-
-        # Mask loss wherever the action is padded with copies (edges of the dataset trajectory).
-        if mask is not None:
-            loss = loss * mask.unsqueeze(-1)
-
-        # Reduce to one item per trajectory: the MEAN over the horizon x action_dim
-        # entries, i.e. ||eps - eps_theta||^2 / D with D = horizon * action_dim.
-        # (Was 'b ... -> b (...)', which keeps every input axis on the output side, so
-        # 'mean' reduced nothing -- it was a reshape to (B, D), not a reduction.)
-        # NOTE on units: any hyperparameter multiplying this is in "mean units".
-        # Against the squared L2 norm the DPO objective specifies: rho_L2 = rho / D.
-        loss = einops.reduce(loss, 'b ... -> b 1', 'mean')
-        return loss
-
+        return self.config.energy_landscape_loss_weight * loss_energy, {"loss_energy": loss_energy.mean()}
 
     def _compute_comparison_energy_loss(self, pos_batch, neg_batch, eps_pos, eps_neg, timesteps, mask=None):
         """
@@ -839,6 +848,90 @@ class EBMDiffusionModel(nn.Module):
         loss_energy_contrastive = F.cross_entropy(-1 * energy_stack, target.long(), reduction='none')[:, None]
 
         return loss_energy_contrastive
+
+
+class EBMDiffusionPolicy(DiffusionPolicy):
+    """DiffusionPolicy backed by EBMDiffusionModel: adds IRED sampling to `run_inference` and `get_energy`."""
+
+    name = "ebm_diffusion"
+
+    def _make_diffusion_model(self, config: DiffusionConfig) -> EBMDiffusionModel:
+        return EBMDiffusionModel(config)
+
+    @torch.no_grad
+    def run_inference(self, observation_batch: dict[str, Tensor], return_full=False, methods=['ired', 'ddim'], opt_params=[{'n_opt':1, 't_subset': None, 'denoise': False}], return_grad_steps=False):
+        """
+        Sample trajectories with each requested method: one result per `opt_params` entry for "ired"
+        (gradient descent on the energy), then one for "ddim" (the noise scheduler). Returns a list of
+        unnormalized action tensors in that order; with `return_full`, also the list of full trajectories;
+        with `return_grad_steps`, the IRED gradient-step histories instead.
+        """
+        observation_batch = self.normalize_inputs(observation_batch)
+        if len(self.expected_image_keys) > 0:
+            observation_batch["observation.images"] = torch.stack(
+                [observation_batch[k] for k in self.expected_image_keys], dim=-4
+            )
+
+        # default: use optimization-based sampling
+        gen_actions = []
+        if 'ired' in methods:
+            for p in opt_params: 
+                n, subset, denoise = (p["n_opt"], p["t_subset"], p["denoise"])
+                gen_actions.append(self.diffusion.generate_actions(observation_batch, return_full=return_full, steps_per_timestep=n, opt_subset=subset, denoise = denoise, return_grad_steps=return_grad_steps))
+        
+        # if returning both, use denoising-based sampling as well
+        if 'ddim' in methods: 
+            gen_actions_denoise = self.diffusion.generate_actions(observation_batch, return_full=return_full, opt_energy=False)
+            gen_actions.append(gen_actions_denoise)
+
+        # Energies are deliberately NOT computed here. Callers that want them call
+        # `get_energy` explicitly on the array they intend to score, which forces them
+        # to name the timestep, the noise settings (n_noise/deterministic/seed) and the
+        # window. This used to be a `return_energy` flag that hardcoded t=0, silently
+        # took the noise defaults, and picked the window implicitly from `return_full` --
+        # and the UNet is convolutional over time with two stride-2 downsamples, so
+        # per-step outputs depend on window length: full-traj and actions-only energies
+        # are each self-consistent but are NOT comparable to each other.
+
+        if return_grad_steps:
+            grad_histories = []
+            for ga in gen_actions[:len(opt_params)]:
+                if 'grad_history' in ga:
+                    unnorm_hist={}
+                    for t_key, steps in ga['grad_history'].items():
+                        unnorm_hist[t_key]=[
+                            {'pos': self.unnormalize_outputs({"action":s['pos']})["action"].detach(),                                                     
+                             'next_pos': self.unnormalize_outputs({"action":s['next_pos']})["action"].detach(),                                        
+                            }                                                          
+                          for s in steps
+                        ]
+                    grad_histories.append(unnorm_hist)
+                        
+        actions = [self.unnormalize_outputs({"action": a['actions']})["action"] for a in gen_actions]
+        if return_grad_steps:
+            return actions, grad_histories
+        if return_full:
+            full_traj = [self.unnormalize_outputs({"action": a['full_traj']})["action"] for a in gen_actions]
+            return actions, full_traj
+
+        return actions
+
+    def get_energy(self, action_batch: dict[str, Tensor], t: int, observation_batch: dict[str, Tensor],
+                   mask: Tensor | None = None,
+                   n_noise: int = DEFAULT_ENERGY_N_NOISE, deterministic: bool = False,
+                   seed: int | None = DEFAULT_ENERGY_SEED):
+        observation_batch = self.normalize_inputs(observation_batch)
+        action_batch = self.normalize_targets(action_batch)
+        # TODO: image observations are not stacked here (unlike run_inference/forward), so get_energy does not yet support image-conditioned policies.
+        # if len(self.expected_image_keys) > 0: #TODO: Update if necessary 
+        #     observation_batch["observation.images"] = torch.stack(
+        #         [observation_batch[k] for k in self.expected_image_keys], dim=-4
+        #     )
+        # get_traj_energies(self, trajectories: Tensor, t: int, global_cond: Tensor | None = None, mask: Tensor | None = None):
+        trajectory = action_batch["action"]
+        return self.diffusion.get_traj_energies(trajectory, t, observation_batch, mask=mask,
+                                                n_noise=n_noise, deterministic=deterministic, seed=seed)
+
 
 class SpatialSoftmax(nn.Module):
     """
@@ -1138,12 +1231,13 @@ class DiffusionConditionalUnet1d(nn.Module):
             nn.Conv1d(config.down_dims[0], config.output_shapes["action"][0], 1),
         )
 
-    def forward(self, x: Tensor, timestep: Tensor | int, global_cond=None) -> Tensor:
+    def forward(self, x: Tensor, timestep: Tensor | int, global_cond=None, mask=None) -> Tensor:
         """
         Args:
             x: (B, T, input_dim) tensor for input to the Unet.
             timestep: (B,) tensor of (timestep_we_are_denoising_from - 1).
             global_cond: (B, global_cond_dim)
+            mask: unused; accepted so the UNet can be called like EBMWrapper (see DiffusionModel.model).
             output: (B, T, input_dim)
         Returns:
             (B, T, input_dim) diffusion model prediction.

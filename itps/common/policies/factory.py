@@ -56,6 +56,11 @@ def get_policy_and_config_classes(name: str) -> tuple[Policy, object]:
         from itps.common.policies.diffusion.modeling_diffusion import DiffusionPolicy
 
         return DiffusionPolicy, DiffusionConfig
+    elif name == "ebm_diffusion":
+        from itps.common.policies.diffusion.configuration_diffusion import DiffusionConfig
+        from itps.common.policies.diffusion.modeling_diffusion import EBMDiffusionPolicy
+
+        return EBMDiffusionPolicy, DiffusionConfig
     elif name == "act":
         from itps.common.policies.act.configuration_act import ACTConfig
         from itps.common.policies.act.modeling_act import ACTPolicy

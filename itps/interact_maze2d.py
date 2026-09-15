@@ -47,7 +47,7 @@ import matplotlib.pyplot as plt
 import einops
 from pathlib import Path
 from huggingface_hub import snapshot_download
-from common.policies.diffusion.modeling_diffusion import DiffusionPolicy
+from common.policies.diffusion.modeling_diffusion import EBMDiffusionPolicy
 from common.utils.utils import seeded_context, init_hydra_config
 from common.utils.maze_maps import MAZE_MAPS
 from common.utils.maze_scoring import check_maze_collision
@@ -617,7 +617,7 @@ if __name__ == "__main__":
 
     # Set policy parameters
     if args.policy in ["diffusion", "dp"]:
-        policy = DiffusionPolicy.from_pretrained(pretrained_policy_path)
+        policy = EBMDiffusionPolicy.from_pretrained(pretrained_policy_path)
         policy.config.noise_scheduler_type = "DDIM"
         policy.diffusion.num_inference_steps = 10
         policy.config.n_action_steps = policy.config.horizon - policy.config.n_obs_steps + 1
