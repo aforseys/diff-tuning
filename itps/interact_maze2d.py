@@ -48,7 +48,6 @@ import einops
 from pathlib import Path
 from huggingface_hub import snapshot_download
 from common.policies.diffusion.modeling_diffusion import DiffusionPolicy
-from common.policies.rollout_wrapper import PolicyRolloutWrapper
 from common.utils.utils import seeded_context, init_hydra_config
 from common.utils.maze_maps import MAZE_MAPS
 from common.utils.maze_scoring import check_maze_collision
