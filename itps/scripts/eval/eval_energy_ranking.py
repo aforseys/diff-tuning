@@ -98,7 +98,7 @@ def score_metric(metric, xy_traj, maze, start=None, obs_goal=None, fixed_goal=No
 
 
 def eval_energy_ranking(pretrained_policy, finetuned_policy, obs_data, maze_type,
-                         metrics, scoring_policy=None, n_samples=32, sampler='ddim', goal=None,
+                         metrics, scoring_policy=None, n_samples=32, sampler='ddim', opt_params=None, goal=None,
                          chunk_size=256, seed=None, energy_timesteps=(0,), avg=False,
                          tie_tol=0.0, n_noise=DEFAULT_ENERGY_N_NOISE, deterministic=False,
                          energy_seed=DEFAULT_ENERGY_SEED):
@@ -182,7 +182,7 @@ def eval_energy_ranking(pretrained_policy, finetuned_policy, obs_data, maze_type
         for start in range(0, total, chunk_size):
             chunk_obs = {k: v[start:start + chunk_size] for k, v in obs.items()}
             _, chunk_full_trajs = pretrained_policy.run_inference(
-                chunk_obs, methods=[sampler], return_full=True
+                chunk_obs, methods=[sampler], opt_params=opt_params, return_full=True
             )
             chunk_traj = chunk_full_trajs[0]  # (chunk, horizon, 2), unnormalized maze XY space
             traj_chunks.append(chunk_traj.cpu())
@@ -332,6 +332,13 @@ def main():
     parser.add_argument("--sampler", default="ddim", choices=["ddim", "ired"],
                         help="Sampling method used to generate candidates from the "
                              "pretrained (non-fine-tuned) policy (default: ddim)")
+    parser.add_argument("--opt-steps", type=int, default=None,
+                        help="IRED only (required with --sampler ired): gradient steps on the energy per timestep")
+    parser.add_argument("--t-subset", default=None,
+                        help="IRED only (required with --sampler ired): optimize only the last K timesteps "
+                             "(an integer), or 'all'")
+    parser.add_argument("--denoise", action="store_true",
+                        help="IRED only: re-predict the sample from its denoised estimate before each timestep")
     parser.add_argument("--goal", type=float, nargs=2, default=None, metavar=("X", "Y"),
                         help="Fixed goal in maze XY space, used for 'finetune_goal_dist'. "
                              "Defaults to eval.goal read from the fine-tuned checkpoint's "
@@ -340,6 +347,13 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--save-path", default=None, help="Optional .json path to save detailed results")
     args = parser.parse_args()
+    opt_params = None
+    if args.sampler == "ired":
+        if args.opt_steps is None or args.t_subset is None:
+            parser.error("--sampler ired requires --opt-steps and --t-subset (an integer or 'all')")
+        opt_params = [{"n_opt": args.opt_steps,
+                       "t_subset": None if args.t_subset == "all" else int(args.t_subset),
+                       "denoise": args.denoise}]
 
     pretrained_policy = EBMDiffusionPolicy.from_pretrained(args.pretrained_path)
     finetuned_policy = EBMDiffusionPolicy.from_pretrained(args.finetuned_path)
@@ -381,7 +395,7 @@ def main():
         pretrained_policy, finetuned_policy, obs_data,
         maze_type=maze_type, metrics=args.metrics, scoring_policy=scoring_policy,
         n_samples=args.n_samples,
-        sampler=args.sampler, goal=goal, seed=args.seed,
+        sampler=args.sampler, opt_params=opt_params, goal=goal, seed=args.seed,
         energy_timesteps=args.energy_timesteps, avg=args.avg, tie_tol=args.tie_tol,
         n_noise=args.n_noise, deterministic=args.deterministic, energy_seed=args.energy_seed,
     )

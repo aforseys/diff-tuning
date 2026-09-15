@@ -212,7 +212,7 @@ class UnconditionalMaze(MazeEnv):
         self.policy_tag = policy_tag
         self.vis_energy = vis_energy
         self.obs_list = obs_list
-        self.opt_params = opt_params if opt_params is not None else [{'n_opt': 1, 't_subset': None, 'denoise': False}]
+        self.opt_params = opt_params
         self.sampling_methods = ['ddim'] if ddim else ["ired"]
         # Seeds the initial diffusion noise on every infer_target call -- see there for
         # what that implies. Default 0 is what every dataset collected before this was
@@ -584,11 +584,13 @@ if __name__ == "__main__":
     parser.add_argument('-gc', '--goal_conditioned', action='store_true', help="Condition on goal")
     parser.add_argument('-of', '--obs-file', default=None, help="Path to loaded observations")
     parser.add_argument('-d', '--ddim', action='store_true')
-    parser.add_argument('--opt_steps', type=int, default=1)
-    parser.add_argument('--t_subset', type=int, default=None)
-    parser.add_argument('--denoise', action='store_true')
+    parser.add_argument('--opt_steps', type=int, default=None, help="IRED only (required unless --ddim): gradient steps on the energy per timestep")
+    parser.add_argument('--t_subset', default=None, help="IRED only (required unless --ddim): optimize only the last K timesteps (an integer), or 'all'")
+    parser.add_argument('--denoise', action='store_true', help="IRED only: re-predict the sample from its denoised estimate before each timestep")
     parser.add_argument('--point-guide', action='store_true', help="Use a single clicked point as guide instead of drawn line")
     args = parser.parse_args()
+    if args.policy is not None and not args.ddim and (args.opt_steps is None or args.t_subset is None):
+        parser.error("IRED sampling requires --opt_steps and --t_subset (an integer or 'all'); or pass --ddim")
 
     # Create and load the policy
     device = torch.device("cuda")
@@ -629,7 +631,11 @@ if __name__ == "__main__":
         policy_tag = None
 
     # Set sampling specific parameters
-    opt_params = [{'n_opt': args.opt_steps, 't_subset': args.t_subset, 'denoise': args.denoise}]
+    opt_params = None
+    if not args.ddim and args.opt_steps is not None:
+        opt_params = [{'n_opt': args.opt_steps,
+                       't_subset': None if args.t_subset == 'all' else int(args.t_subset),
+                       'denoise': args.denoise}]
     ddim = args.ddim
     
     if args.unconditional:

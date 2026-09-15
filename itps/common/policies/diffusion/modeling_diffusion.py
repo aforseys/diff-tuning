@@ -589,7 +589,7 @@ class EBMDiffusionModel(DiffusionModel):
         self.model = EBMWrapper(self.unet)
 
     # ========= inference  ============
-    def opt_energy(self, batch_size: int, global_cond: Tensor | None = None, generator: torch.Generator | None = None, steps_per_timestep: int = 1, opt_subset: int | None = None, denoise: bool = False, return_grad_steps: bool = False
+    def opt_energy(self, batch_size: int, global_cond: Tensor | None = None, generator: torch.Generator | None = None, *, steps_per_timestep: int, opt_subset: int | None, denoise: bool, return_grad_steps: bool = False
     ) -> Tensor:
         device = get_device_from_parameters(self)
         dtype = get_dtype_from_parameters(self)
@@ -656,7 +656,7 @@ class EBMDiffusionModel(DiffusionModel):
         
         return sample
 
-    def generate_actions(self, batch: dict[str, Tensor], return_full=False, opt_energy=True, steps_per_timestep=1, opt_subset: int | None = None, denoise=False, return_grad_steps=False) -> dict[str, Tensor]:
+    def generate_actions(self, batch: dict[str, Tensor], return_full=False, opt_energy=True, steps_per_timestep=None, opt_subset: int | None = None, denoise=None, return_grad_steps=False) -> dict[str, Tensor]:
         """
         Same as DiffusionModel.generate_actions, but samples with `opt_energy` (IRED) by default. Pass
         opt_energy=False to sample with the noise scheduler instead. With return_grad_steps, the IRED
@@ -664,6 +664,8 @@ class EBMDiffusionModel(DiffusionModel):
         """
         if not opt_energy:
             return super().generate_actions(batch, return_full=return_full)
+        if steps_per_timestep is None or denoise is None:
+            raise ValueError("IRED sampling requires steps_per_timestep, opt_subset (None = all timesteps) and denoise.")
 
         action_dict = {}
         batch_size, n_obs_steps = batch["observation.state"].shape[:2]
@@ -859,13 +861,18 @@ class EBMDiffusionPolicy(DiffusionPolicy):
         return EBMDiffusionModel(config)
 
     @torch.no_grad
-    def run_inference(self, observation_batch: dict[str, Tensor], return_full=False, methods=['ired', 'ddim'], opt_params=[{'n_opt':1, 't_subset': None, 'denoise': False}], return_grad_steps=False):
+    def run_inference(self, observation_batch: dict[str, Tensor], return_full=False, methods=("ired", "ddim"), opt_params=None, return_grad_steps=False):
         """
         Sample trajectories with each requested method: one result per `opt_params` entry for "ired"
         (gradient descent on the energy), then one for "ddim" (the noise scheduler). Returns a list of
         unnormalized action tensors in that order; with `return_full`, also the list of full trajectories;
         with `return_grad_steps`, the IRED gradient-step histories instead.
+
+        `opt_params` is required for "ired": a list with one dict per IRED variant, e.g.
+        [{"n_opt": <int>, "t_subset": <int, or None for all timesteps>, "denoise": <bool>}].
         """
+        if "ired" in methods and opt_params is None:
+            raise ValueError("IRED sampling requires `opt_params` (one dict per IRED variant).")
         observation_batch = self.normalize_inputs(observation_batch)
         if len(self.expected_image_keys) > 0:
             observation_batch["observation.images"] = torch.stack(

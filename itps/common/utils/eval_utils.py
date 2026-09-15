@@ -26,7 +26,9 @@ def gen_obs(conditional, N, device):
         observations.append(obs_dict)
     return observations
 
-def run_inference(policy, N=100, conditional=False, methods=['ired', 'ddim'], opt_params=[{'n_opt': 1, 't_subset': None, 'denoise': False}]):
+def run_inference(policy, N=100, conditional=False, methods=['ired', 'ddim'], opt_params=None):
+    if 'ired' in methods and opt_params is None:
+        raise ValueError("IRED sampling requires `opt_params` (one dict per IRED variant).")
 
     device = next(policy.parameters()).device
     obs = gen_obs(conditional=conditional, N=N, device=device)
@@ -50,7 +52,9 @@ def run_inference(policy, N=100, conditional=False, methods=['ired', 'ddim'], op
 
     return results
 
-def run_inference_with_grad_steps(policy, N=50, conditional=False,opt_params=[{'n_opt': 1, 't_subset': None, 'denoise': False}]):
+def run_inference_with_grad_steps(policy, N=50, conditional=False, opt_params=None):
+    if opt_params is None:
+        raise ValueError("IRED sampling requires `opt_params` (one dict per IRED variant).")
 
     device = next(policy.parameters()).device
     obs = gen_obs(conditional=conditional, N=N, device=device)
@@ -169,7 +173,7 @@ def kl_divergence(policy, conditional, finetune, t=0, eps=1e-8):
 
     return kl_div
 
-def log_likelihood(policy, conditional, finetune, N=100, samples=None, opt_params=[{'n_opt': 1, 't_subset': None, 'denoise': False}], methods=['ired', 'ddim']):
+def log_likelihood(policy, conditional, finetune, N=100, samples=None, opt_params=None, methods=['ired', 'ddim']):
     """
     Assumes only conditional or finetune is true. 
     """
@@ -354,7 +358,7 @@ def filter_samples(samples, finetune, conditional):
     else: 
         return [np.concatenate(samples_by_obs)] #return list with concatenated np array
 
-def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=None, opt_params=[{'n_opt': 1, 't_subset': None, 'denoise': False}], methods=['ired', 'ddim'], viz_opt=False, save_samples_path=None, seed=None):
+def eval_GMM(policy, condition_type, finetune, N, viz=False, training_samples=None, opt_params=None, methods=['ired', 'ddim'], viz_opt=False, save_samples_path=None, seed=None):
     if seed is None:
         return _eval_GMM(policy, condition_type, finetune, N, viz, training_samples,
                          opt_params, methods, viz_opt, save_samples_path)
@@ -801,6 +805,8 @@ def _eval_robosuite(policy, cfg, seed, render, n_viz_samples):
     metrics      = list(cfg.eval.get('metrics', []))
     eval_methods = list(cfg.eval.get('methods', ['ddim']))
     opt_params   = list(cfg.eval.get('opt_params') or [])
+    if 'ired' in eval_methods and not opt_params:
+        raise ValueError("eval.methods includes 'ired' but eval.opt_params is empty; give one dict per IRED variant.")
 
     method_variants = []
     if 'ired' in eval_methods:

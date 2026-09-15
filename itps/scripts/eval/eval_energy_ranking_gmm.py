@@ -43,7 +43,7 @@ from itps.scripts.data_generation.gmm.gaussian_mm import get_means, get_covs, mv
 
 
 def eval_energy_ranking_gmm(pretrained_policy, finetuned_policy, pref_cluster,
-                             conditional=False, n_samples=200, sampler='ddim', seed=None,
+                             conditional=False, n_samples=200, sampler='ddim', opt_params=None, seed=None,
                              n_noise=DEFAULT_ENERGY_N_NOISE, deterministic=False,
                              energy_seed=DEFAULT_ENERGY_SEED):
     """
@@ -66,7 +66,7 @@ def eval_energy_ranking_gmm(pretrained_policy, finetuned_policy, pref_cluster,
     per_context = []
     for context_idx, obs in enumerate(obs_list):
         with torch.no_grad():
-            actions = pretrained_policy.run_inference(obs, methods=[sampler])
+            actions = pretrained_policy.run_inference(obs, methods=[sampler], opt_params=opt_params)
             traj_t = actions[0]  # (n_samples, 1, 2), unnormalized
             energy = finetuned_policy.get_energy(
                 action_batch={'action': traj_t}, t=0, observation_batch=obs,
@@ -117,6 +117,13 @@ def main():
     parser.add_argument("--sampler", default="ddim", choices=["ddim", "ired"],
                         help="Sampling method used to generate candidates from the "
                              "pretrained (non-fine-tuned) policy (default: ddim)")
+    parser.add_argument("--opt-steps", type=int, default=None,
+                        help="IRED only (required with --sampler ired): gradient steps on the energy per timestep")
+    parser.add_argument("--t-subset", default=None,
+                        help="IRED only (required with --sampler ired): optimize only the last K timesteps "
+                             "(an integer), or 'all'")
+    parser.add_argument("--denoise", action="store_true",
+                        help="IRED only: re-predict the sample from its denoised estimate before each timestep")
     parser.add_argument("--n-noise", type=int, default=DEFAULT_ENERGY_N_NOISE,
                         help=f"Noise draws each candidate's energy is averaged over (default "
                              f"{DEFAULT_ENERGY_N_NOISE}). All candidates share the same draws "
@@ -138,6 +145,13 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--save-path", default=None, help="Optional .json path to save detailed results")
     args = parser.parse_args()
+    opt_params = None
+    if args.sampler == "ired":
+        if args.opt_steps is None or args.t_subset is None:
+            parser.error("--sampler ired requires --opt-steps and --t-subset (an integer or 'all')")
+        opt_params = [{"n_opt": args.opt_steps,
+                       "t_subset": None if args.t_subset == "all" else int(args.t_subset),
+                       "denoise": args.denoise}]
 
     pretrained_policy = EBMDiffusionPolicy.from_pretrained(args.pretrained_path)
     finetuned_policy = EBMDiffusionPolicy.from_pretrained(args.finetuned_path)
@@ -148,7 +162,7 @@ def main():
     results = eval_energy_ranking_gmm(
         pretrained_policy, finetuned_policy, pref_cluster=args.pref_cluster,
         conditional=args.conditional, n_samples=args.n_samples,
-        sampler=args.sampler, seed=args.seed,
+        sampler=args.sampler, opt_params=opt_params, seed=args.seed,
         n_noise=args.n_noise, deterministic=args.deterministic,
         energy_seed=args.energy_seed,
     )
