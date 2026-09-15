@@ -109,10 +109,7 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
 
     @torch.no_grad 
     def run_inference(self, observation_batch: dict[str, Tensor], return_full=False, methods=['ired', 'ddim'], opt_params=[{'n_opt':1, 't_subset': None, 'denoise': False}], return_grad_steps=False) -> Tensor:
-        # Normalize a shallow copy: Normalize writes into the dict it is given, so
-        # normalizing the caller's dict would double-normalize it if the caller also
-        # passes it to get_energy (or back here) afterwards.
-        observation_batch = self.normalize_inputs(dict(observation_batch))
+        observation_batch = self.normalize_inputs(observation_batch)
         if len(self.expected_image_keys) > 0:
             observation_batch["observation.images"] = torch.stack(
                 [observation_batch[k] for k in self.expected_image_keys], dim=-4
@@ -166,9 +163,11 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
         """Run the batch through the model and compute the loss for training or validation."""
         batch = self.normalize_inputs(batch)
         if len(self.expected_image_keys) > 0:
+            batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
             batch["observation.images"] = torch.stack([batch[k] for k in self.expected_image_keys], dim=-4)
         batch = self.normalize_targets(batch)
         if tune_batch is not None:
+            tune_batch = dict(tune_batch)  # shallow copy so the caller's tune_batch isn't modified
             if 'demo' in tune_batch:
                 demo_batch = tune_batch['demo']
                 demo_batch = self.normalize_inputs(demo_batch)
@@ -204,12 +203,8 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
                    mask: Tensor | None = None,
                    n_noise: int = DEFAULT_ENERGY_N_NOISE, deterministic: bool = False,
                    seed: int | None = DEFAULT_ENERGY_SEED):
-        # Shallow-copy before normalizing (see run_inference): callers routinely score
-        # the same observation_batch at several timesteps, and Normalize mutates the
-        # dict it is handed -- without the copy each call would re-normalize the last
-        # call's output.
-        observation_batch = self.normalize_inputs(dict(observation_batch))
-        action_batch = self.normalize_targets(dict(action_batch))
+        observation_batch = self.normalize_inputs(observation_batch)
+        action_batch = self.normalize_targets(action_batch)
         # if len(self.expected_image_keys) > 0: #TODO: Update if necessary 
         #     observation_batch["observation.images"] = torch.stack(
         #         [observation_batch[k] for k in self.expected_image_keys], dim=-4
