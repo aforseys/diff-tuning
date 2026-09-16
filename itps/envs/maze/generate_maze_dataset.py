@@ -78,7 +78,7 @@ class MazePlanner:
         self.flat_to_node[valid_flat] = np.arange(valid_flat.sum(), dtype=np.int32)
         self.node_to_ij = np.argwhere(self.valid_mask)       # (n_nodes, 2)
         self.n_nodes = len(self.node_to_ij)
-        # Shift so cell r has center at position r (matches MazeEnv's gui2xy offset=0.5).
+        # Shift so cell r has center at position r (matches MazeGUI's gui2xy offset=0.5).
         # Fine cell fi has center at (fi+0.5)/scale, then subtract 0.5 to align with env.
         self.node_positions = (self.node_to_ij + 0.5) / scale - 0.5
 

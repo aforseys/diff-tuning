@@ -2,8 +2,8 @@
 Pygame-free maze trajectory scoring functions.
 
 Shared between offline training evaluation (`eval_maze`, called repeatedly
-during training and must not depend on pygame/MazeEnv) and preference-pair
-generation (`extract_preference_pairs`, which does depend on MazeEnv for
+during training and must not depend on pygame/MazeGUI) and preference-pair
+generation (`extract_preference_pairs`, which does depend on MazeGUI for
 GUI<->XY conversion but delegates scoring here).
 
 All functions operate on trajectories in maze XY coordinate space (not GUI

@@ -7,7 +7,7 @@ import numpy as np
 import pygame
 from collections import deque
 
-from itps.envs.maze.interact_maze2d import MazeEnv
+from itps.envs.maze.interact_maze2d import MazeGUI
 from itps.envs.maze.maze_maps import MAZE_MAPS
 from itps.envs.maze.maze_scoring import (
     score_center,
@@ -39,7 +39,7 @@ def pick_start_positions(maze_type='large', n_positions=None, savepath=None):
     -------
     list of [x, y] positions in maze XY space
     """
-    env = MazeEnv(maze_type)
+    env = MazeGUI(maze_type)
     pygame.font.init()
     font = pygame.font.SysFont(None, 30)
     positions = []
@@ -171,7 +171,7 @@ def generate_random_observations(maze_type='large', n=10, include_goals=False,
     -------
     list of [x, y] or [x, y, goal_x, goal_y], or (train_list, test_list) if split is set
     """
-    env = MazeEnv(maze_type)
+    env = MazeGUI(maze_type)
     rng = np.random.default_rng(seed)
     candidates = _build_candidate_pool(env)
 
@@ -229,7 +229,7 @@ def visualize_observations(positions, maze_type='large'):
     positions  : list of [x, y] or [x, y, goal_x, goal_y]
     maze_type  : 'open' | 'sparse' | 'large'
     """
-    env = MazeEnv(maze_type)
+    env = MazeGUI(maze_type)
     pygame.font.init()
     font = pygame.font.SysFont(None, 28)
     has_goals = len(positions[0]) == 4
@@ -287,7 +287,7 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
     if score_threshold is None:
         score_threshold = DEFAULT_SCORE_THRESHOLDS[metric]
 
-    maze_env = MazeEnv(maze_type)
+    maze_env = MazeGUI(maze_type)
     metric_kwargs = metric_kwargs or {}
 
     pairs = []
@@ -558,7 +558,7 @@ def visualize_preference_pairs(winners_path, losers_path, meta_path=None, maze_t
     winners_eps = winners_obs.reshape(N, step_size, 2)
     losers_eps  = losers_obs.reshape(N, step_size, 2)
 
-    env = MazeEnv(maze_type)
+    env = MazeGUI(maze_type)
     pygame.font.init()
     font = pygame.font.SysFont(None, 28)
 
@@ -651,7 +651,7 @@ def extract_demo_dataset(loadpath, savepath, maze_type='large', step_threshold=0
     assert 'maze' in os.path.basename(save_file), \
         f"Output filename must contain 'maze' for the dataloader; got '{os.path.basename(save_file)}'"
 
-    maze_env = MazeEnv(maze_type)
+    maze_env = MazeGUI(maze_type)
 
     with open(loadpath, 'r') as f:
         trials = [json.loads(line) for line in f]

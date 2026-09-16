@@ -56,7 +56,7 @@ from scipy.special import softmax
 import time
 import json
 
-class MazeEnv:
+class MazeGUI:
     def __init__(self, maze_type):
         # GUI x coord 0 -> gui_size[0] #1200
         # GUI y coord 0 
@@ -199,7 +199,7 @@ class MazeEnv:
         scores = scores[sort_idx]  
         return samples, scores
 
-class UnconditionalMaze(MazeEnv):
+class UnconditionalMaze(MazeGUI):
 
     # for dragging the agent around to explore motion manifold
     def __init__(self, policy, policy_tag=None, vis_energy=False, maze_type="large", obs_list=None, opt_params=None, ddim=False, sample_seed=0):
