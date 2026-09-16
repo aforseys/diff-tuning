@@ -85,7 +85,7 @@ def eval_energy(policy, trajs, t, conditional=False, batch_size=256,
     deterministic defaults to True: these energies are used as a landscape
     (contour plots, and the grid sum in kl_divergence), where the shared-noise
     Monte-Carlo estimate does not average out across points. Matches
-    eval_utils.eval_energy -- keep the two in sync.
+    itps.envs.gmm.eval.eval_energy -- keep the two in sync.
     """
 
     observations = gen_obs(conditional=conditional, N=len(trajs))

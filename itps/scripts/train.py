@@ -49,7 +49,9 @@ from itps.common.utils.utils import (
     set_global_seed,
 )
 from itps.scripts.eval.eval import eval_policy
-from itps.common.utils.eval_utils import eval_GMM, eval_maze, eval_robosuite
+from itps.envs.gmm.eval import eval_GMM
+from itps.envs.maze.eval import eval_maze
+from itps.envs.robosuite.eval import eval_robosuite
 
 def make_optimizer_and_scheduler(cfg, policy, train_FiLM_only=False):
     if cfg.policy.name == "act":

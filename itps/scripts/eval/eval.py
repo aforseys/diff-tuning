@@ -72,7 +72,8 @@ from itps.common.policies.policy_protocol import Policy
 from itps.common.policies.utils import get_device_from_parameters
 from itps.common.utils.io_utils import write_video
 from itps.common.utils.utils import get_safe_torch_device, init_hydra_config, init_logging, set_global_seed
-from itps.common.utils.eval_utils import eval_GMM, eval_maze
+from itps.envs.gmm.eval import eval_GMM
+from itps.envs.maze.eval import eval_maze
 
 def rollout(
     env: gym.vector.VectorEnv,
@@ -508,7 +509,7 @@ def main(
                 )
         
         elif hydra_cfg.env.name == 'robosuite':
-            from itps.common.utils.eval_utils import eval_robosuite
+            from itps.envs.robosuite.eval import eval_robosuite
             info = eval_robosuite(policy, hydra_cfg, seed=hydra_cfg.seed, render=render, n_viz_samples=n_viz_samples)
 
         elif hydra_cfg.env.name == 'maze2d':

@@ -35,7 +35,7 @@ from itps.common.policies.diffusion.modeling_diffusion import (
     DEFAULT_ENERGY_N_NOISE,
     DEFAULT_ENERGY_SEED,
 )
-from itps.common.utils.eval_utils import gen_obs
+from itps.envs.gmm.eval import gen_obs
 from itps.common.utils.preference_scoring import pairwise_win_rate
 from itps.common.policies.factory import make_policy
 from itps.common.utils.utils import init_hydra_config, set_global_seed
@@ -148,7 +148,7 @@ def main():
                              "rescaled to the timestep. At t=0 the added noise is tiny "
                              "(std 0.025 for the 100-step cosine schedule), so this gives "
                              "nearly the same ranking at 1/--n-noise the cost. This is also "
-                             "the default for the landscape/KL energies in eval_utils, where "
+                             "the default for the landscape/KL energies in itps.envs.gmm.eval, where "
                              "shared-noise error does not cancel across a grid sum.")
     parser.add_argument("--energy-seed", type=int, default=DEFAULT_ENERGY_SEED,
                         help=f"Seed for the energy noise draws (default {DEFAULT_ENERGY_SEED}), "
