@@ -113,22 +113,28 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
         return set(self.config.input_shapes)
 
     @torch.no_grad
-    def run_inference(self, observation_batch: dict[str, Tensor], return_full: bool = False):
+    def run_inference(self, observation_batch: dict[str, Tensor], return_full: bool = False,
+                      methods=("ddim",), opt_params=None):
         """
         Sample one action trajectory per observation with the configured noise scheduler (DDPM/DDIM).
 
-        Returns the unnormalized `n_action_steps` actions starting at the current observation, and with
-        `return_full=True` also the full `horizon`-length trajectories.
+        Returns a one-entry list of unnormalized `n_action_steps` actions starting at the current
+        observation, and with `return_full=True` also a list of the full `horizon`-length trajectories.
+        Lists (rather than bare tensors) so callers work with any policy, including ones that sample with
+        several methods at once. `opt_params` is accepted and ignored here; it configures the
+        optimization-based samplers that subclasses add.
         """
+        if set(methods) - {"ddim"}:
+            raise ValueError(f"{type(self).__name__} samples with 'ddim' only; got {list(methods)}.")
         observation_batch = self.normalize_inputs(observation_batch)
         if len(self.expected_image_keys) > 0:
             observation_batch["observation.images"] = torch.stack(
                 [observation_batch[k] for k in self.expected_image_keys], dim=-4
             )
         generated = self.diffusion.generate_actions(observation_batch, return_full=return_full)
-        actions = self.unnormalize_outputs({"action": generated["actions"]})["action"]
+        actions = [self.unnormalize_outputs({"action": generated["actions"]})["action"]]
         if return_full:
-            full_traj = self.unnormalize_outputs({"action": generated["full_traj"]})["action"]
+            full_traj = [self.unnormalize_outputs({"action": generated["full_traj"]})["action"]]
             return actions, full_traj
         return actions
 

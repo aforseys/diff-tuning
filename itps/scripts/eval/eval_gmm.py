@@ -31,7 +31,6 @@ from itps.common.policies.utils import (
     get_dtype_from_parameters,
 )
 from itps.common.policies.diffusion.modeling_diffusion import (
-    EBMDiffusionPolicy,
     DEFAULT_ENERGY_N_NOISE,
     DEFAULT_ENERGY_SEED,
 )
@@ -216,7 +215,10 @@ def main(
     
     logging.info("Making policy.")
     if hydra_cfg_path is None:
-        policy = EBMDiffusionPolicy.from_pretrained(pretrained_policy_path)
+        policy = make_policy(
+            init_hydra_config(str(Path(pretrained_policy_path) / "config.yaml"), ["device=cuda"]),
+            pretrained_policy_name_or_path=str(pretrained_policy_path),
+        )
     else:
         # Note: We need the dataset stats to pass to the policy's normalization modules.
         policy = make_policy(hydra_cfg=hydra_cfg, dataset_stats=make_dataset(hydra_cfg).stats)

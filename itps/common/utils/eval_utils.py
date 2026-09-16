@@ -378,8 +378,9 @@ def _eval_GMM(policy, condition_type, finetune, N, viz, training_samples,
     else: 
         raise NotImplementedError("Only 'unconditional' or 'conditional' condition_types supported for GMM")
 
-    #Calculate KL divergence between distributions 
-    kl_div = kl_divergence(policy, conditional, finetune)
+    # KL divergence compares the learned energy landscape against the ground-truth density, so it is only
+    # available for policies that expose energies.
+    kl_div = kl_divergence(policy, conditional, finetune) if hasattr(policy, "get_energy") else None
 
     # Generate samples and calculate log likelihood
     samples, ll = log_likelihood(policy, conditional, finetune, N, opt_params=opt_params, methods=methods)
@@ -409,10 +410,9 @@ def _eval_GMM(policy, condition_type, finetune, N, viz, training_samples,
         IRED_samples = samples[0:len(opt_params)]
         IRED_ll = ll[0:len(opt_params)]
 
-    info ={
-        "aggregated":{
-            "kl_div": kl_div, 
-    }}
+    info = {"aggregated": {}}
+    if kl_div is not None:
+        info["aggregated"]["kl_div"] = kl_div
 
     if 'ddim' in methods:
         info["aggregated"]["DDIM_log_likelihood"]=DDIM_ll

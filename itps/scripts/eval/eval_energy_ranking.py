@@ -57,7 +57,6 @@ import torch
 from itps.common.policies.diffusion.modeling_diffusion import (
     DEFAULT_ENERGY_N_NOISE,
     DEFAULT_ENERGY_SEED,
-    EBMDiffusionPolicy,
 )
 from itps.common.utils.maze_maps import MAZE_MAPS
 from itps.common.utils.maze_scoring import (
@@ -67,7 +66,8 @@ from itps.common.utils.maze_scoring import (
     score_goal_progress,
 )
 from itps.common.utils.preference_scoring import pairwise_win_rate
-from itps.common.utils.utils import set_global_seed
+from itps.common.policies.factory import make_policy
+from itps.common.utils.utils import init_hydra_config, set_global_seed
 
 
 def score_metric(metric, xy_traj, maze, start=None, obs_goal=None, fixed_goal=None):
@@ -248,6 +248,19 @@ def eval_energy_ranking(pretrained_policy, finetuned_policy, obs_data, maze_type
     return results
 
 
+def load_policy(pretrained_path, device):
+    """Load a checkpoint through the factory, so its config's `policy.name` picks the policy class."""
+    cfg = init_hydra_config(os.path.join(pretrained_path, "config.yaml"), [f"device={device}"])
+    policy = make_policy(cfg, pretrained_policy_name_or_path=pretrained_path)
+    if not hasattr(policy, "get_energy"):
+        raise SystemExit(
+            f"{pretrained_path} holds a {type(policy).__name__}, which has no energies to rank; "
+            "this script needs an energy-based policy (policy.name: ebm_diffusion)."
+        )
+    policy.eval()
+    return policy
+
+
 def main():
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -355,11 +368,8 @@ def main():
                        "t_subset": None if args.t_subset == "all" else int(args.t_subset),
                        "denoise": args.denoise}]
 
-    pretrained_policy = EBMDiffusionPolicy.from_pretrained(args.pretrained_path)
-    finetuned_policy = EBMDiffusionPolicy.from_pretrained(args.finetuned_path)
-    for p in (pretrained_policy, finetuned_policy):
-        p.to(args.device)
-        p.eval()
+    pretrained_policy = load_policy(args.pretrained_path, args.device)
+    finetuned_policy = load_policy(args.finetuned_path, args.device)
 
     # Read defaults for obs-file/maze-type/goal from the fine-tuned checkpoint's own
     # saved config.yaml (written by Logger.save_model next to the checkpoint weights),
