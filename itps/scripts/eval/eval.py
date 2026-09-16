@@ -72,8 +72,7 @@ from itps.common.policies.policy_protocol import Policy
 from itps.common.policies.utils import get_device_from_parameters
 from itps.common.utils.io_utils import write_video
 from itps.common.utils.utils import get_safe_torch_device, init_hydra_config, init_logging, set_global_seed
-from itps.envs.gmm.eval import eval_GMM
-from itps.envs.maze.eval import eval_maze
+from itps.envs import get_env, is_registered
 
 def rollout(
     env: gym.vector.VectorEnv,
@@ -475,7 +474,7 @@ def main(
 
     log_output_dir(out_dir)
 
-    if hydra_cfg.env.name not in ('gmm', 'maze2d', 'robosuite'):
+    if not is_registered(hydra_cfg.env.name):
         logging.info("Making environment.")
         env = make_env(hydra_cfg)
 
@@ -493,44 +492,16 @@ def main(
 
     with torch.no_grad(), torch.autocast(device_type=device.type) if hydra_cfg.use_amp else nullcontext():
 
-        if hydra_cfg.env.name == 'gmm':
-            info = eval_GMM(
-                policy,
-                hydra_cfg.condition_type,
-                finetune=finetune,
-                N = hydra_cfg.eval.n_samples,
-                viz = viz,
-                training_samples = training_samples, #used for viz if viz True
-                opt_params=hydra_cfg.eval.opt_params,
-                methods=hydra_cfg.eval.methods,
-                viz_opt=True,
-                save_samples_path=save_samples,
-                seed=hydra_cfg.seed,
-                )
-        
-        elif hydra_cfg.env.name == 'robosuite':
-            from itps.envs.robosuite.eval import eval_robosuite
-            info = eval_robosuite(policy, hydra_cfg, seed=hydra_cfg.seed, render=render, n_viz_samples=n_viz_samples)
-
-        elif hydra_cfg.env.name == 'maze2d':
-            # info = eval_policy(
-            #     env,
-            #     policy,
-            #     hydra_cfg.eval.n_episodes,
-            #     max_episodes_rendered=10,
-            #     videos_dir=Path(out_dir) / "videos",
-            #     start_seed=hydra_cfg.seed,
-            #     enable_progbar=True,
-            #     enable_inner_progbar=True,
-            # )
-
-            info = {"aggregated":{}}
-            if hydra_cfg.eval.get('train_obs') is not None or hydra_cfg.eval.get('test_obs') is not None:
-                for split in ('train', 'test'):
-                    split_info = eval_maze(policy, hydra_cfg, split=split, seed=hydra_cfg.seed)
-                    for label, metrics in split_info.items():
-                        for metric_name, vals in metrics.items():
-                            info['aggregated'][f"{metric_name}_{label}"] = vals['mean']
+        if is_registered(hydra_cfg.env.name):
+            info = get_env(hydra_cfg.env.name).evaluate(
+                policy, hydra_cfg, seed=hydra_cfg.seed,
+                viz=viz, viz_opt=True, training_samples=training_samples, save_samples_path=save_samples,
+                render=render, n_viz_samples=n_viz_samples,
+            )
+        else:
+            # Gym envs are evaluated by rollout during training (train.py's eval_policy path); this script
+            # has only ever supported the environments in itps.envs.
+            raise NotImplementedError(f"eval.py does not evaluate env {hydra_cfg.env.name!r}.")
 
     print(info["aggregated"])
 
@@ -538,7 +509,7 @@ def main(
     with open(Path(out_dir) / "eval_info.json", "w") as f:
         json.dump(info, f, indent=2)
 
-    if hydra_cfg.env.name not in ('gmm', 'maze2d', 'robosuite'):
+    if not is_registered(hydra_cfg.env.name):
          env.close()
 
     logging.info("End of eval")

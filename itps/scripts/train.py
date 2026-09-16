@@ -49,9 +49,7 @@ from itps.common.utils.utils import (
     set_global_seed,
 )
 from itps.scripts.eval.eval import eval_policy
-from itps.envs.gmm.eval import eval_GMM
-from itps.envs.maze.eval import eval_maze
-from itps.envs.robosuite.eval import eval_robosuite
+from itps.envs import get_env, is_registered
 
 def make_optimizer_and_scheduler(cfg, policy, train_FiLM_only=False):
     if cfg.policy.name == "act":
@@ -227,7 +225,7 @@ def log_eval_info(logger, info, step, cfg, dataset, is_online):
         f"epch:{num_epochs:.2f}"]
     
     # Log environment-specific evaluation information 
-    if cfg.dataset_repo_id not in ('gmm', 'maze2d', 'robosuite'):
+    if not is_registered(cfg.env.name):
         eval_s = info["eval_s"]
         avg_sum_reward = info["avg_sum_reward"]
         pc_success = info["pc_success"]
@@ -311,9 +309,6 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     torch.backends.cudnn.benchmark = True
     torch.backends.cuda.matmul.allow_tf32 = True
 
-    # Checks to see if policy is goal-conditioned
-    condition_type=cfg.condition_type.lower()
-
     # Establish finetuning type
     finetune = isinstance(cfg.dataset_root, DictConfig)
     finetune_type = None
@@ -350,7 +345,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     # using the eval.py instead, with gym_dora environment and dora-rs.
     eval_env = None
     if cfg.training.eval_freq > 0:
-        if not (cfg.dataset_repo_id=='gmm' or cfg.dataset_repo_id=='maze2d' or cfg.dataset_repo_id=='robosuite'):
+        if not is_registered(cfg.env.name):
             logging.info("make_env")
             eval_env = make_env(cfg)
 
@@ -410,29 +405,8 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
             logging.info(f"Eval policy at step {step}")
             policy.eval()
             with torch.no_grad(), torch.autocast(device_type=device.type) if cfg.use_amp else nullcontext():
-                if cfg.dataset_repo_id == 'gmm':
-                    eval_info = eval_GMM(
-                        policy,
-                        condition_type=condition_type,
-                        N = cfg.eval.n_samples,
-                        viz = False,
-                        finetune=finetune,
-                        opt_params = list(cfg.eval.opt_params),
-                        methods = list(cfg.eval.methods),
-                        seed=cfg.seed,
-                        )
-
-                elif cfg.dataset_repo_id == 'maze2d':
-                    eval_info = {'aggregated':{}}
-                    if cfg.eval.get('train_obs') is not None or cfg.eval.get('test_obs') is not None:
-                        for split in ('train', 'test'):
-                            split_info = eval_maze(policy, cfg, split=split, seed=cfg.seed)
-                            for label, metrics in split_info.items():
-                                for metric_name, vals in metrics.items():
-                                    eval_info['aggregated'][f"{metric_name}_{label}"] = vals['mean']
-
-                elif cfg.dataset_repo_id == 'robosuite':
-                    eval_info = eval_robosuite(policy, cfg, seed=cfg.seed)
+                if is_registered(cfg.env.name):
+                    eval_info = get_env(cfg.env.name).evaluate(policy, cfg, seed=cfg.seed)
 
                 else:
                     assert eval_env is not None
@@ -447,7 +421,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
             policy.train()
             log_eval_info(logger, eval_info["aggregated"], step, cfg, offline_dataset, is_online=is_online)
             if cfg.wandb.enable:
-                if cfg.dataset_repo_id not in ('gmm', 'maze2d', 'robosuite'):
+                if not is_registered(cfg.env.name):
                     logger.log_video(eval_info["video_paths"][0], step, mode="eval")
             logging.info("Resume training")
 
