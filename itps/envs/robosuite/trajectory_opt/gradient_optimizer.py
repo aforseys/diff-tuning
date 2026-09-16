@@ -7,9 +7,9 @@ differences). Use trajectory_reward_grad() from linear_reward_model for
 analytical gradients of linear feature combinations.
 
 Usage:
-    from itps.trajectory_opt.gradient_optimizer import GradientOptimizer
-    from itps.trajectory_opt.geometric_features import DistanceToObject, Smoothness
-    from itps.trajectory_opt.linear_reward_model import trajectory_reward_arrays, trajectory_reward_grad
+    from itps.envs.robosuite.trajectory_opt.gradient_optimizer import GradientOptimizer
+    from itps.envs.robosuite.trajectory_opt.geometric_features import DistanceToObject, Smoothness
+    from itps.envs.robosuite.trajectory_opt.linear_reward_model import trajectory_reward_arrays, trajectory_reward_grad
 
     features = [Smoothness(), DistanceToObject(some_pos)]
     weights  = [1.0, 0.5]

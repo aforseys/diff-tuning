@@ -7,9 +7,9 @@ import numpy as np
 import pygame
 from collections import deque
 
-from interact_maze2d import MazeEnv
-from common.utils.maze_maps import MAZE_MAPS
-from common.utils.maze_scoring import (
+from itps.envs.maze.interact_maze2d import MazeEnv
+from itps.envs.maze.maze_maps import MAZE_MAPS
+from itps.envs.maze.maze_scoring import (
     score_center,
     score_bottom_half,
     score_goal_progress,

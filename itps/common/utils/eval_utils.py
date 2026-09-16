@@ -6,7 +6,7 @@ import json
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
-from itps.scripts.data_generation.gmm.gaussian_mm import get_weights, get_means, get_covs, mixture_pdf
+from itps.envs.gmm.gaussian_mm import get_weights, get_means, get_covs, mixture_pdf
 from itps.common.utils.utils import seeded_context
 from itps.common.policies.diffusion.modeling_diffusion import (
     DEFAULT_ENERGY_N_NOISE,
@@ -484,8 +484,8 @@ def _eval_GMM(policy, condition_type, finetune, N, viz, training_samples,
 
 # -- MAZE2D EVALUATION --
 
-from itps.common.utils.maze_maps import MAZE_MAPS
-from itps.common.utils.maze_scoring import (
+from itps.envs.maze.maze_maps import MAZE_MAPS
+from itps.envs.maze.maze_scoring import (
     check_maze_collision,
     score_center,
     score_bottom_half,
@@ -777,7 +777,7 @@ def _eval_robosuite(policy, cfg, seed, render, n_viz_samples):
     rng = np.random.default_rng(seed)
 
     from collections import deque
-    from itps.scripts.data_generation.robosuite.bin_placing import make_eval_env, OBJECT_MAP
+    from itps.envs.robosuite.bin_placing import make_eval_env, OBJECT_MAP
 
     n_episodes       = cfg.eval.n_episodes
     n_bins           = 4
@@ -958,10 +958,10 @@ def _eval_robosuite(policy, cfg, seed, render, n_viz_samples):
                 target_bins.append(target_bin)
 
                 if metrics and eef_pos_buf:
-                    from itps.trajectory_opt.geometric_features import (
+                    from itps.envs.robosuite.trajectory_opt.geometric_features import (
                         BinXAlignment, BinYAlignment, ZTableDistance, GoalProgress
                     )
-                    from itps.scripts.data_generation.robosuite.bin_placing import BinTableArena
+                    from itps.envs.robosuite.bin_placing import BinTableArena
                     positions = np.array(eef_pos_buf)
                     quats     = np.array(eef_quat_buf)
                     bx, by    = BinTableArena.BIN_XY[target_bin]

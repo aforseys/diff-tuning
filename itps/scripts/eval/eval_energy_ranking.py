@@ -58,8 +58,8 @@ from itps.common.policies.diffusion.modeling_diffusion import (
     DEFAULT_ENERGY_N_NOISE,
     DEFAULT_ENERGY_SEED,
 )
-from itps.common.utils.maze_maps import MAZE_MAPS
-from itps.common.utils.maze_scoring import (
+from itps.envs.maze.maze_maps import MAZE_MAPS
+from itps.envs.maze.maze_scoring import (
     check_maze_collision,
     score_center,
     score_bottom_half,

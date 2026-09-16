@@ -1,6 +1,6 @@
 
 import argparse
-from itps.scripts.data_generation.gmm.gaussian_mm import * 
+from itps.envs.gmm.gaussian_mm import * 
 
 def generate_preference_data(dataset, pref_mode):
 

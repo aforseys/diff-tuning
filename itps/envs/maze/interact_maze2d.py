@@ -47,11 +47,11 @@ import matplotlib.pyplot as plt
 import einops
 from pathlib import Path
 from huggingface_hub import snapshot_download
-from common.utils.utils import seeded_context, init_hydra_config
-from common.utils.maze_maps import MAZE_MAPS
-from common.utils.maze_scoring import check_maze_collision
-from common.policies.factory import make_policy
-from common.datasets.factory import make_dataset
+from itps.common.utils.utils import seeded_context, init_hydra_config
+from itps.envs.maze.maze_maps import MAZE_MAPS
+from itps.envs.maze.maze_scoring import check_maze_collision
+from itps.common.policies.factory import make_policy
+from itps.common.datasets.factory import make_dataset
 from scipy.special import softmax
 import time
 import json

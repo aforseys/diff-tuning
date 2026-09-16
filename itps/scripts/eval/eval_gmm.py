@@ -34,7 +34,7 @@ from itps.common.policies.diffusion.modeling_diffusion import (
     DEFAULT_ENERGY_N_NOISE,
     DEFAULT_ENERGY_SEED,
 )
-from itps.scripts.data_generation.gmm.gaussian_mm import get_weights, get_means, get_covs, mixture_pdf
+from itps.envs.gmm.gaussian_mm import get_weights, get_means, get_covs, mixture_pdf
 
 def gen_obs(conditional, N):
     "generates a batch object that matches same type as passed through model, only contains obs"

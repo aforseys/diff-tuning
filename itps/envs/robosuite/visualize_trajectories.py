@@ -10,10 +10,10 @@ With --execute the robot physically follows each trajectory one by one while
 the tubes remain visible in the scene.
 
 Run from the itps/ directory:
-    conda run -n diffpreff python scripts/data_generation/robosuite/visualize_trajectories.py \\
+    conda run -n diffpreff python -m itps.envs.robosuite.visualize_trajectories \\
         --traj-file data/trajs.npz --max-trajs 20
     # execute each trajectory with tubes visible:
-    conda run -n diffpreff python scripts/data_generation/robosuite/visualize_trajectories.py \\
+    conda run -n diffpreff python -m itps.envs.robosuite.visualize_trajectories \\
         --traj-file data/trajs.npz --max-trajs 5 --execute
 """
 
@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 
-from itps.scripts.data_generation.robosuite.bin_placing import BinPlacing, BinTableArena, OBJECT_MAP, make_env, execute_spline
+from itps.envs.robosuite.bin_placing import BinPlacing, BinTableArena, OBJECT_MAP, make_env, execute_spline
 
 
 # One RGBA color per bin — semi-transparent so tubes don't obscure the scene.

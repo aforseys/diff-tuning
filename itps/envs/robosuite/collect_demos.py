@@ -14,7 +14,7 @@ Observations saved at each keyframe (T+1 total per episode):
     agentview_image, wrist_image (optional)
 
 Run from the itps/ directory:
-    conda run -n diffpreff python scripts/data_generation/robosuite/collect_demos.py \\
+    conda run -n diffpreff python -m itps.envs.robosuite.collect_demos \\
         --traj-file data/trajs.npz --save-path data/demos.hdf5
 """
 
@@ -30,7 +30,7 @@ import h5py
 import numpy as np
 from scipy.interpolate import CubicSpline, interp1d
 
-from itps.scripts.data_generation.robosuite.bin_placing import BinPlacing, OBJECT_MAP
+from itps.envs.robosuite.bin_placing import BinPlacing, OBJECT_MAP
 from robosuite.controllers import load_part_controller_config
 
 

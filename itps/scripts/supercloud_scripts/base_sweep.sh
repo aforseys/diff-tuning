@@ -14,7 +14,7 @@
 #
 # STEP 1 — generate the run configs ONCE (from the itps/ dir). The path below must match
 # CONFIGS_DIR further down, which is what run_job.py actually globs:
-#   python scripts/data_generation/generate_configs.py \
+#   python scripts/generate_configs.py \
 #       --config configs/policy/ICRA/maze/large_maze/large_maze_n_query_sweep_base_new_pref.yaml \
 #       --out_dir configs/policy/ICRA/maze/large_maze/n_query_runs_base_new_pref/
 #

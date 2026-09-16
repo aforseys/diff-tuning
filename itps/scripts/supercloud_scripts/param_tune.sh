@@ -13,7 +13,7 @@
 #
 # BEFORE submitting, generate your run configs once (from the itps/ dir). The path
 # must match CONFIGS_DIR further down, which is what run_job.py actually globs:
-#   python scripts/data_generation/generate_configs.py \
+#   python scripts/generate_configs.py \
 #       --config configs/policy/ICRA/maze/large_maze/param_tuning_DPO_new_pref/DPO_param_tune.yaml \
 #       --out_dir configs/policy/ICRA/maze/large_maze/param_tuning_DPO_new_pref/runs/
 #

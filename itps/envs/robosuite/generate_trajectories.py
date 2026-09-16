@@ -23,7 +23,7 @@ Output .npz  (N = n_prisms * n_bins * n_obs):
     config_json    : string                    full feature/weight/constraint spec
 
 Run from the itps/ directory:
-    conda run -n diffpreff python scripts/data_generation/robosuite/generate_trajectories.py \\
+    conda run -n diffpreff python -m itps.envs.robosuite.generate_trajectories \\
         --obs-file data/obs.npz --save-path data/trajs.npz \\
         --smoothness -1 0 1 --bin-wall-avoidance -5 \\
         --workspace-constraint --bin-wall-constraint
@@ -39,9 +39,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 
-from itps.scripts.data_generation.robosuite.bin_placing import BinTableArena
-from itps.trajectory_opt.gradient_optimizer import GradientOptimizer
-from itps.trajectory_opt.geometric_features import (
+from itps.envs.robosuite.bin_placing import BinTableArena
+from itps.envs.robosuite.trajectory_opt.gradient_optimizer import GradientOptimizer
+from itps.envs.robosuite.trajectory_opt.geometric_features import (
     Smoothness,
     Jerk,
     MaintainOrientation,
@@ -58,7 +58,7 @@ from itps.trajectory_opt.geometric_features import (
     make_bin_wall_constraint,
     combine_constraints,
 )
-from itps.trajectory_opt.linear_reward_model import (
+from itps.envs.robosuite.trajectory_opt.linear_reward_model import (
     trajectory_reward_arrays,
     trajectory_reward_grad,
 )

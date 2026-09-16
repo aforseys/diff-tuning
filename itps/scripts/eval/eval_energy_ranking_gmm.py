@@ -39,7 +39,7 @@ from itps.common.utils.eval_utils import gen_obs
 from itps.common.utils.preference_scoring import pairwise_win_rate
 from itps.common.policies.factory import make_policy
 from itps.common.utils.utils import init_hydra_config, set_global_seed
-from itps.scripts.data_generation.gmm.gaussian_mm import get_means, get_covs, mvn_pdf
+from itps.envs.gmm.gaussian_mm import get_means, get_covs, mvn_pdf
 
 
 def eval_energy_ranking_gmm(pretrained_policy, finetuned_policy, pref_cluster,

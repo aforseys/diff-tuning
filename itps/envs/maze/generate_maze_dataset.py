@@ -21,18 +21,18 @@ Episode length similarly scales: episode_length=600 raw → 150 effective steps.
 Loader cap: only the first 1M raw frames are used; generating more is wasted.
 
 Usage:
-  python scripts/data_generation/maze/generate_maze_dataset.py --maze open --n-episodes 5000 \\
+  python -m itps.envs.maze.generate_maze_dataset --maze open --n-episodes 5000 \\
       --save data/maze2d-open-custom.hdf5
 
-  python scripts/data_generation/maze/generate_maze_dataset.py --maze sparse --n-episodes 8000 \\
+  python -m itps.envs.maze.generate_maze_dataset --maze sparse --n-episodes 8000 \\
       --save data/maze2d-sparse-custom.hdf5
 
   # Custom maze: .npy file with a 2D bool array (True=wall)
-  python scripts/data_generation/maze/generate_maze_dataset.py --maze-file my_maze.npy \\
+  python -m itps.envs.maze.generate_maze_dataset --maze-file my_maze.npy \\
       --n-episodes 8000 --save data/maze2d-custom.hdf5
 
   # Preview trajectories before a full run
-  python scripts/data_generation/maze/generate_maze_dataset.py --maze open --n-episodes 10 --viz
+  python -m itps.envs.maze.generate_maze_dataset --maze open --n-episodes 10 --viz
 """
 
 import argparse
@@ -43,7 +43,7 @@ from scipy.ndimage import distance_transform_edt
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import shortest_path as csgraph_sp
 
-from itps.common.utils.maze_maps import MAZE_MAPS
+from itps.envs.maze.maze_maps import MAZE_MAPS
 
 
 # ── Planner: builds the inflated grid, graph, and precomputes all-pairs paths ──

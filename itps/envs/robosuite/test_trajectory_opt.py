@@ -5,22 +5,22 @@ Tests both soft (feature) and hard (constraint) wall avoidance approaches.
 No renderer needed.
 
 Run from the itps/ directory:
-    conda run -n diffpreff python scripts/data_generation/robosuite/test_trajectory_opt.py
+    conda run -n diffpreff python -m itps.envs.robosuite.test_trajectory_opt
 """
 
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
-from itps.scripts.data_generation.robosuite.bin_placing import BinTableArena
+from itps.envs.robosuite.bin_placing import BinTableArena
 
-from itps.trajectory_opt.gradient_optimizer import GradientOptimizer
-from itps.trajectory_opt.geometric_features import (
+from itps.envs.robosuite.trajectory_opt.gradient_optimizer import GradientOptimizer
+from itps.envs.robosuite.trajectory_opt.geometric_features import (
     Smoothness, MaintainOrientation, HeightThreshold,
     BinWallAvoidance, make_bin_wall_constraint,
     ZTableDistance, BinYAlignment,
 )
-from itps.trajectory_opt.linear_reward_model import trajectory_reward_arrays, trajectory_reward_grad
+from itps.envs.robosuite.trajectory_opt.linear_reward_model import trajectory_reward_arrays, trajectory_reward_grad
 
 # ---------------------------------------------------------------------------
 # Scene constants
