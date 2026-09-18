@@ -8,3 +8,4 @@ env:
   state_dim: 1
   action_dim: 2
   fps: ${fps}
+  gmm_spec: three_cluster

@@ -449,6 +449,7 @@ def main(
     out_dir: str | None = None,
     config_overrides: list[str] | None = None,
     viz: bool | None = False,
+    viz_opt: bool = False,
     training_samples: Path | None = None,
     save_samples: str | None = None,
     render: bool = False,
@@ -488,14 +489,12 @@ def main(
     assert isinstance(policy, nn.Module)
     policy.eval()
 
-    finetune = isinstance(hydra_cfg.dataset_root, DictConfig)
-
     with torch.no_grad(), torch.autocast(device_type=device.type) if hydra_cfg.use_amp else nullcontext():
 
         if is_registered(hydra_cfg.env.name):
             info = get_env(hydra_cfg.env.name).evaluate(
                 policy, hydra_cfg, seed=hydra_cfg.seed,
-                viz=viz, viz_opt=True, training_samples=training_samples, save_samples_path=save_samples,
+                viz=viz, viz_opt=viz_opt, training_samples=training_samples, save_samples_path=save_samples,
                 render=render, n_viz_samples=n_viz_samples,
             )
         else:
@@ -575,6 +574,12 @@ if __name__ == "__main__":
         help="Visualize Evaluation",
     )
     parser.add_argument(
+        "--viz-opt",
+        action="store_true",
+        help="With --viz, show the steps the IRED sampler took instead of the energy "
+             "landscape and its gradient field at each timestep (GMM only).",
+    )
+    parser.add_argument(
         "--render",
         action="store_true",
         help="Render robosuite environment during evaluation",
@@ -610,6 +615,7 @@ if __name__ == "__main__":
             out_dir=args.out_dir,
             config_overrides=args.overrides,
             viz=args.viz,
+            viz_opt=args.viz_opt,
             save_samples=args.save_samples,
             render=args.render,
             n_viz_samples=args.viz_samples,

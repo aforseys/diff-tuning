@@ -699,7 +699,7 @@ class EBMDiffusionModel(DiffusionModel):
 
     def get_traj_energies(self, trajectories: Tensor, t: int, observation_batch: dict[str, Tensor], mask: Tensor | None = None,
                           n_noise: int = DEFAULT_ENERGY_N_NOISE, deterministic: bool = False,
-                          seed: int | None = DEFAULT_ENERGY_SEED):
+                          seed: int | None = DEFAULT_ENERGY_SEED, return_grad: bool = False):
         """
             trajectory: (B, horizon, action_dim)
             mask gives trajectory padding mask.
@@ -713,6 +713,11 @@ class EBMDiffusionModel(DiffusionModel):
             seed: seed for the noise draws, so the estimate is stochastic but
                 reproducible across runs. Pass None to draw from the global RNG
                 instead.
+            return_grad: also return dE/dx_t, the gradient of the model output. 
+                Returns (energy, grad) instead of energy, and costs
+                one backward pass on top of the forward the energy alone needs. The
+                gradient is with respect to the noised, normalized trajectory -- the field
+                IRED descends.
 
         Every trajectory in the batch is noised with the SAME n_noise vectors
         (common random numbers), and since the generator is re-seeded on each call,
@@ -730,8 +735,11 @@ class EBMDiffusionModel(DiffusionModel):
             # Transform trajectories to correct timestep (don't add noise for exact energy calc)
             eps = torch.zeros(trajectories.shape, device=trajectories.device)
             noisy_trajectories = self.noise_scheduler.add_noise(trajectories, eps, timesteps)
-            return self.model(noisy_trajectories, timesteps, global_cond=global_cond, return_energy=True, mask=mask)
-
+            out = self.model(noisy_trajectories, timesteps, global_cond=global_cond,
+                             return_energy=not return_grad, return_both=return_grad, mask=mask)
+            if not torch.is_grad_enabled():
+                out = tuple(o.detach() for o in out) if return_grad else out.detach()
+            return out
         assert n_noise >= 1, f"n_noise must be >= 1, got {n_noise}"
 
         generator = None
@@ -745,17 +753,25 @@ class EBMDiffusionModel(DiffusionModel):
         # trajectory is compared under the same noise (see docstring).
         shared_noise_shape = (1, *trajectories.shape[1:])
         energy_sum = None
+        grad_sum = None
         for _ in range(n_noise):
             eps = torch.randn(shared_noise_shape, device=trajectories.device,
                               generator=generator).expand_as(trajectories)
             noisy_trajectories = self.noise_scheduler.add_noise(trajectories, eps, timesteps)
-            energy = self.model(noisy_trajectories, timesteps, global_cond=global_cond, return_energy=True, mask=mask)
+            out = self.model(noisy_trajectories, timesteps, global_cond=global_cond,
+                             return_energy=not return_grad, return_both=return_grad, mask=mask)
+            energy, grad = out if return_grad else (out, None)
             if not torch.is_grad_enabled():
                 # EBMWrapper.forward always builds a graph; drop it when scoring so
                 # we don't retain n_noise graphs at once.
                 energy = energy.detach()
+                grad = grad.detach() if grad is not None else None
             energy_sum = energy if energy_sum is None else energy_sum + energy
+            if return_grad:
+                grad_sum = grad if grad_sum is None else grad_sum + grad
 
+        if return_grad:
+            return energy_sum / n_noise, grad_sum / n_noise
         return energy_sum / n_noise
 
     # ========= training  ============
@@ -933,7 +949,7 @@ class EBMDiffusionPolicy(DiffusionPolicy):
     def get_energy(self, action_batch: dict[str, Tensor], t: int, observation_batch: dict[str, Tensor],
                    mask: Tensor | None = None,
                    n_noise: int = DEFAULT_ENERGY_N_NOISE, deterministic: bool = False,
-                   seed: int | None = DEFAULT_ENERGY_SEED):
+                   seed: int | None = DEFAULT_ENERGY_SEED, return_grad: bool = False):
         observation_batch = self.normalize_inputs(observation_batch)
         action_batch = self.normalize_targets(action_batch)
         # TODO: image observations are not stacked here (unlike run_inference/forward), so get_energy does not yet support image-conditioned policies.
@@ -944,7 +960,8 @@ class EBMDiffusionPolicy(DiffusionPolicy):
         # get_traj_energies(self, trajectories: Tensor, t: int, global_cond: Tensor | None = None, mask: Tensor | None = None):
         trajectory = action_batch["action"]
         return self.diffusion.get_traj_energies(trajectory, t, observation_batch, mask=mask,
-                                                n_noise=n_noise, deterministic=deterministic, seed=seed)
+                                                n_noise=n_noise, deterministic=deterministic, seed=seed,
+                                                return_grad=return_grad)
 
 
 class SpatialSoftmax(nn.Module):

@@ -39,29 +39,27 @@ from itps.envs.gmm.eval import gen_obs
 from itps.common.utils.preference_scoring import pairwise_win_rate
 from itps.common.policies.factory import make_policy
 from itps.common.utils.utils import init_hydra_config, set_global_seed
-from itps.envs.gmm.gaussian_mm import get_means, get_covs, mvn_pdf
+from itps.envs.gmm.gaussian_mm import DEFAULT_SPEC, GMM_SPECS, GMM_UTILITIES, get_spec, get_utility
 
 
-def eval_energy_ranking_gmm(pretrained_policy, finetuned_policy, pref_cluster,
+def eval_energy_ranking_gmm(pretrained_policy, finetuned_policy, spec, utility,
                              conditional=False, n_samples=200, sampler='ddim', opt_params=None, seed=None,
                              n_noise=DEFAULT_ENERGY_N_NOISE, deterministic=False,
                              energy_seed=DEFAULT_ENERGY_SEED):
     """
-    Returns: {"per_context": [{"context_idx", "rho", "pvalue"}, ...],
-              "mean_rho": float, "n_contexts_with_variation": int}
+    Returns: {"per_context": [{"context_idx", "win_rate", ...}, ...],
+              "mean_win_rate": float, ...}
 
     `context_idx` is 0 for an unconditional GMM policy (a single fixed
-    observation), or 0/1/2 for a conditional one (one context per cluster,
-    matching gen_obs' order).
+    observation), or one per cluster for a conditional one (matching gen_obs' order).
     """
     if seed is not None:
         set_global_seed(seed)
 
-    means, covs = get_means(), get_covs()
-    pref_mean, pref_cov = means[pref_cluster], covs[pref_cluster]
     device = next(pretrained_policy.parameters()).device
 
-    obs_list = gen_obs(conditional=conditional, N=n_samples, device=device)
+    obs_list = gen_obs(conditional=conditional, N=n_samples, device=device,
+                       n_clusters=spec.n_clusters)
 
     per_context = []
     for context_idx, obs in enumerate(obs_list):
@@ -73,10 +71,10 @@ def eval_energy_ranking_gmm(pretrained_policy, finetuned_policy, pref_cluster,
                 n_noise=n_noise, deterministic=deterministic, seed=energy_seed,
             )
         points = traj_t.squeeze(1).cpu().numpy()        # (n_samples, 2)
-        density = mvn_pdf(points, pref_mean, pref_cov)   # ground-truth density under the preferred cluster
+        scores = utility(points)                         # post-hoc preference, higher = preferred
         neg_energy = -energy.squeeze(-1).cpu().numpy()   # higher = more preferred by the model
 
-        win_rate, n_used, n_tied = pairwise_win_rate(density, neg_energy)
+        win_rate, n_used, n_tied = pairwise_win_rate(scores, neg_energy)
         per_context.append({
             "context_idx": context_idx, "win_rate": win_rate,
             "n_pairs_used": n_used, "n_pairs_tied": n_tied,
@@ -119,9 +117,11 @@ def main():
                         help="Path to the original (pre-fine-tune) pretrained_model dir")
     parser.add_argument("--finetuned-path", required=True,
                         help="Path to the fine-tuned pretrained_model dir")
-    parser.add_argument("--pref-cluster", type=int, required=True, choices=[0, 1, 2],
-                        help="Which GMM component is the preferred cluster "
-                             "(matches gaussian_mm_pref_data.py's --pref-cluster)")
+    parser.add_argument("--gmm-spec", type=str, default=DEFAULT_SPEC, choices=sorted(GMM_SPECS),
+                        help=f"Which registered GMM the policy was trained on (default: {DEFAULT_SPEC})")
+    parser.add_argument("--utility", type=str, default="diagonal", choices=sorted(GMM_UTILITIES),
+                        help="Preference utility the energy ranking is scored against "
+                             "(matches gaussian_mm_pref_data.py's --utility)")
     parser.add_argument("--n-samples", type=int, default=200,
                         help="Candidate points sampled per context (default 200)")
     parser.add_argument("--conditional", action="store_true",
@@ -169,17 +169,20 @@ def main():
     pretrained_policy = load_policy(args.pretrained_path, args.device)
     finetuned_policy = load_policy(args.finetuned_path, args.device)
 
+    spec = get_spec(args.gmm_spec)
+    utility = get_utility(args.utility)
+
     results = eval_energy_ranking_gmm(
-        pretrained_policy, finetuned_policy, pref_cluster=args.pref_cluster,
+        pretrained_policy, finetuned_policy, spec=spec, utility=utility,
         conditional=args.conditional, n_samples=args.n_samples,
         sampler=args.sampler, opt_params=opt_params, seed=args.seed,
         n_noise=args.n_noise, deterministic=args.deterministic,
         energy_seed=args.energy_seed,
     )
 
-    n_contexts = 3 if args.conditional else 1
+    n_contexts = spec.n_clusters if args.conditional else 1
     total_pairs = results['n_pairs_used'] + results['n_pairs_tied']
-    print(f"\npref_cluster={args.pref_cluster}  |  {n_contexts} context(s)  |  "
+    print(f"\nspec={spec.name} utility={args.utility}  |  {n_contexts} context(s)  |  "
           f"{args.n_samples} candidates/context sampled from the pretrained policy  |  "
           f"energy scored under the fine-tuned policy\n")
     print(f"  mean win rate = {results['mean_win_rate']:.3f}  "
