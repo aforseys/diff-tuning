@@ -467,7 +467,8 @@ def filter_samples(samples, conditional, n_clusters):
 
 def eval_GMM(policy, spec, condition_type, N, viz=False, training_samples=None, opt_params=None,
              methods=("ddim",), viz_opt=False, save_samples_path=None, seed=None,
-             utility=None, pref_test_points=None, viz_timesteps=range(10)):
+             utility=None, pref_test_points=None,
+             viz_timesteps=(90, 80, 70, 60, 50, 40, 30, 20, 10, 0)):
     if seed is None:
         return _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
                          opt_params, methods, viz_opt, save_samples_path, utility,
