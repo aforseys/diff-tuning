@@ -450,6 +450,7 @@ def main(
     config_overrides: list[str] | None = None,
     viz: bool | None = False,
     viz_opt: bool = False,
+    viz_dir: str | None = None,
     training_samples: Path | None = None,
     save_samples: str | None = None,
     render: bool = False,
@@ -494,7 +495,8 @@ def main(
         if is_registered(hydra_cfg.env.name):
             info = get_env(hydra_cfg.env.name).evaluate(
                 policy, hydra_cfg, seed=hydra_cfg.seed,
-                viz=viz, viz_opt=viz_opt, training_samples=training_samples, save_samples_path=save_samples,
+                viz=viz or viz_dir is not None, viz_opt=viz_opt, viz_dir=viz_dir,
+                training_samples=training_samples, save_samples_path=save_samples,
                 render=render, n_viz_samples=n_viz_samples,
             )
         else:
@@ -576,8 +578,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "--viz-opt",
         action="store_true",
-        help="With --viz, show the steps the IRED sampler took instead of the energy "
-             "landscape and its gradient field at each timestep (GMM only).",
+        help="Show (or with --viz-dir, save) only the steps the IRED sampler took, instead of the "
+             "standard figures (GMM only).",
+    )
+    parser.add_argument(
+        "--viz-dir",
+        type=str,
+        default=None,
+        help="Save every visualization as a PNG in this directory instead of showing it; implies "
+             "--viz (GMM only).",
     )
     parser.add_argument(
         "--render",
@@ -616,6 +625,7 @@ if __name__ == "__main__":
             config_overrides=args.overrides,
             viz=args.viz,
             viz_opt=args.viz_opt,
+            viz_dir=args.viz_dir,
             save_samples=args.save_samples,
             render=args.render,
             n_viz_samples=args.viz_samples,

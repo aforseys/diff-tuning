@@ -8,6 +8,8 @@ The ground-truth density is always the spec's own blend -- preference never ente
 A finetuned policy is judged instead by the utility of the samples it draws and by
 whether its energy ranks held-out points the way the utility does.
 """
+import os
+
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
@@ -138,32 +140,24 @@ def eval_energy(policy, trajs, t, conditional, n_clusters, batch_size=256,
     return energies
 
 
-def eval_energy_gradient(policy, trajs, t, conditional, n_clusters, batch_size=256,
-                         deterministic=True, n_noise=DEFAULT_ENERGY_N_NOISE, seed=DEFAULT_ENERGY_SEED):
+def eval_noise_pred(policy, trajs, t, conditional, n_clusters, batch_size=256):
     """
-    dE/dx_t at each point of `trajs`, one (N, action_dim) array per observation context.
-
-    This is the same quantity the EBM already produces as its noise prediction, so it
-    comes straight out of a forward pass. Unlike `viz_ired_grad_steps`, which shows the
-    steps IRED actually took, this is the field itself.
-
-    The gradient is with respect to the noised, normalized trajectory (what IRED
-    descends), not the raw data-space point.
+    The model's noise prediction at each point of `trajs` and timestep t, one (N, action_dim) array per
+    observation context. Works for any diffusion policy; for an EBM it is dE/dx_t. It is with respect to
+    the rescaled, normalized trajectory, not the raw data-space point.
     """
     device = next(policy.parameters()).device
     observations = gen_obs(conditional=conditional, N=len(trajs), device=device, n_clusters=n_clusters)
-    gradients = []
+    preds = []
     for obs in observations:
         outputs = []
         for i in range(0, trajs.size(0), batch_size):
             batch_traj = {'action': trajs[i:i+batch_size]}
             batch_obs = {k: v[i:i+batch_size] for k, v in obs.items()}
-            _, grad = policy.get_energy(action_batch=batch_traj, t=t, observation_batch=batch_obs,
-                                        n_noise=n_noise, deterministic=deterministic, seed=seed,
-                                        return_grad=True)
-            outputs.append(grad.detach().cpu().squeeze(1).numpy())
-        gradients.append(np.concatenate(outputs, axis=0))
-    return gradients
+            out = policy.predict_noise(action_batch=batch_traj, t=t, observation_batch=batch_obs)
+            outputs.append(out.detach().cpu().squeeze(1).numpy())
+        preds.append(np.concatenate(outputs, axis=0))
+    return preds
 
 
 def eval_gt_pdf(trajs, spec, conditional, centers=None):
@@ -256,8 +250,18 @@ def preference_win_rate(policy, spec, utility, test_points, t=0, conditional=Fal
 
 
 ## -- VISUALIZATION FUNCTIONS --
+def _show_or_save(fig, save_dir, name):
+    """Show the figure, or save it as <save_dir>/<name>.png and close it."""
+    if save_dir is None:
+        plt.show()
+        return
+    os.makedirs(save_dir, exist_ok=True)
+    fig.savefig(os.path.join(save_dir, f"{name}.png"), dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 def viz_inference(policy, samples, conditional, spec=None, learned_contour=True, t=0,
-                  x_range=(-10, 10), y_range=(-10,10)):
+                  x_range=(-10, 10), y_range=(-10,10), save_dir=None, name="samples"):
     """Scatter samples over either the policy's energy landscape or the ground-truth density."""
     device = next(policy.parameters()).device
     #if plotting over learned energy contour
@@ -286,7 +290,7 @@ def viz_inference(policy, samples, conditional, spec=None, learned_contour=True,
         else:
             title = f"{'Energy' if learned_contour else 'Density'} (unconditional)"
 
-        plt.figure(i)
+        fig = plt.figure(i)
         # Energy is plotted raw (lower = more likely); exponentiating it crushes
         # everything outside the modes onto a flat floor.
         im = plt.imshow(zz, origin="lower",
@@ -300,9 +304,10 @@ def viz_inference(policy, samples, conditional, spec=None, learned_contour=True,
         plt.xlabel("X")
         plt.ylabel("Y")
         plt.title(title)
-        plt.show()
+        _show_or_save(fig, save_dir, f"{name}_obs{i}")
 
-def viz_energy_landscape(policy, conditional, spec=None, t=0, x_range=(-8, 8), y_range=(-8,8)):
+def viz_energy_landscape(policy, conditional, spec=None, t=0, x_range=(-8, 8), y_range=(-8,8),
+                         save_dir=None, name="energy_surface"):
     """3D surface of the raw energy at denoising timestep t."""
     device = next(policy.parameters()).device
     trajs = gen_xy_grid(x_range=x_range, y_range=y_range, device=device)
@@ -320,7 +325,7 @@ def viz_energy_landscape(policy, conditional, spec=None, t=0, x_range=(-8, 8), y
         else:
             title = f"Energy landscape (unconditional, t={t})"
 
-        plt.figure(i)
+        fig = plt.figure(i)
         ax = plt.axes(projection="3d")
         ax.plot_surface(xx, yy, zz, cmap="viridis_r", edgecolor="none")
         ax.view_init(elev=35, azim=-70)
@@ -328,65 +333,63 @@ def viz_energy_landscape(policy, conditional, spec=None, t=0, x_range=(-8, 8), y
         plt.xlabel("X")
         plt.ylabel("Y")
         plt.title(title)
-        plt.show()
+        _show_or_save(fig, save_dir, f"{name}_obs{i}")
 
 
-def viz_energy_gradients(policy, conditional, spec=None, t=0, x_range=(-8, 8), y_range=(-8, 8),
-                         arrow_n=25):
+def viz_gradient_field(policy, conditional, spec=None, t=0, x_range=(-8, 8), y_range=(-8, 8),
+                       arrow_n=25, background="white", save_dir=None, name="grad"):
     """
-    Quiver of the descent direction -dE/dx over a coarse grid, on top of the energy
-    landscape, at denoising timestep t.
+    Quiver of the denoising direction -eps_hat over a grid at timestep t. Works for any diffusion policy;
+    for an EBM, -eps_hat is -dE/dx_t.
 
-    This is the energy field itself, independent of any sampler: it shows where the
-    landscape would push a point at every location, including places no sample ever
-    visits.
+    background: "white", or "energy" to draw the arrows over the learned energy (EBM only).
     """
+    if background not in ("white", "energy"):
+        raise ValueError(f"background must be 'white' or 'energy', got {background!r}")
     device = next(policy.parameters()).device
     n_clusters = spec.n_clusters if spec is not None else 1
 
-    background = gen_xy_grid(x_range=x_range, y_range=y_range, device=device)
-    energies = eval_energy(policy, background, t, conditional=conditional, n_clusters=n_clusters)
-    bx = background[:, 0, 0].cpu().numpy().reshape(200, 200)
-    by = background[:, 0, 1].cpu().numpy().reshape(200, 200)
+    energies = None
+    if background == "energy":
+        grid = gen_xy_grid(x_range=x_range, y_range=y_range, device=device)
+        energies = eval_energy(policy, grid, t, conditional=conditional, n_clusters=n_clusters)
 
     arrows = gen_xy_grid(x_range=x_range, y_range=y_range, device=device, n=arrow_n)
-    gradients = eval_energy_gradient(policy, arrows, t, conditional=conditional, n_clusters=n_clusters)
+    preds = eval_noise_pred(policy, arrows, t, conditional=conditional, n_clusters=n_clusters)
     ax_pts = arrows[:, 0, 0].cpu().numpy()
     ay_pts = arrows[:, 0, 1].cpu().numpy()
+    # Longest arrow spans one grid cell; relative lengths still carry magnitude.
+    cell = min((x_range[1] - x_range[0]) / (arrow_n - 1),
+               (y_range[1] - y_range[0]) / (arrow_n - 1))
 
-    for i in range(len(energies)):
-        zz = energies[i].reshape(200, 200)
-        grad = gradients[i]
-        dx, dy = -grad[:, 0], -grad[:, 1]       # descent direction
+    for i, pred in enumerate(preds):
+        dx, dy = -pred[:, 0], -pred[:, 1]
         magnitudes = np.sqrt(dx**2 + dy**2)
-
-        plt.figure(figsize=(6.5, 5.5))
-        im = plt.imshow(zz, origin="lower",
-                        extent=[bx.min(), bx.max(), by.min(), by.max()],
-                        aspect="auto", cmap="viridis_r")
-        plt.colorbar(im, label="energy (lower = more likely)")
-        # Longest arrow spans one grid cell; relative lengths still carry magnitude.
-        cell = min((x_range[1] - x_range[0]) / (arrow_n - 1),
-                   (y_range[1] - y_range[0]) / (arrow_n - 1))
         arrow_scale = cell / max(magnitudes.max(), 1e-12)
-        plt.quiver(ax_pts, ay_pts, dx * arrow_scale, dy * arrow_scale, magnitudes,
-                   cmap="cool", alpha=0.9, pivot="mid",
-                   angles="xy", scale_units="xy", scale=1)
-        plt.colorbar(label="|grad E|")
-        if conditional:
-            title = f"Energy gradients conditioned on cluster observation {i} (t={t})"
-        else:
-            title = f"Energy gradients (unconditional, t={t})"
-        plt.xlabel("X")
-        plt.ylabel("Y")
-        plt.title(title)
-        plt.tight_layout()
-        plt.show()
 
-def viz_sample_comparison(samples, train_data):
+        fig, ax = plt.subplots(figsize=(6.5, 5.5))
+        if energies is not None:
+            im = ax.imshow(energies[i].reshape(200, 200), origin="lower",
+                           extent=[*x_range, *y_range], cmap="viridis_r")
+            fig.colorbar(im, ax=ax, label="energy (lower = more likely)")
+        q = ax.quiver(ax_pts, ay_pts, dx * arrow_scale, dy * arrow_scale, magnitudes,
+                      cmap="cool", pivot="mid", angles="xy", scale_units="xy", scale=1)
+        fig.colorbar(q, ax=ax, label="|eps_hat|")
+        ax.set_xlim(x_range)
+        ax.set_ylim(y_range)
+        ax.set_aspect("equal")
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        context = f"conditioned on cluster observation {i}" if conditional else "unconditional"
+        over = " over energy" if energies is not None else ""
+        ax.set_title(f"Gradient field{over}, {context} (t={t})")
+        fig.tight_layout()
+        _show_or_save(fig, save_dir, f"{name}_obs{i}")
+
+def viz_sample_comparison(samples, train_data, save_dir=None, name="samples_vs_train"):
 
     for i in range(len(samples)):
-        plt.figure(i)
+        fig = plt.figure(i)
         plt.scatter(train_data[i][:,0], train_data[i][:,1], s=8, alpha=0.6, edgecolor='none')
         plt.scatter(samples[i][:,0], samples[i][:,1], s=8, alpha=0.6, edgecolor='none')
         plt.xlabel("X")
@@ -394,19 +397,18 @@ def viz_sample_comparison(samples, train_data):
         plt.xlim(-8,8)
         plt.ylim(-8,8)
         plt.title(f"Samples against training data (Obs:{i})")
-        plt.show()
+        _show_or_save(fig, save_dir, f"{name}_obs{i}")
 
-def viz_ired_grad_steps(policy, grad_history, t, conditional, opt_vals, spec=None,
-                        x_range=(-10, 10), y_range=(-10,10)):
+def viz_ired_grad_steps(policy, grad_history, t, conditional, opt_vals, spec=None, context=0,
+                        x_range=(-10, 10), y_range=(-10,10), save_dir=None, name="ired"):
 
     """
     Overlay IRED gradient step arrows on the learned energy landscape at denoising timestep t.
 
     grad_history: {t_int: [{'pos': Tensor(B,H,D), 'next_pos': Tensor(B,H,D)}]}
-                for one obs and one opt_step config, positions in data space.
+                for one observation context and one opt_step config, positions in data space.
+    context: which observation context grad_history came from; its landscape is drawn underneath.
     """
-    assert not conditional, "Conditional sampling not supported for multiple opt steps"
-
     steps_at_t = grad_history.get(t, [])
     if not steps_at_t:
         print(f"No grad steps recorded for timestep {t}")
@@ -419,7 +421,7 @@ def viz_ired_grad_steps(policy, grad_history, t, conditional, opt_vals, spec=Non
     xx = trajs[:, 0, 0].cpu().numpy().reshape(200, 200)
     yy = trajs[:, 0, 1].cpu().numpy().reshape(200, 200)
 
-    zz = energies[0].reshape(200, 200)
+    zz = energies[context].reshape(200, 200)
 
     n_inner = len(steps_at_t)
     fig, axes = plt.subplots(1, n_inner, figsize=(5 * n_inner, 5), squeeze=False)
@@ -447,6 +449,8 @@ def viz_ired_grad_steps(policy, grad_history, t, conditional, opt_vals, spec=Non
         ax.set_ylabel("Y")
 
         title = f"IRED gradient steps at denoising t={t}"
+        if conditional:
+            title += f", cluster observation {context}"
         n_inner_steps_label = opt_vals["n_opt"]
         t_time_steps_label = opt_vals["t_subset"]
         denoise = opt_vals["denoise"]
@@ -455,7 +459,7 @@ def viz_ired_grad_steps(policy, grad_history, t, conditional, opt_vals, spec=Non
 
     plt.suptitle(title)
     plt.tight_layout()
-    plt.show()
+    _show_or_save(fig, save_dir, name)
 
 def filter_samples(samples, conditional, n_clusters):
     """Split a saved (N, 3) observation array into one point set per observation context."""
@@ -468,22 +472,22 @@ def filter_samples(samples, conditional, n_clusters):
 def eval_GMM(policy, spec, condition_type, N, viz=False, training_samples=None, opt_params=None,
              methods=("ddim",), viz_opt=False, save_samples_path=None, seed=None,
              utility=None, pref_test_points=None,
-             viz_timesteps=(90, 80, 70, 60, 50, 40, 30, 20, 10, 0)):
+             viz_timesteps=(90, 80, 70, 60, 50, 40, 30, 20, 10, 0), viz_dir=None):
     if seed is None:
         return _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
                          opt_params, methods, viz_opt, save_samples_path, utility,
-                         pref_test_points, viz_timesteps)
+                         pref_test_points, viz_timesteps, viz_dir)
     # See eval_maze below: seeded_context restores the caller's RNG on exit, so an
     # in-training eval doesn't reseed training's noise stream.
     with seeded_context(seed):
         return _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
                          opt_params, methods, viz_opt, save_samples_path, utility,
-                         pref_test_points, viz_timesteps)
+                         pref_test_points, viz_timesteps, viz_dir)
 
 
 def _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
               opt_params, methods, viz_opt, save_samples_path, utility,
-              pref_test_points, viz_timesteps):
+              pref_test_points, viz_timesteps, viz_dir):
     if condition_type == "conditional":
         conditional=True
     elif condition_type == "unconditional":
@@ -533,9 +537,13 @@ def _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
         print('Log likelihood of training samples:', ll_training)
 
     if viz:
-        # DDIM samples are last set, all others are IRED sampling
-        DDIM_samples = samples[-1] if 'ddim' in methods else None
-        IRED_samples = samples[0:len(opt_params)] if 'ired' in methods else []
+        # viz_dir=None shows each figure; otherwise every figure is saved there, named by type,
+        # sampler-order index s and timestep t so each series sorts together.
+        def sample_sets(samples):
+            """(label, per-context samples) for each sampling method, DDIM first."""
+            ired = list(zip(method_labels(['ired'], opt_params, ired_prefix='ired'), samples[0:len(opt_params)])) \
+                if 'ired' in methods else []
+            return ([("ddim", samples[-1])] if 'ddim' in methods else []) + ired
 
         # Visualize training samples if passed in
         if training_samples is not None:
@@ -544,43 +552,48 @@ def _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
             N_per_obs = len(train_data_split[0])
             samples = run_inference(policy, N=N_per_obs, conditional=conditional, methods=methods,
                                     opt_params=opt_params, n_clusters=spec.n_clusters)
-            if 'ddim' in methods:
-                DDIM_samples=samples[-1]
-                viz_sample_comparison(DDIM_samples, train_data_split)
-            if 'ired' in methods:
-                IRED_samples=samples[0:len(opt_params)]
-                for opt_step_samples in IRED_samples:
-                    viz_sample_comparison(opt_step_samples, train_data_split)
+            for label, s in sample_sets(samples):
+                viz_sample_comparison(s, train_data_split, save_dir=viz_dir, name=f"samples_vs_train_{label}")
 
-        # Visualize inferred samples over gt distribution
-        if 'ddim' in methods:
-            viz_inference(policy, samples=DDIM_samples, conditional=conditional, spec=spec, learned_contour=False)
-        for opt_step_samples in IRED_samples:
-            viz_inference(policy, samples=opt_step_samples, conditional=conditional, spec=spec, learned_contour=False)
-
-        # If visualizing the gradient steps
         if viz_opt:
-            assert not conditional, "Conditional sampling not supported for grad viz"
+            # IRED steps only, so different opt_params can be compared quickly.
             grad_N = min(50, N)
             grad_histories_per_opt = run_inference_with_grad_steps(
                 policy, N=grad_N, conditional=conditional, opt_params=opt_params,
                 n_clusters=spec.n_clusters,
             )
             for step_i, opt_vals in enumerate(opt_params):
-                grad_hist = grad_histories_per_opt[step_i][0]
-                for t in sorted(grad_hist.keys(), reverse=True):
-                    viz_ired_grad_steps(
-                        policy, grad_hist, t=t, conditional=conditional,
-                        opt_vals=opt_vals, spec=spec,
-                    )
-        elif has_energy:
-            # Visualize the learned energy landscape and its gradient field at each timestep
-            for t in viz_timesteps:
-                if 'ddim' in methods:
-                    viz_inference(policy, samples=DDIM_samples, conditional=conditional, spec=spec, learned_contour=True, t=t)
-                for opt_step_samples in IRED_samples:
-                    viz_inference(policy, samples=opt_step_samples, conditional=conditional, spec=spec, learned_contour=True, t=t)
-                viz_energy_landscape(policy, conditional, spec=spec, t=t)
-                viz_energy_gradients(policy, conditional, spec=spec, t=t)
+                label = method_labels(['ired'], [opt_vals], ired_prefix='ired')[0]
+                # One history per observation context (a single one when unconditional).
+                for context, grad_hist in enumerate(grad_histories_per_opt[step_i]):
+                    optimized = [t for t in sorted(grad_hist, reverse=True) if grad_hist[t]]
+                    for k, t in enumerate(optimized):
+                        viz_ired_grad_steps(
+                            policy, grad_hist, t=t, conditional=conditional,
+                            opt_vals=opt_vals, spec=spec, context=context,
+                            save_dir=viz_dir, name=f"{label}_s{k}_t{t:03d}_obs{context}",
+                        )
+        else:
+            # Visualize inferred samples over gt distribution
+            for label, s in sample_sets(samples):
+                viz_inference(policy, samples=s, conditional=conditional, spec=spec, learned_contour=False,
+                              save_dir=viz_dir, name=f"samples_true_density_{label}")
+            if has_energy:
+                # Visualize the learned energy landscape at each timestep
+                for k, t in enumerate(viz_timesteps):
+                    for label, s in sample_sets(samples):
+                        viz_inference(policy, samples=s, conditional=conditional, spec=spec, learned_contour=True,
+                                      t=t, save_dir=viz_dir, name=f"samples_energy_{label}_s{k}_t{t:03d}")
+                    viz_energy_landscape(policy, conditional, spec=spec, t=t,
+                                         save_dir=viz_dir, name=f"energy_surface_s{k}_t{t:03d}")
+            # Gradient field at each timestep, for any diffusion policy
+            for k, t in enumerate(viz_timesteps):
+                viz_gradient_field(policy, conditional, spec=spec, t=t,
+                                   save_dir=viz_dir, name=f"grad_white_s{k}_t{t:03d}")
+            # When saving, also the gradient drawn over the energy
+            if has_energy and viz_dir is not None:
+                for k, t in enumerate(viz_timesteps):
+                    viz_gradient_field(policy, conditional, spec=spec, t=t, background="energy",
+                                       save_dir=viz_dir, name=f"grad_energy_s{k}_t{t:03d}")
 
     return info

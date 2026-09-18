@@ -13,7 +13,7 @@ class GMMEnv(Environment):
     name = "gmm"
 
     def evaluate(self, policy, cfg, seed=None, viz=False, viz_opt=False,
-                 training_samples=None, save_samples_path=None, **kwargs):
+                 training_samples=None, save_samples_path=None, viz_dir=None, **kwargs):
         """
         Sample from the policy and compare against the ground-truth mixture (KL divergence, where the
         policy exposes energies, and log-likelihood of its samples).
@@ -45,4 +45,5 @@ class GMMEnv(Environment):
             seed=seed,
             utility=utility,
             pref_test_points=pref_test_points,
+            viz_dir=viz_dir,
         )
