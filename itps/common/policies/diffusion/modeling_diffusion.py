@@ -643,9 +643,10 @@ class EBMDiffusionModel(DiffusionModel):
                     sample_new = torch.clamp(sample_new, -max_val, max_val)
 
                     if return_grad_steps:
+                        # Undo the timestep scaling so callers only need to unnormalize.
                         grad_history[t.item()].append({
-                            'pos': sample.detach().clone(),
-                            'next_pos': sample_new.detach().clone()
+                            'pos': (sample / torch.sqrt(alpha_bar_t)).detach().clone(),
+                            'next_pos': (sample_new / torch.sqrt(alpha_bar_t)).detach().clone()
                         })
                     
                     sample = sample_new.detach()
