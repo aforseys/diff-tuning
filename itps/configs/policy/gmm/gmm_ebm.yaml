@@ -24,8 +24,8 @@ device: "cuda"  # cpu
 training:
   offline_steps: 5000
   online_steps: 0
-  eval_freq: 100
-  save_freq: 100
+  eval_freq: 1000
+  save_freq: 1000
   log_freq: 100
   save_checkpoint: true
 
