@@ -167,6 +167,21 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
         loss, loss_components = self.diffusion.compute_loss(batch, tune_batch)
         return {"loss": loss, **loss_components}
 
+    def predict_noise(self, action_batch: dict[str, Tensor], t: int, observation_batch: dict[str, Tensor],
+                      mask: Tensor | None = None):
+        """
+        Noise prediction at timestep t, with the actions rescaled to t but no noise added (as get_energy does
+        with deterministic=True). For EBMDiffusionPolicy this is dE/dx_t.
+        """
+        observation_batch = self.normalize_inputs(observation_batch)
+        trajectory = self.normalize_targets(action_batch)["action"]
+        timesteps = torch.full((trajectory.shape[0],), t, device=trajectory.device).long()
+        global_cond = self.diffusion._prepare_global_conditioning(observation_batch)
+        eps = torch.zeros(trajectory.shape, device=trajectory.device)
+        noisy_trajectory = self.diffusion.noise_scheduler.add_noise(trajectory, eps, timesteps)
+        out = self.diffusion.model(noisy_trajectory, timesteps, global_cond=global_cond, mask=mask)
+        return out if torch.is_grad_enabled() else out.detach()
+
     def freeze_nonFiLM(self):
         """Freeze every parameter except the UNet's FiLM conditioning layers; returns the trainable parameters."""
 
