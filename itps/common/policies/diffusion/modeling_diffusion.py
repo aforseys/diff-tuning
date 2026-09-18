@@ -1208,10 +1208,15 @@ class DiffusionConditionalUnet1d(nn.Module):
             zip(config.down_dims[:-1], config.down_dims[1:], strict=True)
         )
 
+        # Added for GMM: a horizon-1 trajectory has no time axis to resample, and any kernel wider than 1
+        # would only ever see padding outside its center tap.
+        single_step = config.horizon == 1
+        kernel_size = 1 if single_step else config.kernel_size
+
         # Unet encoder.
         common_res_block_kwargs = {
             "cond_dim": cond_dim,
-            "kernel_size": config.kernel_size,
+            "kernel_size": kernel_size,
             "n_groups": config.n_groups,
             "use_film_scale_modulation": config.use_film_scale_modulation,
         }
@@ -1224,7 +1229,7 @@ class DiffusionConditionalUnet1d(nn.Module):
                         DiffusionConditionalResidualBlock1d(dim_in, dim_out, **common_res_block_kwargs),
                         DiffusionConditionalResidualBlock1d(dim_out, dim_out, **common_res_block_kwargs),
                         # Downsample as long as it is not the last block.
-                        nn.Conv1d(dim_out, dim_out, 3, 2, 1) if not is_last else nn.Identity(),
+                        nn.Identity() if is_last or single_step else nn.Conv1d(dim_out, dim_out, 3, 2, 1),
                     ]
                 )
             )
@@ -1252,13 +1257,13 @@ class DiffusionConditionalUnet1d(nn.Module):
                         DiffusionConditionalResidualBlock1d(dim_in * 2, dim_out, **common_res_block_kwargs),
                         DiffusionConditionalResidualBlock1d(dim_out, dim_out, **common_res_block_kwargs),
                         # Upsample as long as it is not the last block.
-                        nn.ConvTranspose1d(dim_out, dim_out, 4, 2, 1) if not is_last else nn.Identity(),
+                        nn.Identity() if is_last or single_step else nn.ConvTranspose1d(dim_out, dim_out, 4, 2, 1),
                     ]
                 )
             )
 
         self.final_conv = nn.Sequential(
-            DiffusionConv1dBlock(config.down_dims[0], config.down_dims[0], kernel_size=config.kernel_size),
+            DiffusionConv1dBlock(config.down_dims[0], config.down_dims[0], kernel_size=kernel_size),
             nn.Conv1d(config.down_dims[0], config.output_shapes["action"][0], 1),
         )
 
@@ -1297,12 +1302,6 @@ class DiffusionConditionalUnet1d(nn.Module):
 
         # Run decoder, using the skip features from the encoder.
         for resnet, resnet2, upsample in self.up_modules:
-            # Added for GMM (horizon=1): each downsample halves the length (rounding up) and each
-            # upsample doubles it, so with horizon 1 the upsampled length (2) no longer matches the
-            # skip feature (1). Resize to the skip length before concatenating. Only triggers when the
-            # lengths actually differ, i.e. never for horizon=64 (maze, robosuite).
-            if x.shape[-1] != encoder_skip_features[-1].shape[-1]:
-                x = F.interpolate(x, size=encoder_skip_features[-1].shape[-1], mode="nearest")
             x = torch.cat((x, encoder_skip_features.pop()), dim=1)
             x = resnet(x, global_feature)
             x = resnet2(x, global_feature)
