@@ -641,7 +641,8 @@ class EBMDiffusionModel(DiffusionModel):
             if denoise:
                 pred_noise = self.model(sample, batched_t, global_cond=global_cond)
                 x0_hat = (sample - torch.sqrt(1-alpha_bar_t)*pred_noise)/torch.sqrt(alpha_bar_t)
-                sample_new = torch.clamp(torch.sqrt(alpha_bar_t) * x0_hat, -max_val, max_val).detach()
+                sample_new = (torch.sqrt(alpha_bar_t) * x0_hat).detach()
+                # sample_new = torch.clamp(torch.sqrt(alpha_bar_t) * x0_hat, -max_val, max_val).detach()
 
                 if return_grad_steps:
                     # Undo the timestep scaling so callers only need to unnormalize.
