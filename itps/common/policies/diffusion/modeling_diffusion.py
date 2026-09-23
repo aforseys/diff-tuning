@@ -649,7 +649,7 @@ class EBMDiffusionModel(DiffusionModel):
                         'pos': (sample / torch.sqrt(alpha_bar_t)).detach().clone(),
                         'next_pos': (sample_new / torch.sqrt(alpha_bar_t)).detach().clone()
                     })
-                sample=sample.new()
+                sample=sample_new
 
             t_idx = (self.noise_scheduler.timesteps == t).nonzero().item()                                                                      
             if opt_subset is None or t_idx >= (total_timesteps - opt_subset): #skip optimization in landscapes if specified 
