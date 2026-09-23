@@ -115,4 +115,4 @@ policy:
   energy_landscape_loss_weight: 0.0
 
   finetune_energy_landscape: True
-  finetune_loss_weight: 5.0
+  finetune_loss_weight: 2.0

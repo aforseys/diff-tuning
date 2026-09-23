@@ -260,10 +260,10 @@ class DiffusionModel(nn.Module):
         # Per-timestep weights applied to the training losses (see `_timestep_weight`). Saved with the model.
         # Currently uniform; alternatives below.
         loss_weight = torch.ones(config.num_train_timesteps)
-        # alphas_cumprod = self.noise_scheduler.alphas_cumprod
-        # snr = alphas_cumprod / (1 - alphas_cumprod)
-        # if self.config.prediction_type == "epsilon":
-        #     loss_weight = snr / (snr + 1)  # = alphas_cumprod
+        alphas_cumprod = self.noise_scheduler.alphas_cumprod
+        snr = alphas_cumprod / (1 - alphas_cumprod)
+        if self.config.prediction_type == "epsilon":
+            loss_weight = snr / (snr + 1)  # = alphas_cumprod
         # elif self.config.prediction_type == "sample":
         #     loss_weight = snr
         # else:
