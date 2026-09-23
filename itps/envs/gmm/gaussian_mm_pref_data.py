@@ -31,40 +31,18 @@ from itps.envs.gmm.gaussian_mm import (
 PAIRING_MODES = ("any", "same")
 
 
-def generate_preference_pairs(spec, utility, n_pairs, seed, margin=0.0, pairing="any"):
-    """
-    Draw 2*n_pairs samples from `spec`, pair them off, and label each pair by `utility`.
-
-    pairing: how the two members of a pair are chosen.
-        "any"  -- drawn independently, so a pair may straddle two clusters. Both members
-                  share the same null observation, which is what an unconditional policy
-                  expects; most of the preference signal is then cross-mode.
-        "same" -- both members come from the same cluster, so the pair shares a
-                  conditioning context and the comparison stays well posed for a
-                  conditional policy. All of the signal is then the utility spread
-                  *within* a mode.
-    margin: pairs whose utilities differ by <= margin are dropped rather than labelled,
-        since the preference between them is not meaningful. Raising it gives cleaner
-        but fewer pairs. The returned dict reports how many survived.
-
-    Returns both observation formats of the winners and losers, in the same (N, 3) layout
-    the dataloader reads: 'unconditional_*' zeroes the observation column, 'conditional_*'
-    carries each sample's own cluster index. With pairing="same" a pair's two members
-    share that index; with "any" they generally do not, which is why "any" data belongs
-    with an unconditional policy.
-    """
-    if pairing not in PAIRING_MODES:
-        raise ValueError(f"Unknown pairing {pairing!r}. Available: {list(PAIRING_MODES)}")
-
-    X, comps = spec.sample(2 * n_pairs, seed)
+def _draw_pairs(spec, utility, n_pairs, seed, margin, pairing):
+    """One round: draw 2*n_pairs samples, pair them, and keep the pairs clearing `margin`."""
+    sample_seed, shuffle_seed = np.random.SeedSequence(seed).spawn(2)
+    X, comps = spec.sample(2 * n_pairs, sample_seed)
 
     if pairing == "any":
         # Samples are i.i.d., so pairing consecutive draws needs no further randomness.
         left_idx, right_idx = np.arange(0, 2 * n_pairs, 2), np.arange(1, 2 * n_pairs, 2)
     else:
         # Shuffle within each cluster and split it in half, so both members of a pair
-        # carry the same observation. A separate stream from the one spec.sample used.
-        rng = np.random.default_rng([seed, 1])
+        # come from the same cluster. A separate stream from the one spec.sample used.
+        rng = np.random.default_rng(shuffle_seed)
         left_parts, right_parts = [], []
         for k in range(spec.n_clusters):
             idx = np.where(comps == k)[0]
@@ -73,6 +51,10 @@ def generate_preference_pairs(spec, utility, n_pairs, seed, margin=0.0, pairing=
             left_parts.append(idx[:half])
             right_parts.append(idx[half:2 * half])
         left_idx, right_idx = np.concatenate(left_parts), np.concatenate(right_parts)
+        # Shuffle the pair order too, so which cluster a pair comes from is random rather than
+        # ordered by cluster -- otherwise keeping the first n_pairs would favour cluster 0.
+        order = rng.permutation(len(left_idx))
+        left_idx, right_idx = left_idx[order], right_idx[order]
 
     left, right = X[left_idx], X[right_idx]
     left_comps, right_comps = comps[left_idx], comps[right_idx]
@@ -84,10 +66,58 @@ def generate_preference_pairs(spec, utility, n_pairs, seed, margin=0.0, pairing=
     u_left, u_right = u_left[keep], u_right[keep]
 
     left_wins = (u_left > u_right)[:, None]
-    winners = np.where(left_wins, left, right)
-    losers = np.where(left_wins, right, left)
-    winner_comps = np.where(left_wins[:, 0], left_comps, right_comps)
-    loser_comps = np.where(left_wins[:, 0], right_comps, left_comps)
+    return len(keep), {
+        'winners': np.where(left_wins, left, right),
+        'losers': np.where(left_wins, right, left),
+        'winner_comps': np.where(left_wins[:, 0], left_comps, right_comps),
+        'loser_comps': np.where(left_wins[:, 0], right_comps, left_comps),
+        'gaps': np.abs(u_left - u_right),
+    }
+
+
+def generate_preference_pairs(spec, utility, n_pairs, seed, margin=0.0, pairing="any", max_rounds=100):
+    """
+    Draw samples from `spec`, pair them off, and label each pair by `utility`. Returns exactly
+    `n_pairs` pairs, drawing repeatedly until that many clear the margin.
+
+    pairing: how the two members of a pair are chosen.
+        "any"  -- drawn independently, so a pair may straddle two clusters, and most of the
+                  preference signal is then cross-mode.
+        "same" -- both members come from the same cluster, so all of the signal is the utility
+                  spread *within* a mode. Required for a conditional policy, where the two
+                  members must share a conditioning context for the comparison to be well posed.
+    margin: pairs whose utilities differ by <= margin are discarded and redrawn, since the
+        preference between them is not meaningful. Raising it gives cleaner pairs at the cost of
+        more draws; the returned dict reports how many were drawn in total.
+
+    Returns both observation formats of the winners and losers, in the same (N, 3) layout
+    the dataloader reads: 'unconditional_*' zeroes the observation column, 'conditional_*'
+    carries each sample's own cluster index. With pairing="same" a pair's two members
+    share that index; with "any" they generally do not, which is why "any" data belongs
+    with an unconditional policy.
+    """
+    if pairing not in PAIRING_MODES:
+        raise ValueError(f"Unknown pairing {pairing!r}. Available: {list(PAIRING_MODES)}")
+
+    # Draw repeatedly until n_pairs survive the margin filter, then keep exactly that many.
+    parts = {k: [] for k in ("winners", "losers", "winner_comps", "loser_comps", "gaps")}
+    n_drawn = 0
+    for round_i in range(max_rounds):
+        drawn, kept = _draw_pairs(spec, utility, n_pairs, [seed, round_i], margin, pairing)
+        n_drawn += drawn
+        for k, v in kept.items():
+            parts[k].append(v)
+        if sum(len(v) for v in parts["winners"]) >= n_pairs:
+            break
+    else:
+        raise RuntimeError(
+            f"Only {sum(len(v) for v in parts['winners'])} of {n_pairs} pairs survived margin={margin} "
+            f"after {max_rounds} rounds ({n_drawn} pairs drawn). Lower the margin."
+        )
+
+    winners, losers, winner_comps, loser_comps, gaps = (
+        np.concatenate(parts[k])[:n_pairs] for k in ("winners", "losers", "winner_comps", "loser_comps", "gaps")
+    )
 
     def observations(points, cluster_idx, conditional):
         column = cluster_idx[:, None].astype(float) if conditional else np.zeros((len(points), 1))
@@ -99,11 +129,11 @@ def generate_preference_pairs(spec, utility, n_pairs, seed, margin=0.0, pairing=
         'conditional_positive': observations(winners, winner_comps, True),
         'conditional_negative': observations(losers, loser_comps, True),
         'pairing': pairing,
-        'n_pairs_kept': int(len(winners)),
-        'n_pairs_dropped': int((~keep).sum()),
-        'mean_utility_gap': float(np.abs(u_left - u_right).mean()) if len(winners) else float('nan'),
+        'n_pairs': int(len(winners)),
+        'n_pairs_drawn': int(n_drawn),
+        'mean_utility_gap': float(gaps.mean()),
         'winner_cluster_counts': np.bincount(winner_comps, minlength=spec.n_clusters).tolist(),
-        'same_cluster_pair_rate': float((winner_comps == loser_comps).mean()) if len(winners) else float('nan'),
+        'same_cluster_pair_rate': float((winner_comps == loser_comps).mean()),
     }
 
 
@@ -143,8 +173,8 @@ if __name__ == "__main__":
         spec, utility, args.n_pairs, args.seed, margin=args.margin, pairing=args.pairing
     )
 
-    print(f"pairing={args.pairing}: kept {pref_dataset['n_pairs_kept']} pairs, dropped "
-          f"{pref_dataset['n_pairs_dropped']} within margin {args.margin}; "
+    print(f"pairing={args.pairing}: {pref_dataset['n_pairs']} pairs from "
+          f"{pref_dataset['n_pairs_drawn']} drawn at margin {args.margin}; "
           f"mean utility gap {pref_dataset['mean_utility_gap']:.4f}")
     print(f"winners per cluster: {pref_dataset['winner_cluster_counts']}  |  "
           f"{100 * pref_dataset['same_cluster_pair_rate']:.0f}% of pairs are within one cluster")
@@ -158,8 +188,7 @@ if __name__ == "__main__":
         meta = dict(
             spec=spec.as_dict(), utility=args.utility, seed=args.seed, margin=args.margin,
             pairing=args.pairing,
-            n_pairs_requested=args.n_pairs, n_pairs_kept=pref_dataset['n_pairs_kept'],
-            n_pairs_dropped=pref_dataset['n_pairs_dropped'],
+            n_pairs=pref_dataset['n_pairs'], n_pairs_drawn=pref_dataset['n_pairs_drawn'],
             mean_utility_gap=pref_dataset['mean_utility_gap'],
             winner_cluster_counts=pref_dataset['winner_cluster_counts'],
             same_cluster_pair_rate=pref_dataset['same_cluster_pair_rate'],
