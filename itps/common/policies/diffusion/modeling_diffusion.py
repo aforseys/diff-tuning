@@ -830,8 +830,8 @@ class EBMDiffusionModel(DiffusionModel):
         # so both methods are compared under the same noise protocol. Timesteps stay
         # shared across base/pos/neg -- that is what the shape assert protects.
         eps_pos = torch.randn(pos_batch["action"].shape, device=trajectory.device)
-        eps_neg = eps_pos
-        #eps_neg = torch.randn(neg_batch["action"].shape, device=trajectory.device)
+        #eps_neg = eps_pos
+        eps_neg = torch.randn(neg_batch["action"].shape, device=trajectory.device)
         # No mask needed when working with pref dataset
         loss_energy_finetune = w * self._compute_comparison_energy_loss(pos_batch, neg_batch, eps_pos, eps_neg, timesteps)
 
