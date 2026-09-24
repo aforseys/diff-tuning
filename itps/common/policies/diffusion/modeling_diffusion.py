@@ -638,19 +638,19 @@ class EBMDiffusionModel(DiffusionModel):
                 grad_history[t.item()]=[]
 
             # Repredict sample from denoised estimate
-            if denoise:
-                pred_noise = self.model(sample, batched_t, global_cond=global_cond)
-                x0_hat = (sample - torch.sqrt(1-alpha_bar_t)*pred_noise)/torch.sqrt(alpha_bar_t)
-                sample_new = (torch.sqrt(alpha_bar_t) * x0_hat).detach()
-                # sample_new = torch.clamp(torch.sqrt(alpha_bar_t) * x0_hat, -max_val, max_val).detach()
+            # if denoise:
+            #     pred_noise = self.model(sample, batched_t, global_cond=global_cond)
+            #     x0_hat = (sample - torch.sqrt(1-alpha_bar_t)*pred_noise)/torch.sqrt(alpha_bar_t)
+            #     sample_new = (torch.sqrt(alpha_bar_t) * x0_hat).detach()
+            #     # sample_new = torch.clamp(torch.sqrt(alpha_bar_t) * x0_hat, -max_val, max_val).detach()
 
-                if return_grad_steps:
-                    # Undo the timestep scaling so callers only need to unnormalize.
-                    grad_history[t.item()].append({
-                        'pos': (sample / torch.sqrt(alpha_bar_t)).detach().clone(),
-                        'next_pos': (sample_new / torch.sqrt(alpha_bar_t)).detach().clone()
-                    })
-                sample=sample_new
+            #     if return_grad_steps:
+            #         # Undo the timestep scaling so callers only need to unnormalize.
+            #         grad_history[t.item()].append({
+            #             'pos': (sample / torch.sqrt(alpha_bar_t)).detach().clone(),
+            #             'next_pos': (sample_new / torch.sqrt(alpha_bar_t)).detach().clone()
+            #         })
+            #     sample=sample_new
 
             t_idx = (self.noise_scheduler.timesteps == t).nonzero().item()                                                                      
             if opt_subset is None or t_idx >= (total_timesteps - opt_subset): #skip optimization in landscapes if specified 
@@ -659,9 +659,15 @@ class EBMDiffusionModel(DiffusionModel):
                     energy, grad = self.model(sample, batched_t, global_cond=global_cond, return_both=True)
 
                     # IRED-style step size: beta_t / sqrt(1 - alpha_bar_t)
-                    opt_step_size = beta_t / torch.sqrt(1 - alpha_bar_t)
+                    # opt_step_size = beta_t / torch.sqrt(1 - alpha_bar_t)
 
-                    sample_new = sample - opt_step_size * grad * 2
+                    # sample_new = sample - opt_step_size * grad * 2
+
+                    opt_step_size = torch.sqrt(1-alpha_bar_t)
+                    eps = torch.randn(sample.shape, device=sample.device)
+
+                    sample_new = sample - opt_step_size * grad + torch.sqrt(2*opt_step_size)*eps
+
 
                     # clamp to expected scale at this noise level
                     sample_new = torch.clamp(sample_new, -max_val, max_val)
