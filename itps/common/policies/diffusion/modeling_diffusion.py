@@ -670,7 +670,7 @@ class EBMDiffusionModel(DiffusionModel):
 
 
                     # clamp to expected scale at this noise level
-                    sample_new = torch.clamp(sample_new, -max_val, max_val)
+                    # sample_new = torch.clamp(sample_new, -max_val, max_val)
 
                     if return_grad_steps:
                         # Undo the timestep scaling so callers only need to unnormalize.
