@@ -145,6 +145,15 @@ GMM_SPECS = {
                       [0.0, 0.10]]),    # tighter version of [[0.6,0],[0,0.9]]
         ],
     ),
+    # Eight clusters evenly spaced around a circle: one each at right/top/left/bottom, and one
+    # between each pair. Pairs with the "abs_y" utility, which makes top and bottom the two most
+    # preferred modes and left/right the least.
+    "circle_8": GMMSpec(
+        name="circle_8",
+        weights=np.ones(8),
+        means=[5.0 * np.array([np.cos(a), np.sin(a)]) for a in np.arange(8) * np.pi / 4],
+        covs=_isotropic_covs(0.10, 8),
+    ),
     # Clusters strung along the x=y diagonal, perturbed slightly off it. Pairs with the
     # "diagonal" utility: preference then increases monotonically along the line, so the
     # middle cluster sits between the other two rather than being all-or-nothing.
@@ -181,7 +190,12 @@ def diagonal_utility(X):
     return np.asarray(X, dtype=float) @ _DIAGONAL_DIRECTION
 
 
-GMM_UTILITIES = {"diagonal": diagonal_utility}
+def abs_y_utility(X):
+    """Preference increases with distance from the y=0 midline, either up or down."""
+    return np.abs(np.asarray(X, dtype=float)[:, 1])
+
+
+GMM_UTILITIES = {"diagonal": diagonal_utility, "abs_y": abs_y_utility}
 
 
 def get_utility(name):
