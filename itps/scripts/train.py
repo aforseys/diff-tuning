@@ -368,14 +368,14 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     # Check to see if only finetuning FiLM layers:
     train_FiLM_only = False
     if finetune: 
-        if finetune_type == "finetune_energy_landscape": # Only finetune FiLM layers for energy finetuning
-            train_FiLM_only = True
-        elif finetune_type in ['finetune_dpo', 'finetune_demos']:
-            train_FiLM_only = cfg.training.get("train_only_FiLM", None)
-            if train_FiLM_only is None:
-                raise ValueError(
-                    f"finetune_type='{finetune_type}' requires 'train_only_FiLM' to be explicitly set in the config."
-                )
+        # if finetune_type == "finetune_energy_landscape": # Only finetune FiLM layers for energy finetuning
+        #     train_FiLM_only = True
+        # elif finetune_type in ['finetune_dpo', 'finetune_demos']:
+        train_FiLM_only = cfg.training.get("train_only_FiLM", None)
+        if train_FiLM_only is None:
+            raise ValueError(
+                f"finetune_type='{finetune_type}' requires 'train_only_FiLM' to be explicitly set in the config."
+            )
 
     optimizer, lr_scheduler = make_optimizer_and_scheduler(cfg, policy, train_FiLM_only=train_FiLM_only)
     grad_scaler = GradScaler(enabled=cfg.use_amp)

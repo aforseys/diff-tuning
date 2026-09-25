@@ -27,6 +27,7 @@ hydra:
 device: "cuda"  # cpu
 
 training:
+  train_only_FiLM: True
   offline_steps: 1000
   online_steps: 0
   eval_freq: 0   # no online evaluation during finetuning
