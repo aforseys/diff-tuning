@@ -118,14 +118,15 @@ def update_policy(
     lr_scheduler=None,
     use_amp: bool = False,
     lock=None,
-    tune_batch = None
+    tune_batch = None, 
+    ref_model = None
 ):
     """Returns a dictionary of items for logging."""
     start_time = time.perf_counter()
     device = get_device_from_parameters(policy)
     policy.train()
     with torch.autocast(device_type=device.type) if use_amp else nullcontext():
-        output_dict = policy.forward(batch, tune_batch=tune_batch)
+        output_dict = policy.forward(batch, tune_batch=tune_batch, ref_model=ref_model)
         # TODO(rcadene): policy.unnormalize_outputs(out_dict)
         loss = output_dict["loss"]
     grad_scaler.scale(loss).backward()
@@ -313,7 +314,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     finetune = isinstance(cfg.dataset_root, DictConfig)
     finetune_type = None
     if finetune:
-        finetune_config_flags = ["finetune_energy_landscape", "finetune_dpo", "finetune_demos"]
+        finetune_config_flags = ["finetune_energy_landscape", "finetune_dpo", "finetune_dpo_forward_kl",  "finetune_demos"]
         finetune_flags = [cfg.policy.get(flag, False) for flag in finetune_config_flags]
         assert sum(finetune_flags) == 1, f"Exactly one of {finetune_config_flags} must be True when finetuning."
         finetune_type = finetune_config_flags[finetune_flags.index(True)]
@@ -325,7 +326,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     pref_tune_dataset = None
     demo_tune_dataset = None
     if finetune:
-        if finetune_type in ["finetune_energy_landscape", "finetune_dpo"]:
+        if finetune_type in ["finetune_energy_landscape", "finetune_dpo", "finetune_dpo_forward_kl"]:
             pref_tune_dataset = PreferencePairDataset(
                 offline_dataset['pos'], offline_dataset['neg'],
                 n_queries=cfg.training.get('n_queries', None),
@@ -363,6 +364,15 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
         pretrained_policy_name_or_path=pretrained_path,
     )
     assert isinstance(policy, nn.Module)
+
+    # Traditional DPO measures how far the policy has moved from where it started, so keep a
+    # frozen copy of the freshly loaded policy as the reference. Never trained, so it needs no
+    # optimizer or scheduler.
+    ref_policy = None
+    if finetune_type == "finetune_dpo":
+        ref_policy = deepcopy(policy)
+        ref_policy.eval()
+        ref_policy.requires_grad_(False)
 
     # Create optimizer and scheduler
     # Check to see if only finetuning FiLM layers:
@@ -585,7 +595,8 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
             grad_scaler=grad_scaler,
             lr_scheduler=lr_scheduler,
             use_amp=cfg.use_amp,
-            tune_batch = tune_batch
+            tune_batch = tune_batch,
+            ref_model = ref_policy
         )
 
         train_info["dataloading_s"] = dataloading_s

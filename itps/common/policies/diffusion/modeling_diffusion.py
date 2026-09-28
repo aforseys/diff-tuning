@@ -138,7 +138,7 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
             return actions, full_traj
         return actions
 
-    def forward(self, batch: dict[str, Tensor], tune_batch: dict | None = None) -> dict[str, Tensor]:
+    def forward(self, batch: dict[str, Tensor], tune_batch: dict | None = None, ref_model: None = None) -> dict[str, Tensor]:
         """
         Run the batch through the model and compute the loss for training or validation.
 
@@ -164,7 +164,7 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
                 neg_batch = self.normalize_inputs(neg_batch)
                 neg_batch = self.normalize_targets(neg_batch)
                 tune_batch["pref"] = (pos_batch, neg_batch)
-        loss, loss_components = self.diffusion.compute_loss(batch, tune_batch)
+        loss, loss_components = self.diffusion.compute_loss(batch, tune_batch, ref_model)
         return {"loss": loss, **loss_components}
 
     def predict_noise(self, action_batch: dict[str, Tensor], t: int, observation_batch: dict[str, Tensor],
@@ -368,7 +368,7 @@ class DiffusionModel(nn.Module):
 
     # ========= training  ============
     def compute_loss(
-        self, batch: dict[str, Tensor], tune_batch: dict | None = None
+        self, batch: dict[str, Tensor], tune_batch: dict | None = None, ref_model: DiffusionPolicy | None = None,
     ) -> tuple[Tensor, dict[str, Tensor]]:
         """
         This function expects `batch` to have (at least):
@@ -408,7 +408,7 @@ class DiffusionModel(nn.Module):
             loss = self.config.gradient_loss_weight * loss_mse
             components["loss_mse"] = loss_mse.mean()
         else:
-            loss, finetune_components = self._finetune_loss(batch, tune_batch, timesteps)
+            loss, finetune_components = self._finetune_loss(batch, tune_batch, timesteps, ref_model=ref_model)
             components.update(finetune_components)
 
         auxiliary_loss, auxiliary_components = self._auxiliary_loss(batch, timesteps)
@@ -417,15 +417,47 @@ class DiffusionModel(nn.Module):
 
         return loss.mean(), components
 
-    def _finetune_loss(self, batch: dict[str, Tensor], tune_batch: dict, timesteps: Tensor):
+    def _finetune_loss(self, batch: dict[str, Tensor], tune_batch: dict, timesteps: Tensor, ref_model: DiffusionPolicy | None = None):
         """Loss for the fine-tuning objective selected in the config. Returns (per-sample loss, components)."""
         if self.config.finetune_dpo:
-            return self._dpo_loss(batch, tune_batch, timesteps)
+            return self._dpo_loss(tune_batch, timesteps, ref_model=ref_model)
+        elif self.config.finetune_dpo_forward_kl:
+            return self._dpo_forward_kl_loss(batch, tune_batch, timesteps)
         elif self.config.finetune_demos:
             return self._demo_loss(batch, tune_batch, timesteps)
         raise ValueError("A tune_batch was given, but no fine-tuning objective this model supports is enabled.")
 
-    def _dpo_loss(self, batch: dict[str, Tensor], tune_batch: dict, timesteps: Tensor):
+    def _dpo_loss(self, tune_batch: dict, timesteps: Tensor, ref_model: DiffusionPolicy):
+        """Traditional DPO on preference pairs: the frozen reference model's denoising error is the KL anchor."""
+        assert "pref" in tune_batch, "Tuning batch must contain pairwise preferences"
+        assert ref_model is not None, "finetune_dpo requires a frozen reference policy"
+        pos_batch, neg_batch = tune_batch["pref"]
+        device = pos_batch["action"].device
+
+        # Draw eps^+ and eps^- independently.
+        eps_pos = torch.randn(pos_batch["action"].shape, device=device)
+        eps_neg = torch.randn(neg_batch["action"].shape, device=device)
+
+        # Pref dataset contains full horizon trajectories so no mask needed
+        pos_mse_loss = self._compute_denoising_sq_error(pos_batch, timesteps, eps_pos)
+        neg_mse_loss = self._compute_denoising_sq_error(neg_batch, timesteps, eps_neg)
+        # Reference terms reuse the same noise and timesteps, so each difference below isolates
+        # how far this policy has moved from the reference on that trajectory.
+        with torch.no_grad():
+            ref_pos_mse_loss = ref_model.diffusion._compute_denoising_sq_error(pos_batch, timesteps, eps_pos)
+            ref_neg_mse_loss = ref_model.diffusion._compute_denoising_sq_error(neg_batch, timesteps, eps_neg)
+
+        dpo = self.config.dpo_params
+        w = self._timestep_weight(timesteps)
+
+        loss_mse_raw = 0.5 * (pos_mse_loss + neg_mse_loss)
+        loss_dpo_finetune = -w * (pos_mse_loss - ref_pos_mse_loss - (neg_mse_loss - ref_neg_mse_loss))
+        loss = -F.logsigmoid(dpo["B"] * loss_dpo_finetune)
+
+        return loss, {"loss_mse": (w * loss_mse_raw).mean(), "loss_dpo_finetune": loss_dpo_finetune.mean()}
+
+
+    def _dpo_forward_kl_loss(self, batch: dict[str, Tensor], tune_batch: dict, timesteps: Tensor):
         """DPO fine-tuning on preference pairs, with the denoising error on `batch` as a regularizer."""
         assert "pref" in tune_batch, "Tuning batch must contain pairwise preferences"
         pos_batch, neg_batch = tune_batch["pref"]
@@ -436,12 +468,10 @@ class DiffusionModel(nn.Module):
         assert pos_batch["action"].shape == trajectory.shape
         assert pos_batch["action"].device == trajectory.device
 
-        # Sharing timesteps across base/pos/neg makes this a one-sample estimate of the
-        # regularization expectation at this sample's own timestep.
         eps = torch.randn(trajectory.shape, device=trajectory.device)
         loss_mse_raw = self._compute_denoising_sq_error(batch, timesteps, eps, mask=self._padding_mask(batch))
 
-        # Draw eps^+ and eps^- INDEPENDENTLY, as the objective specifies.
+        # Draw eps^+ and eps^- independently.
         eps_pos = torch.randn(pos_batch["action"].shape, device=trajectory.device)
         eps_neg = torch.randn(neg_batch["action"].shape, device=trajectory.device)
         # Pref dataset contains full horizon trajectories so no mask needed
@@ -805,14 +835,14 @@ class EBMDiffusionModel(DiffusionModel):
         return energy_sum / n_noise
 
     # ========= training  ============
-    def _finetune_loss(self, batch: dict[str, Tensor], tune_batch: dict, timesteps: Tensor):
+    def _finetune_loss(self, batch: dict[str, Tensor], tune_batch: dict, timesteps: Tensor, ref_model: DiffusionPolicy | None = None):
         if self.config.finetune_energy_landscape:
             return self._energy_preference_loss(batch, tune_batch, timesteps)
-        if self.config.finetune_dpo:
+        if self.config.finetune_dpo or self.config.finetune_dpo_forward_kl:
             assert not self.config.supervise_energy_landscape, "DPO does not assume access to energy landscape"
         if self.config.finetune_demos:
             assert not self.config.supervise_energy_landscape, "Demonstration finetuning does not assume access to energy landscape"
-        return super()._finetune_loss(batch, tune_batch, timesteps)
+        return super()._finetune_loss(batch, tune_batch, timesteps, ref_model)
 
     def _energy_preference_loss(self, batch: dict[str, Tensor], tune_batch: dict, timesteps: Tensor):
         """

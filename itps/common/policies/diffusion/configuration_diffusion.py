@@ -160,6 +160,8 @@ class DiffusionConfig:
     finetune_energy_landscape: bool = False
     finetune_loss_weight: float = 0
     finetune_dpo: bool = False
+    finetune_dpo_forward_kl: bool = False
+    # finetune_dpo reads "B"; finetune_dpo_forward_kl reads "rho"/"mu"/"b".
     dpo_params: dict = field(default_factory=lambda: {"rho": 500, "mu": 0.2, "b": 0})
     finetune_demos: bool = False
     demo_finetune_loss_weight: float = 0.0
