@@ -696,7 +696,7 @@ class EBMDiffusionModel(DiffusionModel):
                     #opt_step_size = torch.sqrt(1-alpha_bar_t)
                     eps = torch.randn(sample.shape, device=sample.device)
 
-                    sample_new = sample - opt_step_size * grad + torch.sqrt(2*opt_step_size)*eps
+                    sample_new = sample - opt_step_size * grad + torch.sqrt(2*beta_t)*eps
 
 
                     # clamp to expected scale at this noise level
@@ -866,7 +866,6 @@ class EBMDiffusionModel(DiffusionModel):
         # so both methods are compared under the same noise protocol. Timesteps stay
         # shared across base/pos/neg -- that is what the shape assert protects.
         eps_pos = torch.randn(pos_batch["action"].shape, device=trajectory.device)
-        #eps_neg = eps_pos
         eps_neg = torch.randn(neg_batch["action"].shape, device=trajectory.device)
         # No mask needed when working with pref dataset
         loss_energy_finetune = w * self._compute_comparison_energy_loss(pos_batch, neg_batch, eps_pos, eps_neg, timesteps)
