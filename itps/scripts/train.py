@@ -35,7 +35,7 @@ from itps.common.datasets.factory import make_dataset, resolve_delta_timestamps
 from itps.common.datasets.lerobot_dataset import MultiLeRobotDataset
 from itps.common.datasets.online_buffer import OnlineBuffer, compute_sampler_weights
 from itps.common.datasets.sampler import EpisodeAwareSampler
-from itps.common.datasets.utils import cycle, PreferencePairDataset
+from itps.common.datasets.utils import cycle, PreferencePairDataset, concat_pairs_as_base
 from itps.common.envs.factory import make_env
 from itps.common.logger import Logger, log_output_dir
 from itps.common.policies.factory import make_policy
@@ -326,14 +326,31 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
     pref_tune_dataset = None
     demo_tune_dataset = None
     if finetune:
+        n_queries = cfg.training.get('n_queries', None)
         if finetune_type in ["finetune_energy_landscape", "finetune_dpo", "finetune_dpo_forward_kl"]:
             pref_tune_dataset = PreferencePairDataset(
-                offline_dataset['pos'], offline_dataset['neg'],
-                n_queries=cfg.training.get('n_queries', None),
+                offline_dataset['pos'], offline_dataset['neg'], n_queries=n_queries,
             )
         elif finetune_type == 'finetune_demos':
             demo_tune_dataset = offline_dataset['demo']
-        offline_dataset = offline_dataset['base']
+
+        if 'base' in offline_dataset:
+            offline_dataset = offline_dataset['base']
+        elif pref_tune_dataset is not None:
+            # No base dataset configured: use the preference samples themselves as the base
+            # distribution, winners and losers pooled.
+            offline_dataset = concat_pairs_as_base(
+                offline_dataset['pos'], offline_dataset['neg'], n_queries=n_queries,
+            )
+            logging.info(
+                f"No 'base' dataset_root given; using the {len(offline_dataset)} pooled preference "
+                f"samples as the base dataset."
+            )
+        else:
+            raise NotImplementedError(
+                f"finetune_type='{finetune_type}' has no 'base' dataset_root, and pooling a base "
+                f"dataset is only implemented for preference fine-tuning."
+            )
 
     if isinstance(offline_dataset, MultiLeRobotDataset):
         logging.info(

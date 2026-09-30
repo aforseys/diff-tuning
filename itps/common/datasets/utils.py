@@ -23,6 +23,7 @@ from typing import Dict
 import datasets
 import torch
 from datasets import load_dataset, load_from_disk
+from itps.common.datasets.compute_stats import aggregate_stats
 from huggingface_hub import DatasetCard, HfApi, hf_hub_download, snapshot_download
 from PIL import Image as PILImage
 from safetensors.torch import load_file
@@ -639,3 +640,62 @@ class PreferencePairDataset(torch.utils.data.Dataset):
             "pos": pos_sample,
             "neg": neg_sample,
         }
+
+
+def concat_pairs_as_base(pos_ds, neg_ds, n_queries=None):
+    """
+    Pool the preference winners and losers into one dataset, for fine-tuning runs with no separate
+    base dataset -- the preference samples themselves become the base distribution.
+
+    `pos_ds` and `neg_ds` label their episodes identically, which is what pairs them off (see
+    PreferencePairDataset). Pooled as-is, two rows would share an `episode_index`, and
+    `load_previous_and_future_frames` resolves an episode by that value -- so every loser would load
+    its winner's frames. The losers' episode indices are shifted past the winners' to keep them
+    distinct. Both inputs are left untouched, since PreferencePairDataset reads them in the same run
+    and depends on their labels agreeing.
+
+    `n_queries` keeps only the first that many pairs, matching PreferencePairDataset's own cap, so the
+    base distribution holds exactly the pairs the preference loss sees. The returned `stats` aggregate
+    the full datasets regardless; they go unused when fine-tuning, where normalization comes from the
+    pretrained checkpoint.
+    """
+    from itps.common.datasets.lerobot_dataset import LeRobotDataset
+
+    if pos_ds._images is not None or neg_ds._images is not None:
+        raise NotImplementedError(
+            "Pooling preference pairs does not carry the separately stored image array "
+            "(hf_dataset._images); state-based datasets only."
+        )
+    assert len(pos_ds) == len(neg_ds), \
+        f"Positive ({len(pos_ds)}) and negative ({len(neg_ds)}) datasets must be same length."
+    for key in ("from", "to"):
+        assert torch.equal(pos_ds.episode_data_index[key], neg_ds.episode_data_index[key]), \
+            f"Positive and negative datasets must share episode boundaries (differ in '{key}')."
+
+    n_episodes = pos_ds.num_episodes if n_queries is None else min(n_queries, pos_ds.num_episodes)
+
+    def rows(ds):
+        """Raw (pre-torch-transform) columns of the first `n_episodes` episodes."""
+        n_rows = int(ds.episode_data_index["to"][n_episodes - 1].item())
+        return ds.hf_dataset.with_format(None)[:n_rows]
+
+    pos_rows, neg_rows = rows(pos_ds), rows(neg_ds)
+    data = {k: pos_rows[k] + neg_rows[k] for k in pos_rows}
+    data["episode_index"] = pos_rows["episode_index"] + [e + n_episodes for e in neg_rows["episode_index"]]
+    data["index"] = list(range(len(data["episode_index"])))
+
+    hf_dataset = datasets.Dataset.from_dict(data)
+    episode_data_index = calculate_episode_data_index(hf_dataset)
+    hf_dataset.set_transform(hf_transform_to_torch)
+
+    dataset = LeRobotDataset.from_preloaded(
+        repo_id=pos_ds.repo_id,
+        split=pos_ds.split,
+        delta_timestamps=pos_ds.delta_timestamps,
+        hf_dataset=hf_dataset,
+        episode_data_index=episode_data_index,
+        stats=aggregate_stats([pos_ds, neg_ds]),
+        info=pos_ds.info,
+    )
+    dataset._images = None  # from_preloaded doesn't set it, and __getitem__ reads it
+    return dataset
