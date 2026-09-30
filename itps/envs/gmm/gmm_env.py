@@ -30,6 +30,8 @@ class GMMEnv(Environment):
         pref_test_set = cfg.eval.get("pref_test_set")
         # Leading column is the observation.
         pref_test_points = np.load(pref_test_set)[:, 1:] if pref_test_set else None
+        # Match the margin the training preference pairs were generated with.
+        tie_tol = cfg.eval.get("tie_tol", 0.0)
 
         return eval_GMM(
             policy,
@@ -45,5 +47,6 @@ class GMMEnv(Environment):
             seed=seed,
             utility=utility,
             pref_test_points=pref_test_points,
+            tie_tol=tie_tol,
             viz_dir=viz_dir,
         )

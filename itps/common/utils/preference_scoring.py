@@ -37,7 +37,7 @@ def rank_correlation(scores, values):
     return float(rho), float(pvalue)
 
 
-def pairwise_win_rate(scores, values, tie_tol=0.0):
+def pairwise_win_rate(scores, values, tie_tol=0.0, n_pairs=None, seed=0):
     """
     Classic pairwise win rate: over every unordered pair of samples, how often
     does `values` order the pair the same way `scores` (the ground-truth
@@ -53,28 +53,41 @@ def pairwise_win_rate(scores, values, tie_tol=0.0):
         pass values = -energy so lower energy counts as "model prefers").
     tie_tol: pairs with |score difference| <= this are discarded as ties
         (default 0.0 = only exactly-equal ground-truth scores are thrown out).
+        Set it to the margin the training pairs were generated with to score the
+        model on comparisons of the same difficulty it was trained on.
+    n_pairs: score a random subset of this many pairs instead of all N*(N-1)/2.
+        Drawn from the non-tied pairs, so n_pairs_used is exactly n_pairs unless
+        fewer than that survive the tie filter. None uses every pair.
+    seed: fixes which pairs the subsample draws; ignored when n_pairs is None.
 
     Returns: (win_rate, n_pairs_used, n_pairs_tied), where
         win_rate: fraction of the kept (non-tied) pairs the model orders
             correctly. A pair where the model's values are exactly equal counts
             as 0.5 (no preference). `nan` if no pairs survive the tie filter.
         n_pairs_used: number of kept (non-tied) pairs the win rate is over.
-        n_pairs_tied: number of pairs thrown out as ground-truth ties.
+        n_pairs_tied: number of pairs thrown out as ground-truth ties, counted
+            over ALL pairs, not just the subsample.
     """
     scores = np.asarray(scores, dtype=float)
     values = np.asarray(values, dtype=float)
     iu, ju = np.triu_indices(len(scores), k=1)   # all i < j pairs
-    score_diff = scores[iu] - scores[ju]
-    value_diff = values[iu] - values[ju]
 
-    tied = np.abs(score_diff) <= tie_tol
+    # Drop ties before subsampling, so the subsample is n_pairs decidable comparisons.
+    tied = np.abs(scores[iu] - scores[ju]) <= tie_tol
     n_tied = int(tied.sum())
-    keep = ~tied
-    n_used = int(keep.sum())
+    iu, ju = iu[~tied], ju[~tied]
+    n_used = len(iu)
     if n_used == 0:
         return float('nan'), 0, n_tied
 
-    sd, vd = score_diff[keep], value_diff[keep]
+    if n_pairs is not None and n_pairs < n_used:
+        # Drawn once from a fixed seed, so every policy is scored on the SAME pairs.
+        # Resampling per call would make a training curve jitter from the pair draw alone.
+        sel = np.random.default_rng(seed).choice(n_used, size=n_pairs, replace=False)
+        iu, ju = iu[sel], ju[sel]
+        n_used = n_pairs
+
+    sd, vd = scores[iu] - scores[ju], values[iu] - values[ju]
     # concordant = model orders the pair the same way as the ground truth.
     # A model tie (vd == 0) is neither concordant nor discordant -> 0.5.
     wins = np.where(vd == 0.0, 0.5, (np.sign(sd) == np.sign(vd)).astype(float))

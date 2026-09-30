@@ -170,22 +170,62 @@ def eval_gt_pdf(trajs, spec, conditional, centers=None):
 
 
 ## -- METRICS --
-def kl_divergence(policy, spec, conditional, t=0, eps=1e-8):
+def energy_log_density_scale(policy, t):
     """
-    KL(ground truth || policy) over a grid covering the mixture's support, averaged over
-    observation contexts.
+    sqrt(1 - alpha_bar_t), the factor between the energy and a log-density.
 
-    Computed entirely in log space. The policy's energy is an unnormalized negative
-    log-density, so the policy's distribution over the grid is softmax(-E): subtracting
-    logsumexp makes the result invariant to the arbitrary additive constant in the
-    energy, as it must be. Exponentiating first is not safe -- exp(-E) was previously
-    clipped at 1e-8 *before* normalizing, so shifting every energy by a constant (which
-    changes no distribution at all) drove the number to its uniform-q saturation value.
+    dE/dx is the model's noise prediction, and the optimal noise prediction is
+    -sqrt(1 - alpha_bar_t) * grad log p_t (denoising score matching; Luo 2022,
+    "Understanding Diffusion Models: A Unified Perspective", p. 17). Integrating,
+    E = -sqrt(1 - alpha_bar_t) * log p_t + c, so log p_t = -E / sqrt(1 - alpha_bar_t).
+
+    The factor is 39.8 at t=0, 5.5 at t=10, 1.4 at t=50, 1.0 at t=90, so reading -E
+    directly as a log-density flattens the landscape toward uniform at low t. This
+    rewards over-sharpness.
+    """
+    return float(torch.sqrt(1.0 - policy.diffusion.noise_scheduler.alphas_cumprod[t]))
+
+
+def _normalize_log(log_u):
+    """Normalize an unnormalized log-density over the grid."""
+    return log_u - logsumexp(log_u)
+
+
+def _kl(log_p, log_q):
+    """KL(p || q) for two normalized log-densities on a shared grid."""
+    return float(np.sum(np.exp(log_p) * (log_p - log_q)))
+
+
+def kl_divergence(policy, spec, conditional, t=0, eps=1e-8, utility=None, betas=None,
+                  calibrate=True, x_range=(-10, 10), y_range=(-10, 10)):
+    """
+    KL between the ground-truth density and the policy's energy landscape, over a grid
+    covering the mixture's support. Returns a dict:
+
+      kl_forward  KL(p || q) -- penalizes the policy missing mass the target has
+      kl_reverse  KL(q || p) -- penalizes the policy putting mass where the target has none
+
+    One value per observation context, suffixed `_obs{i}` when there is more than one
+    (matching the win-rate keys), so a conditional policy shows which clusters moved.
+
+    With `utility`, also compares against the preference-tilted target
+    p*(x) ∝ p(x) * exp(u(x) / beta) at the best-fit beta over `betas`, adding
+    kl_{forward,reverse}_tilted and beta_{forward,reverse}. 
+
+    beta is the tilt strength in utility units: large beta means the landscape still matches
+    the untilted ground truth (no preference absorbed), small beta means it has concentrated
+    onto the high-utility modes. Fitted per direction, since the two disagree. Note the pair
+    labels are deterministic (see gaussian_mm_pref_data), so the Bradley-Terry optimum is the
+    beta -> 0 limit; beta measures how far along the tilt a run got, not distance from a
+    known optimum.
+
+    Computed entirely in log space, with the energy divided by `energy_log_density_scale` so
+    it is a log-density rather than merely proportional to one. 
     """
     device = next(policy.parameters()).device
 
     # Generate grid over GT distribution support
-    traj_grid = gen_xy_grid(x_range=(-10, 10), y_range=(-10,10), device=device, return_tensor=False)
+    traj_grid = gen_xy_grid(x_range=x_range, y_range=y_range, device=device, return_tensor=False)
 
     p_x = eval_gt_pdf(traj_grid, spec, conditional=conditional)
     q_energy = eval_energy(policy, torchify(traj_grid, device=device), t=t,
@@ -193,15 +233,37 @@ def kl_divergence(policy, spec, conditional, t=0, eps=1e-8):
 
     assert len(p_x) == len(q_energy), "Incorrect number of distributions"
 
-    kls = []
+    sigma = energy_log_density_scale(policy, t) if calibrate else 1.0
+
+    log_ps, log_qs = [], []
     for p, energy in zip(p_x, q_energy):
         p = np.clip(p.flatten().astype(np.float64), eps, None)
-        p = p / p.sum()
-        log_q = -energy.flatten().astype(np.float64)
-        log_q = log_q - logsumexp(log_q)          # normalize the policy over the grid
-        kls.append(float(np.sum(p * (np.log(p) - log_q))))
+        log_ps.append(_normalize_log(np.log(p)))
+        log_qs.append(_normalize_log(-energy.flatten().astype(np.float64) / sigma))
 
-    return float(np.mean(kls))
+    def key(name, i):
+        return name if len(log_ps) == 1 else f"{name}_obs{i}"
+
+    out = {}
+    for i, (lp, lq) in enumerate(zip(log_ps, log_qs)):
+        out[key("kl_forward", i)] = _kl(lp, lq)
+        out[key("kl_reverse", i)] = _kl(lq, lp)
+    if utility is None:
+        return out
+
+    # Sweep the tilt strength over the cached energy grid -- no extra policy forward passes.
+    u = np.asarray(utility(traj_grid), dtype=np.float64).flatten()
+    betas = np.logspace(-1, 2, 31) if betas is None else np.asarray(betas, dtype=np.float64)
+    for i, (lp, lq) in enumerate(zip(log_ps, log_qs)):
+        log_tilted = [_normalize_log(lp + u / beta) for beta in betas]
+        fwd = [_kl(lt, lq) for lt in log_tilted]
+        rev = [_kl(lq, lt) for lt in log_tilted]
+        i_f, i_r = int(np.argmin(fwd)), int(np.argmin(rev))
+        out.update({
+            key("kl_forward_tilted", i): fwd[i_f], key("beta_forward", i): float(betas[i_f]),
+            key("kl_reverse_tilted", i): rev[i_r], key("beta_reverse", i): float(betas[i_r]),
+        })
+    return out
 
 def log_likelihood(policy, spec, conditional, N=100, samples=None, opt_params=None, methods=("ddim",)):
     """Mean log ground-truth density of the policy's samples, one value per sample set."""
@@ -232,11 +294,17 @@ def mean_utility(utility, samples):
 
 
 def preference_win_rate(policy, spec, utility, test_points, t=0, conditional=False,
-                        n_noise=DEFAULT_ENERGY_N_NOISE, deterministic=True, seed=DEFAULT_ENERGY_SEED):
+                        n_noise=DEFAULT_ENERGY_N_NOISE, deterministic=True, seed=DEFAULT_ENERGY_SEED,
+                        tie_tol=0.0, n_pairs=1000, pair_seed=0):
     """
     Over a fixed held-out point set, how often does the policy's energy order a pair the
     same way the utility does? Held-out and fixed so the number is comparable across
     policies -- unlike ranking a policy's own samples, where the point set moves too.
+
+    tie_tol: set this to the margin the training pairs were generated with, so the test
+        comparisons are as hard as the ones the policy was trained on.
+    n_pairs: score this many randomly chosen pairs rather than all N*(N-1)/2, drawn from
+        `pair_seed` so every policy is scored on the same pairs.
 
     Returns one win rate per observation context.
     """
@@ -246,7 +314,8 @@ def preference_win_rate(policy, spec, utility, test_points, t=0, conditional=Fal
                            n_noise=n_noise, deterministic=deterministic, seed=seed)
     scores = utility(test_points)
     # lower energy = preferred by the model, so rank against -energy
-    return [pairwise_win_rate(scores, -energy.reshape(-1))[0] for energy in energies]
+    return [pairwise_win_rate(scores, -energy.reshape(-1), tie_tol=tie_tol,
+                              n_pairs=n_pairs, seed=pair_seed)[0] for energy in energies]
 
 
 ## -- VISUALIZATION FUNCTIONS --
@@ -471,23 +540,23 @@ def filter_samples(samples, conditional, n_clusters):
 
 def eval_GMM(policy, spec, condition_type, N, viz=False, training_samples=None, opt_params=None,
              methods=("ddim",), viz_opt=False, save_samples_path=None, seed=None,
-             utility=None, pref_test_points=None,
+             utility=None, pref_test_points=None, tie_tol=0.0,
              viz_timesteps=(90, 80, 70, 60, 50, 40, 30, 20, 10, 0), viz_dir=None):
     if seed is None:
         return _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
                          opt_params, methods, viz_opt, save_samples_path, utility,
-                         pref_test_points, viz_timesteps, viz_dir)
+                         pref_test_points, viz_timesteps, viz_dir, tie_tol)
     # See eval_maze below: seeded_context restores the caller's RNG on exit, so an
     # in-training eval doesn't reseed training's noise stream.
     with seeded_context(seed):
         return _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
                          opt_params, methods, viz_opt, save_samples_path, utility,
-                         pref_test_points, viz_timesteps, viz_dir)
+                         pref_test_points, viz_timesteps, viz_dir, tie_tol)
 
 
 def _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
               opt_params, methods, viz_opt, save_samples_path, utility,
-              pref_test_points, viz_timesteps, viz_dir):
+              pref_test_points, viz_timesteps, viz_dir, tie_tol=0.0):
     if condition_type == "conditional":
         conditional=True
     elif condition_type == "unconditional":
@@ -498,8 +567,9 @@ def _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
     has_energy = hasattr(policy, "get_energy")
 
     # KL divergence compares the learned energy landscape against the ground-truth density, so it is only
-    # available for policies that expose energies.
-    kl_div = kl_divergence(policy, spec, conditional) if has_energy else None
+    # available for policies that expose energies. With a utility it also reports the preference-tilted
+    # comparison and its fitted tilt strength.
+    kl = kl_divergence(policy, spec, conditional, utility=utility) if has_energy else None
 
     # Generate samples and calculate log likelihood
     samples, ll = log_likelihood(policy, spec, conditional, N, opt_params=opt_params, methods=methods)
@@ -512,8 +582,8 @@ def _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
         print(f"Saved samples to {save_samples_path}.npz")
 
     info = {"aggregated": {}}
-    if kl_div is not None:
-        info["aggregated"]["kl_div"] = kl_div
+    if kl is not None:
+        info["aggregated"].update(kl)
 
     for label, value in zip(labels, ll):
         info["aggregated"][f"{label}_log_likelihood"] = value
@@ -525,7 +595,7 @@ def _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
             info["aggregated"][f"mean_utility_{label}"] = value
         if pref_test_points is not None and has_energy:
             win_rates = preference_win_rate(policy, spec, utility, pref_test_points,
-                                            conditional=conditional)
+                                            conditional=conditional, tie_tol=tie_tol)
             for i, win_rate in enumerate(win_rates):
                 key = "win_rate" if len(win_rates) == 1 else f"win_rate_obs{i}"
                 info["aggregated"][key] = win_rate
