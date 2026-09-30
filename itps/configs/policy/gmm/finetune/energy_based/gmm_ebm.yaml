@@ -30,7 +30,7 @@ training:
   train_only_FiLM: True
   offline_steps: 1000
   online_steps: 0
-  eval_freq: 0   # no online evaluation during finetuning
+  eval_freq: 100
   save_freq: 50
   log_freq: 50
   save_checkpoint: True
@@ -56,7 +56,10 @@ training:
 eval:
   n_samples: 200
   opt_params: [{'n_opt': 1, 't_subset': 5, 'denoise': True}]
-  methods: ['ddim']
+  methods: ['ired', 'ddim']
+  utility: diagonal
+  pref_test_set: 'data/gmm_obs/gmm_cluster_line_unconditional_200_2_20260930_094128.npy'
+  tie_tol: 0.2
 
 policy:
   name: ebm_diffusion
