@@ -4,26 +4,36 @@
 # Supercloud LLsub triples submission script.
 # No SBATCH flags -- LLsub handles resource allocation via the triple [NODES,NPPN,NTPP].
 #
-# Currently pointed at the DPO param sweep on the NEW-PREF comparison set (pairs
-# selected by finetune_goal_dist_relative -- the unclipped, batch-normalized rule --
-# rather than the clipped finetune_goal_dist). Same grid as param_tuning_DPO/sweep_2,
-# which is its A/B partner on the clipped set; only dataset_root.pos/neg differ, and
-# the `new_pref` tag in the hydra dir and job name keeps the cohorts apart.
-# 144 runs = offline_steps(4) x lr(3) x batch_size(2) x train_only_FiLM(2) x mu(3).
+# Currently pointed at the DPO_forward param sweep on the GMM EBM, with the preference
+# pairs pooled as the base dataset (dataset_root has only pos/neg, and concat_pairs_as_base
+# builds the denoising anchor from them -- no separate base samples).
+# 320 runs = offline_steps(4) x lr(4) x batch_size(2) x train_only_FiLM(2) x mu(5),
+# with rho=500 and b=0 held fixed this round.
+#
+# itps/data/ is gitignored, so copy the data this sweep reads before submitting:
+#   data/gmm_obs/gmm_cluster_line_diagonal_any_100_1_unconditional_{pos,neg}.npy
+#   data/gmm_obs/gmm_cluster_line_unconditional_200_2_20260930_094128.npy  (win-rate test set)
+#   data/gmm/general/train/2026.09.18/gmm_2026.09.18.13.50.05_gmm_ebm_diffusion/checkpoints/last/pretrained_model/
 #
 # BEFORE submitting, generate your run configs once (from the itps/ dir). The path
 # must match CONFIGS_DIR further down, which is what run_job.py actually globs:
 #   python scripts/generate_configs.py \
-#       --config configs/policy/ICRA/maze/large_maze/param_tuning_DPO_new_pref/DPO_param_tune.yaml \
-#       --out_dir configs/policy/ICRA/maze/large_maze/param_tuning_DPO_new_pref/runs/
+#       --config configs/policy/gmm_param_tuning/DPO_forward_ebm_pref_only/sweep_1.yaml \
+#       --out_dir configs/policy/gmm_param_tuning/DPO_forward_ebm_pref_only/sweep_1/
 #
-# Then inspect that dir (expect 144 run_*.yaml) to verify the generated configs look correct.
+# Then inspect that dir (expect 320 run_*.yaml) to verify the generated configs look correct.
 #
 # Submit with:
-#   LLsub ./submit.sh [NODES,NPPN,NTPP]
+#   LLsub ./param_tune.sh [NODES,NPPN,NTPP]
 #
-# Example (2 nodes, 4 processes per node, 1 thread per process = 8 total processes):
-#   LLsub ./submit.sh [2,4,1]
+# GPU nodes have 2 GPUs, so keep NPPN at 2 (one run per GPU) or 4 (two per GPU); an odd
+# NPPN packs the GPUs unevenly. NTPP must cover 1 main process + the dataloader workers,
+# and a FINETUNING run holds TWO loaders at once (pooled base + pref), each with
+# cfg.training.num_workers workers -- so 1 + 2*num_workers = 7 at the default
+# num_workers: 3 (configs/default.yaml). NTPP=1 starves the loaders.
+#
+#   LLsub ./param_tune.sh [5,4,8]    # 20 procs, 2/GPU, 16 of the 320 runs each
+#   LLsub ./param_tune.sh [10,2,7]   # 20 procs, 1/GPU, same 16 runs each
 #
 # LLSUB_RANK: this process's index (0 to NODES*NPPN - 1)
 # LLSUB_SIZE: total number of processes (NODES * NPPN)
@@ -42,9 +52,9 @@ export WANDB_MODE=offline
 #export WANDB_DIR=/home/gridsan/aforsey/wandb_logs/gmm/conditional/fine_tuning/param_tuning
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-CONFIGS_DIR="/home/gridsan/aforsey/diff-tuning/itps/configs/policy/ICRA/maze/large_maze/param_tuning_DPO_new_pref/runs_sweep_3"    # Directory containing generated run_*.yaml files
+CONFIGS_DIR="/home/gridsan/aforsey/diff-tuning/itps/configs/policy/gmm_param_tuning/DPO_forward_ebm_pref_only/sweep_1"    # Directory containing generated run_*.yaml files
 SCRIPT="scripts/train.py"             # The python training script
-ENV_NAME="maze2d"                # env={ENV_NAME} passed to the script
+ENV_NAME="gmm"                # env={ENV_NAME} passed to the script
 # ──────────────────────────────────────────────────────────────────────────────
 
 echo "======================================"
