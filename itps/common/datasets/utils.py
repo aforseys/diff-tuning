@@ -28,8 +28,6 @@ from huggingface_hub import DatasetCard, HfApi, hf_hub_download, snapshot_downlo
 from PIL import Image as PILImage
 from safetensors.torch import load_file
 from torchvision import transforms
-from itps.common.datasets.push_dataset_to_hub._diffusion_policy_replay_buffer import (
-            ReplayBuffer as DiffusionPolicyReplayBuffer,)
 
 DATASET_CARD_TEMPLATE = """
 ---
@@ -255,7 +253,12 @@ def load_hf_dataset(repo_id: str, version: str, root: Path, split: str, goal_hor
             hf_dataset = datasets.Dataset.from_dict(data_dict)
         elif 'zarr' in root: # diffusion policy repo data format
             import numpy as np
-            
+            # Imported here, not at module scope: it pulls in zarr, which imports cupy, which
+            # fails to load libcublasLt on some clusters. Only this branch needs it.
+            from itps.common.datasets.push_dataset_to_hub._diffusion_policy_replay_buffer import (
+                ReplayBuffer as DiffusionPolicyReplayBuffer,
+            )
+
             def create_episode_and_frame_indices_from_episode_ends(episode_ends):
                 episode_lengths = np.diff(np.concatenate(([0], episode_ends)))  # Lengths of episodes
                 # Generate episode indices by repeating the episode number for each episode length
