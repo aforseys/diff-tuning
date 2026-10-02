@@ -13,7 +13,7 @@ class GMMEnv(Environment):
     name = "gmm"
 
     def evaluate(self, policy, cfg, seed=None, viz=False, viz_opt=False,
-                 training_samples=None, save_samples_path=None, viz_dir=None, **kwargs):
+                 training_samples=None, save_samples_path=None, viz_dir=None, ref_policy=None, **kwargs):
         """
         Sample from the policy and compare against the ground-truth mixture (KL divergence, where the
         policy exposes energies, and log-likelihood of its samples).
@@ -21,6 +21,9 @@ class GMMEnv(Environment):
         The ground-truth mixture is whichever spec `env.gmm_spec` names, and carries no
         preference. If `eval.utility` names one, the samples are additionally scored by
         that utility, and by win rate against `eval.pref_test_set` if one is given.
+
+        The win rate is computed every way the policy supports: by energy if it has one, and by
+        DPO's implicit reward if it was DPO-finetuned (relative to `ref_policy` for traditional DPO).
         """
         spec = get_spec(cfg.env.get("gmm_spec", DEFAULT_SPEC))
 
@@ -32,6 +35,10 @@ class GMMEnv(Environment):
         pref_test_points = np.load(pref_test_set)[:, 1:] if pref_test_set else None
         # Match the margin the training preference pairs were generated with.
         tie_tol = cfg.eval.get("tie_tol", 0.0)
+
+        is_dpo = bool(cfg.policy.get("finetune_dpo") or cfg.policy.get("finetune_dpo_forward_kl"))
+        if cfg.policy.get("finetune_dpo") and ref_policy is None:
+            raise ValueError("Traditional DPO's reward is relative to the reference policy, so pass ref_policy.")
 
         return eval_GMM(
             policy,
@@ -49,4 +56,6 @@ class GMMEnv(Environment):
             pref_test_points=pref_test_points,
             tie_tol=tie_tol,
             viz_dir=viz_dir,
+            is_dpo=is_dpo,
+            ref_policy=ref_policy if cfg.policy.get("finetune_dpo") else None,
         )

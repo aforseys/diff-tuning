@@ -490,11 +490,19 @@ def main(
     assert isinstance(policy, nn.Module)
     policy.eval()
 
+    # Traditional DPO's reward is relative to the policy it was finetuned from, so load that as the reference.
+    ref_policy = None
+    if hydra_cfg.policy.get("finetune_dpo"):
+        ref_path = hydra_cfg.pretrained_policy_path
+        ref_cfg = init_hydra_config(str(Path(ref_path) / "config.yaml"), [f"device={hydra_cfg.device}"])
+        ref_policy = make_policy(hydra_cfg=ref_cfg, pretrained_policy_name_or_path=str(ref_path))
+        ref_policy.eval()
+
     with torch.no_grad(), torch.autocast(device_type=device.type) if hydra_cfg.use_amp else nullcontext():
 
         if is_registered(hydra_cfg.env.name):
             info = get_env(hydra_cfg.env.name).evaluate(
-                policy, hydra_cfg, seed=hydra_cfg.seed,
+                policy, hydra_cfg, seed=hydra_cfg.seed, ref_policy=ref_policy,
                 viz=viz or viz_dir is not None, viz_opt=viz_opt, viz_dir=viz_dir,
                 training_samples=training_samples, save_samples_path=save_samples,
                 render=render, n_viz_samples=n_viz_samples,

@@ -140,6 +140,44 @@ def eval_energy(policy, trajs, t, conditional, n_clusters, batch_size=256,
     return energies
 
 
+def eval_dpo_reward(policy, trajs, conditional, n_clusters, ref_policy=None, n_timesteps=10,
+                    seed=DEFAULT_ENERGY_SEED, batch_size=256):
+    """
+    DPO's implicit reward over `trajs` (higher = more preferred), one list entry per
+    observation context: -mse for forward-KL DPO, or -(mse - mse_ref) with `ref_policy`
+    (traditional DPO), where mse is the denoising error averaged over `n_timesteps`
+    uniformly drawn (t, eps).
+
+    The draws are seeded and shared by every trajectory and by both policies, so the
+    reward differences between trajectories don't depend on which draws came up.
+    """
+    device = next(policy.parameters()).device
+    generator = torch.Generator(device=device).manual_seed(seed)
+    n_train_timesteps = policy.diffusion.noise_scheduler.config.num_train_timesteps
+    timesteps = torch.randint(0, n_train_timesteps, (n_timesteps,), device=device, generator=generator)
+    noise = torch.randn((n_timesteps, *trajs.shape[1:]), device=device, generator=generator)
+
+    def denoising_error(p, traj, obs):
+        batch = {**p.normalize_inputs(obs), **p.normalize_targets({'action': traj})}
+        errors = [p.diffusion._compute_denoising_sq_error(batch, t.expand(len(traj)), eps.expand_as(traj))
+                  for t, eps in zip(timesteps, noise)]
+        return torch.stack(errors).mean(dim=0)  # (B, 1)
+
+    observations = gen_obs(conditional=conditional, N=len(trajs), device=device, n_clusters=n_clusters)
+    rewards = []
+    for obs in observations:
+        outputs = []
+        for i in range(0, trajs.size(0), batch_size):
+            batch_traj = trajs[i:i+batch_size]
+            batch_obs = {k: v[i:i+batch_size] for k, v in obs.items()}
+            mse = denoising_error(policy, batch_traj, batch_obs)
+            if ref_policy is not None:
+                mse = mse - denoising_error(ref_policy, batch_traj, batch_obs)
+            outputs.append(-mse.detach().cpu().numpy())
+        rewards.append(np.concatenate(outputs, axis=0))
+    return rewards
+
+
 def eval_noise_pred(policy, trajs, t, conditional, n_clusters, batch_size=256):
     """
     The model's noise prediction at each point of `trajs` and timestep t, one (N, action_dim) array per
@@ -295,12 +333,15 @@ def mean_utility(utility, samples):
 
 def preference_win_rate(policy, spec, utility, test_points, t=0, conditional=False,
                         n_noise=DEFAULT_ENERGY_N_NOISE, deterministic=True, seed=DEFAULT_ENERGY_SEED,
-                        tie_tol=0.0, n_pairs=1000, pair_seed=0):
+                        tie_tol=0.0, n_pairs=1000, pair_seed=0, score="energy", ref_policy=None):
     """
-    Over a fixed held-out point set, how often does the policy's energy order a pair the
-    same way the utility does? Held-out and fixed so the number is comparable across
-    policies -- unlike ranking a policy's own samples, where the point set moves too.
+    Over a fixed held-out point set, how often does the policy order a pair the same way
+    the utility does? Held-out and fixed so the number is comparable across policies --
+    unlike ranking a policy's own samples, where the point set moves too.
 
+    score: what the policy ranks the points by. "energy" uses the policy's energy (lower =
+        preferred); "dpo" uses DPO's implicit reward (see eval_dpo_reward), relative to
+        `ref_policy` when one is given.
     tie_tol: set this to the margin the training pairs were generated with, so the test
         comparisons are as hard as the ones the policy was trained on.
     n_pairs: score this many randomly chosen pairs rather than all N*(N-1)/2, drawn from
@@ -309,13 +350,20 @@ def preference_win_rate(policy, spec, utility, test_points, t=0, conditional=Fal
     Returns one win rate per observation context.
     """
     device = next(policy.parameters()).device
-    energies = eval_energy(policy, torchify(test_points, device=device), t=t,
-                           conditional=conditional, n_clusters=spec.n_clusters,
-                           n_noise=n_noise, deterministic=deterministic, seed=seed)
-    scores = utility(test_points)
-    # lower energy = preferred by the model, so rank against -energy
-    return [pairwise_win_rate(scores, -energy.reshape(-1), tie_tol=tie_tol,
-                              n_pairs=n_pairs, seed=pair_seed)[0] for energy in energies]
+    trajs = torchify(test_points, device=device)
+    if score == "energy":
+        energies = eval_energy(policy, trajs, t=t, conditional=conditional, n_clusters=spec.n_clusters,
+                               n_noise=n_noise, deterministic=deterministic, seed=seed)
+        # lower energy = preferred by the model, so rank against -energy
+        values = [-energy for energy in energies]
+    elif score == "dpo":
+        values = eval_dpo_reward(policy, trajs, conditional=conditional, n_clusters=spec.n_clusters,
+                                 ref_policy=ref_policy, seed=seed)
+    else:
+        raise ValueError(f"Unknown win rate score '{score}'. Expected 'energy' or 'dpo'.")
+    gt_scores = utility(test_points)
+    return [pairwise_win_rate(gt_scores, v.reshape(-1), tie_tol=tie_tol,
+                              n_pairs=n_pairs, seed=pair_seed)[0] for v in values]
 
 
 ## -- VISUALIZATION FUNCTIONS --
@@ -541,22 +589,26 @@ def filter_samples(samples, conditional, n_clusters):
 def eval_GMM(policy, spec, condition_type, N, viz=False, training_samples=None, opt_params=None,
              methods=("ddim",), viz_opt=False, save_samples_path=None, seed=None,
              utility=None, pref_test_points=None, tie_tol=0.0,
-             viz_timesteps=(90, 80, 70, 60, 50, 40, 30, 20, 10, 0), viz_dir=None):
+             viz_timesteps=(90, 80, 70, 60, 50, 40, 30, 20, 10, 0), viz_dir=None,
+             is_dpo=False, ref_policy=None):
     if seed is None:
         return _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
                          opt_params, methods, viz_opt, save_samples_path, utility,
-                         pref_test_points, viz_timesteps, viz_dir, tie_tol)
+                         pref_test_points, viz_timesteps, viz_dir, tie_tol,
+                         is_dpo, ref_policy)
     # See eval_maze below: seeded_context restores the caller's RNG on exit, so an
     # in-training eval doesn't reseed training's noise stream.
     with seeded_context(seed):
         return _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
                          opt_params, methods, viz_opt, save_samples_path, utility,
-                         pref_test_points, viz_timesteps, viz_dir, tie_tol)
+                         pref_test_points, viz_timesteps, viz_dir, tie_tol,
+                         is_dpo, ref_policy)
 
 
 def _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
               opt_params, methods, viz_opt, save_samples_path, utility,
-              pref_test_points, viz_timesteps, viz_dir, tie_tol=0.0):
+              pref_test_points, viz_timesteps, viz_dir, tie_tol=0.0,
+              is_dpo=False, ref_policy=None):
     if condition_type == "conditional":
         conditional=True
     elif condition_type == "unconditional":
@@ -593,12 +645,17 @@ def _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
     if utility is not None:
         for label, value in zip(labels, mean_utility(utility, samples)):
             info["aggregated"][f"mean_utility_{label}"] = value
-        if pref_test_points is not None and has_energy:
-            win_rates = preference_win_rate(policy, spec, utility, pref_test_points,
-                                            conditional=conditional, tie_tol=tie_tol)
-            for i, win_rate in enumerate(win_rates):
-                key = "win_rate" if len(win_rates) == 1 else f"win_rate_obs{i}"
-                info["aggregated"][key] = win_rate
+        if pref_test_points is not None:
+            # Rank the held-out points every way this policy supports: by its energy, and by
+            # DPO's implicit reward if it was DPO-finetuned.
+            scores = (["energy"] if has_energy else []) + (["dpo"] if is_dpo else [])
+            for score in scores:
+                win_rates = preference_win_rate(policy, spec, utility, pref_test_points,
+                                                conditional=conditional, tie_tol=tie_tol,
+                                                score=score, ref_policy=ref_policy)
+                for i, win_rate in enumerate(win_rates):
+                    key = f"win_rate_{score}" if len(win_rates) == 1 else f"win_rate_{score}_obs{i}"
+                    info["aggregated"][key] = win_rate
 
     if training_samples is not None:
         train_data = np.load(training_samples)

@@ -433,7 +433,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
             policy.eval()
             with torch.no_grad(), torch.autocast(device_type=device.type) if cfg.use_amp else nullcontext():
                 if is_registered(cfg.env.name):
-                    eval_info = get_env(cfg.env.name).evaluate(policy, cfg, seed=cfg.seed)
+                    eval_info = get_env(cfg.env.name).evaluate(policy, cfg, seed=cfg.seed, ref_policy=ref_policy)
 
                 else:
                     assert eval_env is not None
