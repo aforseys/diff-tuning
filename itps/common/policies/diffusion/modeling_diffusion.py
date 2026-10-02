@@ -485,7 +485,7 @@ class DiffusionModel(nn.Module):
         w = self._timestep_weight(timesteps)
         loss = -w * F.logsigmoid(-dpo["rho"] * (loss_dpo_finetune + dpo["mu"] * loss_mse_raw - dpo["b"]))
 
-        return loss, {"loss_mse": (w * loss_mse_raw).mean(), "loss_dpo_finetune": loss_dpo_finetune.mean()}
+        return loss, {"loss_mse": (w * loss_mse_raw).mean(), "loss_dpo_finetune": (w * loss_dpo_finetune).mean()}
 
     def _demo_loss(self, batch: dict[str, Tensor], tune_batch: dict, timesteps: Tensor):
         """Fine-tuning on new demonstrations: denoising loss on `batch` plus denoising loss on the demos."""
