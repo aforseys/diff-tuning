@@ -56,6 +56,8 @@ eval:
   opt_params: []
   methods: ['ddim']   # plain diffusion has no energy to run IRED on
   utility: diagonal
+  pref_test_set: 'data/gmm_obs/gmm_cluster_line_unconditional_200_2_20260930_094128.npy'
+  tie_tol: 0.2
 
 policy:
   name: diffusion
