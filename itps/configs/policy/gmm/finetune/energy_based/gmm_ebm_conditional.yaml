@@ -58,7 +58,7 @@ eval:
   opt_params: [{'n_opt': 1, 't_subset': 5, 'denoise': True}]
   methods: ['ired', 'ddim']
   utility: diagonal
-  pref_test_set: 'data/gmm_obs/gmm_cluster_line_unconditional_200_2_20260930_094128.npy'
+  pref_test_set: ???  # TODO: needs test points split by cluster (was the unconditional cluster_line set)
   tie_tol: 0.2
 
 policy:
