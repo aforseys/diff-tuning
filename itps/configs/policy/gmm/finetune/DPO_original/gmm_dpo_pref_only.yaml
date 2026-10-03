@@ -28,7 +28,7 @@ hydra:
 device: "cuda"  # cpu
 
 training:
-  train_only_FiLM: true
+  train_only_FiLM: false
   offline_steps: 1000
   online_steps: 0
   eval_freq: 100
@@ -125,4 +125,4 @@ policy:
   finetune_dpo: true
   finetune_dpo_forward_kl: false
   dpo_params:
-    B: 5000
+    B: 2000
