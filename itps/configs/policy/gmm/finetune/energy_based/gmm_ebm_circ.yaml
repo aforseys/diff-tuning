@@ -39,7 +39,7 @@ training:
   grad_clip_norm: 10
   lr: 1.0e-4
   lr_scheduler: cosine
-  lr_warmup_steps: 0
+  lr_warmup_steps: 50
   adam_betas: [0.95, 0.999]
   adam_eps: 1.0e-8
   adam_weight_decay: 1.0e-6
