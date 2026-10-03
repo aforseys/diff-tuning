@@ -7,7 +7,7 @@ dataset_root:
   base: 'data/gmm_obs/gmm_cluster_line_unconditional_1000_0_20260918_122402.npy'
   pos: 'data/gmm_obs/gmm_cluster_line_diagonal_any_100_1_unconditional_pos.npy'
   neg: 'data/gmm_obs/gmm_cluster_line_diagonal_any_100_1_unconditional_neg.npy'
-pretrained_policy_path: 'data/gmm/general/train/2026.09.18/gmm_2026.09.18.13.50.03_gmm_diffusion/checkpoints/last/pretrained_model'
+pretrained_policy_path: 'data/gmm/general/train/2026.09.18/gmm_2026.09.18.13.50.01_gmm_diffusion/checkpoints/last/pretrained_model'
 
 env:
   gmm_spec: cluster_line
