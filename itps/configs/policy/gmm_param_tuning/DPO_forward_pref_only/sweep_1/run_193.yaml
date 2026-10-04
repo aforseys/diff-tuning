@@ -10,7 +10,7 @@ env:
   gmm_spec: cluster_line
 wandb:
   enable: true
-  project: gmm-dpo-forward-pt
+  project: gmm-dpo-forward-pt-dmse
 config_name: ???
 hydra:
   run:
@@ -38,9 +38,9 @@ training:
     observation.state: '[0]'
     action: '[0]'
   drop_n_last_frames: false
-  offline_steps: 500
-  lr: 0.0001
-  batch_size: 64
+  offline_steps: 300
+  lr: 1.0e-06
+  batch_size: 32
   train_only_FiLM: true
 eval:
   n_samples: 200
@@ -105,5 +105,5 @@ policy:
   finetune_dpo_forward_kl: true
   dpo_params:
     rho: 500
-    mu: 5
+    mu: 0.1
     b: 0

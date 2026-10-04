@@ -10,7 +10,7 @@ env:
   gmm_spec: cluster_line
 wandb:
   enable: true
-  project: gmm-dpo-original-ebm-pt
+  project: gmm-dpo-original-ebm-pt-dmse
 config_name: ???
 hydra:
   run:
@@ -38,8 +38,8 @@ training:
     observation.state: '[0]'
     action: '[0]'
   drop_n_last_frames: false
-  offline_steps: 300
-  lr: 0.001
+  offline_steps: 100
+  lr: 1.0e-07
   batch_size: 64
   train_only_FiLM: true
 eval:

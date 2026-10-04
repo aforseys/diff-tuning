@@ -10,7 +10,7 @@ env:
   gmm_spec: cluster_line
 wandb:
   enable: true
-  project: gmm-dpo-forward-ebm-pt
+  project: gmm-dpo-forward-ebm-pt-dmse
 config_name: ???
 hydra:
   run:
@@ -109,5 +109,5 @@ policy:
   finetune_dpo_forward_kl: true
   dpo_params:
     rho: 500
-    mu: 5
+    mu: 0.05
     b: 0

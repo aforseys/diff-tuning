@@ -3,11 +3,11 @@
 # (no EBM), with no separate base samples. Expand with:
 #   python scripts/generate_configs.py --config configs/policy/gmm_param_tuning/DPO_original_pref_only/sweep_1.yaml \
 #       --out_dir configs/policy/gmm_param_tuning/DPO_original_pref_only/sweep_1/
-# 4 lr x 2 batch_size x 2 train_only_FiLM x 4 offline_steps x 5 B = 320 runs.
+# 5 lr x 2 batch_size x 2 train_only_FiLM x 4 offline_steps x 5 B = 400 runs.
 sweep:
   training:
     offline_steps: [100, 300, 500, 1000]
-    lr: [1.0e-3, 1.0e-4, 1.0e-5, 1.0e-6]
+    lr: [1.0e-3, 1.0e-4, 1.0e-5, 1.0e-6, 1.0e-7]
     batch_size: [32, 64]      # only 100 preference pairs, so keep this under 100
     train_only_FiLM: [true, false]
   policy:
@@ -29,7 +29,7 @@ env:
 
 wandb:
   enable: true
-  project: gmm-dpo-original-pt
+  project: gmm-dpo-original-pt-dmse
 
 config_name: ???  # Set at runtime by run_job.py
 

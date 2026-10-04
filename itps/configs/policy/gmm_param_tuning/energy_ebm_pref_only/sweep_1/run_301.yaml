@@ -10,7 +10,7 @@ env:
   gmm_spec: cluster_line
 wandb:
   enable: true
-  project: gmm-energy-ebm-pt
+  project: gmm-energy-ebm-pt-dmse
 config_name: ???
 hydra:
   run:
@@ -39,7 +39,7 @@ training:
     action: '[0]'
   drop_n_last_frames: false
   offline_steps: 1000
-  lr: 1.0e-06
+  lr: 0.001
   batch_size: 32
   train_only_FiLM: true
 eval:
