@@ -4,6 +4,7 @@
 """The GMM environment: a 2D Gaussian-mixture action distribution with a known ground-truth density."""
 import numpy as np
 
+from itps.common.policies.diffusion.modeling_diffusion import DEFAULT_ENERGY_SEED
 from itps.envs.base_env import Environment
 from itps.envs.gmm.eval import eval_GMM
 from itps.envs.gmm.gaussian_mm import DEFAULT_SPEC, get_spec, get_utility
@@ -12,7 +13,7 @@ from itps.envs.gmm.gaussian_mm import DEFAULT_SPEC, get_spec, get_utility
 class GMMEnv(Environment):
     name = "gmm"
 
-    def evaluate(self, policy, cfg, seed=None, viz=False, viz_opt=False,
+    def evaluate(self, policy, cfg, seed=None, viz=False, viz_opt=False, viz_dmse=False,
                  training_samples=None, save_samples_path=None, viz_dir=None, ref_policy=None, **kwargs):
         """
         Sample from the policy and compare against the ground-truth mixture (KL divergence, where the
@@ -24,6 +25,9 @@ class GMMEnv(Environment):
 
         The win rate is computed every way the policy supports: by energy if it has one, and by
         DPO's implicit reward if it was DPO-finetuned (relative to `ref_policy` for traditional DPO).
+
+        With viz_dmse, the only figure is the denoising-MSE map over the grid, averaged over the
+        seeded (t, eps) draws `eval.dmse_seed` picks (default: the win rate's seed).
         """
         spec = get_spec(cfg.env.get("gmm_spec", DEFAULT_SPEC))
 
@@ -58,4 +62,6 @@ class GMMEnv(Environment):
             viz_dir=viz_dir,
             is_dpo=is_dpo,
             ref_policy=ref_policy if cfg.policy.get("finetune_dpo") else None,
+            viz_dmse=viz_dmse,
+            dmse_seed=cfg.eval.get("dmse_seed", DEFAULT_ENERGY_SEED),
         )

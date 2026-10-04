@@ -13,6 +13,7 @@ import os
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
+from matplotlib.colors import LogNorm
 from scipy.special import logsumexp
 
 from itps.common.policies.diffusion.modeling_diffusion import (
@@ -336,8 +337,7 @@ def preference_win_rate(policy, spec, utility, test_points, t=0, conditional=Fal
                         tie_tol=0.0, n_pairs=1000, pair_seed=0, score="energy", ref_policy=None):
     """
     Over a fixed held-out point set, how often does the policy order a pair the same way
-    the utility does? Held-out and fixed so the number is comparable across policies --
-    unlike ranking a policy's own samples, where the point set moves too.
+    the utility does? Held-out and fixed so the number is comparable across policies.
 
     score: what the policy ranks the points by. "energy" uses the policy's energy (lower =
         preferred); "dpo" uses DPO's implicit reward (see eval_dpo_reward), relative to
@@ -398,7 +398,7 @@ def viz_inference(policy, samples, conditional, spec=None, learned_contour=True,
         xx = trajs[:,0].reshape(200,200)
         yy = trajs[:,1].reshape(200,200)
 
-    #plot all landscapes in list given trajs
+    #plot all landscapes in list given trajs (len(list) = n conditions)
     for i in range(len(energies)):
         #plot
         zz = energies[i].reshape(200,200)
@@ -412,18 +412,18 @@ def viz_inference(policy, samples, conditional, spec=None, learned_contour=True,
         # everything outside the modes onto a flat floor.
         im = plt.imshow(zz, origin="lower",
                     extent=[xx.min(), xx.max(), yy.min(), yy.max()],
-                    aspect="auto",
+                    aspect="equal",
                     cmap="viridis_r" if learned_contour else "viridis",
                     )
         plt.colorbar(im, label="energy (lower = more likely)" if learned_contour else "density")
-        # plot where sampled points are with x's
+        # plot where sampled points are
         plt.scatter(samples[i][:,0], samples[i][:,1], s=8, alpha=0.6, edgecolor='none', c='red')
         plt.xlabel("X")
         plt.ylabel("Y")
         plt.title(title)
         _show_or_save(fig, save_dir, f"{name}_obs{i}")
 
-def viz_energy_landscape(policy, conditional, spec=None, t=0, x_range=(-8, 8), y_range=(-8,8),
+def viz_energy_landscape(policy, conditional, spec=None, t=0, x_range=(-10, 10), y_range=(-10, 10),
                          save_dir=None, name="energy_surface"):
     """3D surface of the raw energy at denoising timestep t."""
     device = next(policy.parameters()).device
@@ -434,7 +434,7 @@ def viz_energy_landscape(policy, conditional, spec=None, t=0, x_range=(-8, 8), y
     xx = trajs[:, 0, 0].cpu().numpy().reshape(200,200)
     yy = trajs[:, 0, 1].cpu().numpy().reshape(200,200)
 
-    #plot all energy landscapes in list given trajs
+    #plot all energy landscapes in list given trajs (len(list) = n conditions)
     for i in range(len(energies)):
         zz = energies[i].reshape(200,200)
         if conditional:
@@ -453,8 +453,43 @@ def viz_energy_landscape(policy, conditional, spec=None, t=0, x_range=(-8, 8), y
         _show_or_save(fig, save_dir, f"{name}_obs{i}")
 
 
-def viz_gradient_field(policy, conditional, spec=None, t=0, x_range=(-8, 8), y_range=(-8, 8),
-                       arrow_n=25, background="white", save_dir=None, name="grad"):
+def viz_denoising_mse(policy, conditional, spec=None, seed=DEFAULT_ENERGY_SEED, x_range=(-10, 10), y_range=(-10, 10),
+                      save_dir=None, name="denoising_mse"):
+    """
+    Heatmap of the denoising MSE over the grid, averaged over the same seeded (t, eps) draws
+    the DPO win rate uses (see eval_dpo_reward), so every grid point sees identical draws.
+    """
+    device = next(policy.parameters()).device
+    trajs = gen_xy_grid(x_range=x_range, y_range=y_range, device=device)
+    # Without a reference policy, eval_dpo_reward is -mse.
+    rewards = eval_dpo_reward(policy, trajs, conditional=conditional,
+                              n_clusters=spec.n_clusters if spec is not None else 1, seed=seed)
+
+    xx = trajs[:, 0, 0].cpu().numpy().reshape(200,200)
+    yy = trajs[:, 0, 1].cpu().numpy().reshape(200,200)
+
+    for i in range(len(rewards)):
+        zz = -rewards[i].reshape(200,200)
+        if conditional:
+            title = f"Denoising MSE conditioned on cluster observation {i}"
+        else:
+            title = "Denoising MSE (unconditional)"
+
+        fig = plt.figure(i)
+        # Log scale: the error far from the data is orders of magnitude above the error near the
+        # modes, which a linear scale would flatten to one color.
+        im = plt.imshow(zz, origin="lower",
+                        extent=[xx.min(), xx.max(), yy.min(), yy.max()],
+                        aspect="equal", cmap="viridis_r", norm=LogNorm())
+        plt.colorbar(im, label="denoising MSE (lower = more likely)")
+        plt.xlabel("X")
+        plt.ylabel("Y")
+        plt.title(title)
+        _show_or_save(fig, save_dir, f"{name}_obs{i}")
+
+
+def viz_gradient_field(policy, conditional, spec=None, t=0, x_range=(-10, 10), y_range=(-10, 10),
+                       arrow_n=30, background="white", save_dir=None, name="grad"):
     """
     Quiver of the denoising direction -eps_hat over a grid at timestep t. Works for any diffusion policy;
     for an EBM, -eps_hat is -dE/dx_t.
@@ -511,8 +546,9 @@ def viz_sample_comparison(samples, train_data, save_dir=None, name="samples_vs_t
         plt.scatter(samples[i][:,0], samples[i][:,1], s=8, alpha=0.6, edgecolor='none')
         plt.xlabel("X")
         plt.ylabel("Y")
-        plt.xlim(-8,8)
-        plt.ylim(-8,8)
+        plt.xlim(-10, 10)
+        plt.ylim(-10, 10)
+        plt.gca().set_aspect("equal")
         plt.title(f"Samples against training data (Obs:{i})")
         _show_or_save(fig, save_dir, f"{name}_obs{i}")
 
@@ -546,7 +582,7 @@ def viz_ired_grad_steps(policy, grad_history, t, conditional, opt_vals, spec=Non
 
     for step_i, step_data in enumerate(steps_at_t):
         ax = axes[step_i]
-        ax.imshow(zz, origin='lower', extent=[xx.min(), xx.max(), yy.min(), yy.max()], aspect='auto', cmap='viridis_r')
+        ax.imshow(zz, origin='lower', extent=[xx.min(), xx.max(), yy.min(), yy.max()], aspect='equal', cmap='viridis_r')
 
         pos = step_data['pos'].squeeze(1).cpu().numpy()   # (B, 2)
         nxt = step_data['next_pos'].squeeze(1).cpu().numpy()  # (B, 2)
@@ -590,25 +626,25 @@ def eval_GMM(policy, spec, condition_type, N, viz=False, training_samples=None, 
              methods=("ddim",), viz_opt=False, save_samples_path=None, seed=None,
              utility=None, pref_test_points=None, tie_tol=0.0,
              viz_timesteps=(90, 80, 70, 60, 50, 40, 30, 20, 10, 0), viz_dir=None,
-             is_dpo=False, ref_policy=None):
+             is_dpo=False, ref_policy=None, viz_dmse=False, dmse_seed=DEFAULT_ENERGY_SEED):
     if seed is None:
         return _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
                          opt_params, methods, viz_opt, save_samples_path, utility,
                          pref_test_points, viz_timesteps, viz_dir, tie_tol,
-                         is_dpo, ref_policy)
+                         is_dpo, ref_policy, viz_dmse, dmse_seed)
     # See eval_maze below: seeded_context restores the caller's RNG on exit, so an
     # in-training eval doesn't reseed training's noise stream.
     with seeded_context(seed):
         return _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
                          opt_params, methods, viz_opt, save_samples_path, utility,
                          pref_test_points, viz_timesteps, viz_dir, tie_tol,
-                         is_dpo, ref_policy)
+                         is_dpo, ref_policy, viz_dmse, dmse_seed)
 
 
 def _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
               opt_params, methods, viz_opt, save_samples_path, utility,
               pref_test_points, viz_timesteps, viz_dir, tie_tol=0.0,
-              is_dpo=False, ref_policy=None):
+              is_dpo=False, ref_policy=None, viz_dmse=False, dmse_seed=DEFAULT_ENERGY_SEED):
     if condition_type == "conditional":
         conditional=True
     elif condition_type == "unconditional":
@@ -625,11 +661,15 @@ def _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
 
     # Generate samples and calculate log likelihood
     samples, ll = log_likelihood(policy, spec, conditional, N, opt_params=opt_params, methods=methods)
-    labels = method_labels(methods, opt_params)
+
+    # One label per sample set, in run_inference's order (each IRED opt_params entry, then DDIM).
+    # wandb_labels name the logged metrics, so keep them stable for logged history to line up;
+    # file_labels name what is saved to disk (the .npz keys and figure files).
+    wandb_labels = method_labels(methods, opt_params)
+    file_labels = method_labels(methods, opt_params, ired_prefix='ired', ddim_label='ddim')
 
     if save_samples_path is not None:
-        save_labels = method_labels(methods, opt_params, ired_prefix='ired', ddim_label='ddim')
-        save_dict = {label: np.concatenate(s, axis=0) for label, s in zip(save_labels, samples)}
+        save_dict = {label: np.concatenate(s, axis=0) for label, s in zip(file_labels, samples)}
         np.savez(save_samples_path, **save_dict)
         print(f"Saved samples to {save_samples_path}.npz")
 
@@ -637,13 +677,25 @@ def _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
     if kl is not None:
         info["aggregated"].update(kl)
 
-    for label, value in zip(labels, ll):
+    for label, value in zip(wandb_labels, ll):
         info["aggregated"][f"{label}_log_likelihood"] = value
 
-    # Post-hoc preference metrics. The ground-truth density above knows nothing about
-    # preference, so these are what say whether finetuning moved the policy our way.
+    # Mean denoising MSE on the held-out points, which are drawn from the original (untilted)
+    # distribution: a cross-entropy proxy for how much of it finetuning preserved, available for
+    # every policy (unlike the energy KL). Same seeded (t, eps) draws as the DPO win rate.
+    if pref_test_points is not None:
+        device = next(policy.parameters()).device
+        # Deliberately no ref_policy, even for traditional DPO: without one, eval_dpo_reward is
+        # -mse of this policy alone, not the reference-relative -(mse - mse_ref) its win rate uses.
+        rewards = eval_dpo_reward(policy, torchify(pref_test_points, device=device), conditional=conditional,
+                                  n_clusters=spec.n_clusters, seed=dmse_seed)
+        for i, reward in enumerate(rewards):
+            key = "dmse_test" if len(rewards) == 1 else f"dmse_test_obs{i}"
+            info["aggregated"][key] = float(-reward.mean())
+
+    # Post-hoc preference metrics.
     if utility is not None:
-        for label, value in zip(labels, mean_utility(utility, samples)):
+        for label, value in zip(wandb_labels, mean_utility(utility, samples)):
             info["aggregated"][f"mean_utility_{label}"] = value
         if pref_test_points is not None:
             # Rank the held-out points every way this policy supports: by its energy, and by
@@ -668,29 +720,41 @@ def _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
         # sampler-order index s and timestep t so each series sorts together.
         def sample_sets(samples):
             """(label, per-context samples) for each sampling method, DDIM first."""
-            ired = list(zip(method_labels(['ired'], opt_params, ired_prefix='ired'), samples[0:len(opt_params)])) \
+            ired = list(zip(file_labels[0:len(opt_params)], samples[0:len(opt_params)])) \
                 if 'ired' in methods else []
-            return ([("ddim", samples[-1])] if 'ddim' in methods else []) + ired
+            return ([(file_labels[-1], samples[-1])] if 'ddim' in methods else []) + ired
 
         # Visualize training samples if passed in
         if training_samples is not None:
             train_data_raw = np.load(training_samples)
             train_data_split = filter_samples(train_data_raw, conditional, spec.n_clusters)
             N_per_obs = len(train_data_split[0])
-            samples = run_inference(policy, N=N_per_obs, conditional=conditional, methods=methods,
-                                    opt_params=opt_params, n_clusters=spec.n_clusters)
-            for label, s in sample_sets(samples):
+            # Draw as many policy samples per context as there are training points, so the two
+            # scatters' densities compare fairly; reuse the eval samples when the counts already
+            # match. A separate name keeps the plots below on the samples the logged metrics used.
+            if N_per_obs == N:
+                train_cmp_samples = samples
+            else:
+                train_cmp_samples = run_inference(policy, N=N_per_obs, conditional=conditional, methods=methods,
+                                                  opt_params=opt_params, n_clusters=spec.n_clusters)
+            for label, s in sample_sets(train_cmp_samples):
                 viz_sample_comparison(s, train_data_split, save_dir=viz_dir, name=f"samples_vs_train_{label}")
 
-        if viz_opt:
-            # IRED steps only, so different opt_params can be compared quickly.
+        if viz_dmse:
+            # Denoising-MSE map only, for any diffusion policy.
+            viz_denoising_mse(policy, conditional, spec=spec, seed=dmse_seed,
+                              save_dir=viz_dir, name="denoising_mse")
+        elif viz_opt:
             grad_N = min(50, N)
             grad_histories_per_opt = run_inference_with_grad_steps(
                 policy, N=grad_N, conditional=conditional, opt_params=opt_params,
                 n_clusters=spec.n_clusters,
             )
+            # Runs IRED even when 'ired' isn't in `methods` (so file_labels may have no IRED
+            # entries), hence labels straight from opt_params.
+            ired_file_labels = method_labels(['ired'], opt_params, ired_prefix='ired')
             for step_i, opt_vals in enumerate(opt_params):
-                label = method_labels(['ired'], [opt_vals], ired_prefix='ired')[0]
+                label = ired_file_labels[step_i]
                 # One history per observation context (a single one when unconditional).
                 for context, grad_hist in enumerate(grad_histories_per_opt[step_i]):
                     optimized = [t for t in sorted(grad_hist, reverse=True) if grad_hist[t]]
