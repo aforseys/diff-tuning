@@ -616,6 +616,13 @@ if __name__ == "__main__":
         help="Path (without extension) to save generated samples as an .npz file.",
     )
     parser.add_argument(
+        "--training-samples",
+        type=str,
+        default=None,
+        help="Path to the (N, 3) .npy the policy was trained on: prints the ground-truth "
+             "log-likelihood of those points and, with --viz, plots policy samples against them (GMM only).",
+    )
+    parser.add_argument(
         "--viz-samples",
         type=int,
         default=0,
@@ -643,6 +650,7 @@ if __name__ == "__main__":
             viz_opt=args.viz_opt,
             viz_dmse=args.viz_dmse,
             viz_dir=args.viz_dir,
+            training_samples=args.training_samples,
             save_samples=args.save_samples,
             render=args.render,
             n_viz_samples=args.viz_samples,
