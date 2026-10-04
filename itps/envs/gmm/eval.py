@@ -327,9 +327,13 @@ def log_likelihood(policy, spec, conditional, N=100, samples=None, opt_params=No
     return samples, ll
 
 
-def mean_utility(utility, samples):
-    """Mean preference utility of each sample set (higher = the policy prefers what we do)."""
-    return [float(utility(np.concatenate(s, axis=0)).mean()) for s in samples]
+def utility_stats(utility, samples):
+    """(mean, min, max) preference utility of each sample set, pooled over contexts (higher = preferred)."""
+    stats = []
+    for s in samples:
+        u = utility(np.concatenate(s, axis=0))
+        stats.append((float(u.mean()), float(u.min()), float(u.max())))
+    return stats
 
 
 def preference_win_rate(policy, spec, utility, test_points, t=0, conditional=False,
@@ -695,8 +699,10 @@ def _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
 
     # Post-hoc preference metrics.
     if utility is not None:
-        for label, value in zip(wandb_labels, mean_utility(utility, samples)):
-            info["aggregated"][f"mean_utility_{label}"] = value
+        for label, (mean_u, min_u, max_u) in zip(wandb_labels, utility_stats(utility, samples)):
+            info["aggregated"][f"mean_utility_{label}"] = mean_u
+            info["aggregated"][f"min_utility_{label}"] = min_u
+            info["aggregated"][f"max_utility_{label}"] = max_u
         if pref_test_points is not None:
             # Rank the held-out points every way this policy supports: by its energy, and by
             # DPO's implicit reward if it was DPO-finetuned.
@@ -712,8 +718,14 @@ def _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
     if training_samples is not None:
         train_data = np.load(training_samples)
         filtered_samples = filter_samples(train_data, conditional, spec.n_clusters)
-        ll_training = log_likelihood(policy, spec, conditional, samples=filtered_samples)
-        print('Log likelihood of training samples:', ll_training)
+        _, ll_training = log_likelihood(policy, spec, conditional, samples=filtered_samples)
+        print('Log likelihood of training samples:', ll_training[0])
+        if utility is not None:
+            # Same stats as the generated samples', as a reference for what the data itself spans.
+            mean_u, min_u, max_u = utility_stats(utility, [filtered_samples])[0]
+            info["aggregated"].update({"mean_utility_train": mean_u, "min_utility_train": min_u,
+                                       "max_utility_train": max_u})
+            print(f'Utility of training samples: mean {mean_u:.4f}, range [{min_u:.4f}, {max_u:.4f}]')
 
     if viz:
         # viz_dir=None shows each figure; otherwise every figure is saved there, named by type,
