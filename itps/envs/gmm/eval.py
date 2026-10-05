@@ -462,6 +462,10 @@ def viz_denoising_mse(policy, conditional, spec=None, seed=DEFAULT_ENERGY_SEED, 
     """
     Heatmap of the denoising MSE over the grid, averaged over the same seeded (t, eps) draws
     the DPO win rate uses (see eval_dpo_reward), so every grid point sees identical draws.
+
+    With save_dir, the grid values are also saved as <name>_obs{i}.npz (keys x, y, dmse), so
+    figures for several models can be redrawn on one shared color scale
+    (scripts/eval/plot_gmm_dmse.py).
     """
     device = next(policy.parameters()).device
     trajs = gen_xy_grid(x_range=x_range, y_range=y_range, device=device)
@@ -474,6 +478,9 @@ def viz_denoising_mse(policy, conditional, spec=None, seed=DEFAULT_ENERGY_SEED, 
 
     for i in range(len(rewards)):
         zz = -rewards[i].reshape(200,200)
+        if save_dir is not None:
+            os.makedirs(save_dir, exist_ok=True)
+            np.savez(os.path.join(save_dir, f"{name}_obs{i}.npz"), x=xx, y=yy, dmse=zz)
         if conditional:
             title = f"Denoising MSE conditioned on cluster observation {i}"
         else:
