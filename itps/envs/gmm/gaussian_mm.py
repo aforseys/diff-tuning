@@ -191,12 +191,18 @@ def diagonal_utility(X):
     return np.asarray(X, dtype=float) @ _DIAGONAL_DIRECTION
 
 
+def diagonal_reversed_utility(X):
+    """The reverse of `diagonal`: preference increases toward the bottom left (-x-y direction)."""
+    return -diagonal_utility(X)
+
+
 def abs_y_utility(X):
     """Preference increases with distance from the y=0 midline, either up or down."""
     return np.abs(np.asarray(X, dtype=float)[:, 1])
 
 
-GMM_UTILITIES = {"diagonal": diagonal_utility, "abs_y": abs_y_utility}
+GMM_UTILITIES = {"diagonal": diagonal_utility, "diagonal_reversed": diagonal_reversed_utility,
+                 "abs_y": abs_y_utility}
 
 
 def get_utility(name):
