@@ -22,6 +22,7 @@ from itps.common.policies.diffusion.modeling_diffusion import (
 )
 from itps.common.utils.preference_scoring import pairwise_win_rate
 from itps.common.utils.utils import seeded_context
+from itps.envs.gmm.gaussian_mm import draw_cluster_outlines
 
 
 ## -- RUN INFERENCE --
@@ -422,6 +423,9 @@ def viz_inference(policy, samples, conditional, spec=None, learned_contour=True,
         plt.colorbar(im, label="energy (lower = more likely)" if learned_contour else "density")
         # plot where sampled points are
         plt.scatter(samples[i][:,0], samples[i][:,1], s=8, alpha=0.6, edgecolor='none', c='red')
+        # Mark where the true clusters are on the learned energy (the density plot already shows them).
+        if learned_contour and spec is not None:
+            draw_cluster_outlines(plt.gca(), spec)
         plt.xlabel("X")
         plt.ylabel("Y")
         plt.title(title)
@@ -538,6 +542,8 @@ def viz_gradient_field(policy, conditional, spec=None, t=0, x_range=(-10, 10), y
         q = ax.quiver(ax_pts, ay_pts, dx * arrow_scale, dy * arrow_scale, magnitudes,
                       cmap="cool", pivot="mid", angles="xy", scale_units="xy", scale=1)
         fig.colorbar(q, ax=ax, label="|eps_hat|")
+        if spec is not None:
+            draw_cluster_outlines(ax, spec)
         ax.set_xlim(x_range)
         ax.set_ylim(y_range)
         ax.set_aspect("equal")
@@ -605,6 +611,8 @@ def viz_ired_grad_steps(policy, grad_history, t, conditional, opt_vals, spec=Non
         q = ax.quiver(pos[:, 0], pos[:, 1], dx, dy, magnitudes,
                     cmap='cool', alpha=0.8, scale=1, scale_units='xy', angles='xy', zorder=4)
         plt.colorbar(q, ax=ax, label='step magnitude')
+        if spec is not None:
+            draw_cluster_outlines(ax, spec)
 
         ax.set_xlim(x_range)
         ax.set_ylim(y_range)

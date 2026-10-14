@@ -23,6 +23,7 @@ from pathlib import Path
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.patches import Ellipse
 
 # ------- GMM density utilities -------
 
@@ -242,6 +243,15 @@ def save_observations(observations, path, **meta):
     return path
 
 # ------- Plotting -------
+
+def draw_cluster_outlines(ax, spec, n_std=2.0):
+    """Dashed black outline of each mixture component at n_std standard deviations."""
+    for mean, cov in zip(spec.means, spec.covs):
+        eigvals, eigvecs = np.linalg.eigh(cov)
+        angle = np.degrees(np.arctan2(eigvecs[1, -1], eigvecs[0, -1]))
+        width, height = 2 * n_std * np.sqrt(eigvals[::-1])
+        ax.add_patch(Ellipse(mean, width, height, angle=angle, fill=False, linestyle="--",
+                             linewidth=1.2, edgecolor="black", zorder=3))
 
 def plot_samples(X, x_range=(-8,8), y_range=(-8,8)):
     plt.figure(figsize=(6, 5))
