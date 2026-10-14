@@ -53,12 +53,12 @@ def gen_obs(conditional, N, device, spec=None, seed=0, values=None):
         observations.append(obs_dict)
     return observations
 
-def run_inference(policy, N=100, conditional=False, methods=("ddim",), opt_params=None, spec=None):
+def run_inference(policy, N=100, conditional=False, methods=("ddim",), opt_params=None, spec=None, cond_values=None):
     if 'ired' in methods and opt_params is None:
         raise ValueError("IRED sampling requires `opt_params` (one dict per IRED variant).")
 
     device = next(policy.parameters()).device
-    obs = gen_obs(conditional=conditional, N=N, device=device, spec=spec)
+    obs = gen_obs(conditional=conditional, N=N, device=device, spec=spec, values=cond_values)
 
     IRED_inference_output = [[] for _ in opt_params] if 'ired' in methods else None
     DDIM_inference_output = [] if 'ddim' in methods else None
@@ -569,23 +569,27 @@ def viz_gradient_field(policy, conditional, spec=None, t=0, x_range=(-10, 10), y
         fig.tight_layout()
         _show_or_save(fig, save_dir, f"{name}_obs{i}")
 
-def viz_energy_condition_sweep(policy, spec=None, t=0, cond_values=None, x_range=(-5, 5), y_range=(-5, 5),
-                               save_dir=None, name="energy_cond_sweep"):
+def viz_energy_condition_sweep(policy, spec=None, t=0, cond_values=None, n_samples=200, x_range=(-5, 5),
+                               y_range=(-5, 5), save_dir=None, name="energy_cond_sweep"):
     """
     The energy over the grid at timestep t, one figure per conditioning value (default -5 to 5
-    every 0.2), with that value marked by a red dot on the x-axis. Shows how the landscape
-    follows a continuous condition, including between and beyond the training windows.
+    every 0.2), with `n_samples` DDIM samples drawn at that value on top and the value marked by
+    a red dot on the x-axis. Shows how the landscape and the samples follow a continuous
+    condition, including between and beyond the training windows.
     """
     if cond_values is None:
         cond_values = np.round(np.linspace(-5, 5, 51), 1) + 0.0  # + 0.0 turns -0.0 into 0.0
     device = next(policy.parameters()).device
     grid = gen_xy_grid(x_range=x_range, y_range=y_range, device=device)
     energies = eval_energy(policy, grid, t, conditional=True, spec=spec, cond_values=cond_values)
+    samples = run_inference(policy, N=n_samples, conditional=True, methods=("ddim",), spec=spec,
+                            cond_values=cond_values)[-1]
 
-    for k, (c, energy) in enumerate(zip(cond_values, energies)):
+    for k, (c, energy, s) in enumerate(zip(cond_values, energies, samples)):
         fig, ax = plt.subplots(figsize=(6.5, 5.5))
         im = ax.imshow(energy.reshape(200, 200), origin="lower", extent=[*x_range, *y_range], cmap="viridis_r")
         fig.colorbar(im, ax=ax, label="energy (lower = more likely)")
+        ax.scatter(s[:, 0], s[:, 1], s=8, alpha=0.6, edgecolor="none", c="red")
         if spec is not None:
             draw_cluster_outlines(ax, spec)
         # Sits on the axis line, so unclipped to draw in full.

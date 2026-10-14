@@ -30,7 +30,8 @@ class GMMEnv(Environment):
         seeded (t, eps) draws `eval.dmse_seed` picks (default: the win rate's seed).
 
         With viz_cond_sweep, the only figures are the t=0 energy for each conditioning value from
-        -5 to 5 (every 0.2), each marking its value on the x-axis. Conditional EBMs only.
+        -5 to 5 (every 0.2), with 200 DDIM samples drawn at that value on top and the value marked
+        on the x-axis. Conditional EBMs only.
         """
         spec = get_spec(cfg.env.get("gmm_spec", DEFAULT_SPEC))
 
