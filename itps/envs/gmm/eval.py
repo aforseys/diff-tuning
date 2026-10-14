@@ -26,16 +26,20 @@ from itps.envs.gmm.gaussian_mm import draw_cluster_outlines
 
 
 ## -- RUN INFERENCE --
-def gen_obs(conditional, N, device, spec=None, seed=0):
+def gen_obs(conditional, N, device, spec=None, seed=0, values=None):
     """
     Generates a batch object that matches same type as passed through model, only contains obs.
 
     Conditional: one batch per cluster of `spec`, observations from `spec.sample_condition` (the
     cluster index, or values within the cluster's condition window). Those draws use their own
     seeded generator, so they repeat across calls and leave the global RNG untouched.
+
+    `values` overrides both: one batch per value, with every observation set to it.
     """
     rng = np.random.default_rng(seed)
-    if conditional and spec is not None:
+    if values is not None:
+        conditions = [np.full(N, v) for v in values]
+    elif conditional and spec is not None:
         conditions = [spec.sample_condition(np.full(N, i), rng) for i in range(spec.n_clusters)]
     else:
         conditions = [np.zeros(N)]
@@ -133,13 +137,13 @@ def gen_xy_grid(x_range, y_range, device, return_tensor=True, n=200):
     return trajs
 
 def eval_energy(policy, trajs, t, conditional, spec, batch_size=256,
-                deterministic=True, n_noise=DEFAULT_ENERGY_N_NOISE, seed=DEFAULT_ENERGY_SEED):
+                deterministic=True, n_noise=DEFAULT_ENERGY_N_NOISE, seed=DEFAULT_ENERGY_SEED, cond_values=None):
     """
     Evaluate the policy's energy over `trajs` (a grid or sample set), one list
-    entry per observation context.
+    entry per observation context (or per value of `cond_values`, if given).
     """
     device = next(policy.parameters()).device
-    observations = gen_obs(conditional=conditional, N=len(trajs), device=device, spec=spec)
+    observations = gen_obs(conditional=conditional, N=len(trajs), device=device, spec=spec, values=cond_values)
     energies = []
     for obs in observations:
         outputs=[]
@@ -565,6 +569,36 @@ def viz_gradient_field(policy, conditional, spec=None, t=0, x_range=(-10, 10), y
         fig.tight_layout()
         _show_or_save(fig, save_dir, f"{name}_obs{i}")
 
+def viz_energy_condition_sweep(policy, spec=None, t=0, cond_values=None, x_range=(-5, 5), y_range=(-5, 5),
+                               save_dir=None, name="energy_cond_sweep"):
+    """
+    The energy over the grid at timestep t, one figure per conditioning value (default -5 to 5
+    every 0.2), with that value marked by a red dot on the x-axis. Shows how the landscape
+    follows a continuous condition, including between and beyond the training windows.
+    """
+    if cond_values is None:
+        cond_values = np.round(np.linspace(-5, 5, 51), 1) + 0.0  # + 0.0 turns -0.0 into 0.0
+    device = next(policy.parameters()).device
+    grid = gen_xy_grid(x_range=x_range, y_range=y_range, device=device)
+    energies = eval_energy(policy, grid, t, conditional=True, spec=spec, cond_values=cond_values)
+
+    for k, (c, energy) in enumerate(zip(cond_values, energies)):
+        fig, ax = plt.subplots(figsize=(6.5, 5.5))
+        im = ax.imshow(energy.reshape(200, 200), origin="lower", extent=[*x_range, *y_range], cmap="viridis_r")
+        fig.colorbar(im, ax=ax, label="energy (lower = more likely)")
+        if spec is not None:
+            draw_cluster_outlines(ax, spec)
+        # Sits on the axis line, so unclipped to draw in full.
+        ax.scatter([c], [y_range[0]], s=60, c="red", zorder=5, clip_on=False)
+        ax.set_xlim(x_range)
+        ax.set_ylim(y_range)
+        ax.set_aspect("equal")
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        ax.set_title(f"Energy conditioned on {c:+.1f} (t={t})")
+        fig.tight_layout()
+        _show_or_save(fig, save_dir, f"{name}_s{k:02d}_c{c:+.1f}")
+
 def viz_sample_comparison(samples, train_data, save_dir=None, name="samples_vs_train"):
 
     for i in range(len(samples)):
@@ -656,25 +690,27 @@ def eval_GMM(policy, spec, condition_type, N, viz=False, training_samples=None, 
              methods=("ddim",), viz_opt=False, save_samples_path=None, seed=None,
              utility=None, pref_test_points=None, tie_tol=0.0,
              viz_timesteps=(90, 80, 70, 60, 50, 40, 30, 20, 10, 0), viz_dir=None,
-             is_dpo=False, ref_policy=None, viz_dmse=False, dmse_seed=DEFAULT_ENERGY_SEED):
+             is_dpo=False, ref_policy=None, viz_dmse=False, dmse_seed=DEFAULT_ENERGY_SEED,
+             viz_cond_sweep=False):
     if seed is None:
         return _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
                          opt_params, methods, viz_opt, save_samples_path, utility,
                          pref_test_points, viz_timesteps, viz_dir, tie_tol,
-                         is_dpo, ref_policy, viz_dmse, dmse_seed)
+                         is_dpo, ref_policy, viz_dmse, dmse_seed, viz_cond_sweep)
     # See eval_maze below: seeded_context restores the caller's RNG on exit, so an
     # in-training eval doesn't reseed training's noise stream.
     with seeded_context(seed):
         return _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
                          opt_params, methods, viz_opt, save_samples_path, utility,
                          pref_test_points, viz_timesteps, viz_dir, tie_tol,
-                         is_dpo, ref_policy, viz_dmse, dmse_seed)
+                         is_dpo, ref_policy, viz_dmse, dmse_seed, viz_cond_sweep)
 
 
 def _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
               opt_params, methods, viz_opt, save_samples_path, utility,
               pref_test_points, viz_timesteps, viz_dir, tie_tol=0.0,
-              is_dpo=False, ref_policy=None, viz_dmse=False, dmse_seed=DEFAULT_ENERGY_SEED):
+              is_dpo=False, ref_policy=None, viz_dmse=False, dmse_seed=DEFAULT_ENERGY_SEED,
+              viz_cond_sweep=False):
     if condition_type == "conditional":
         conditional=True
     elif condition_type == "unconditional":
@@ -683,6 +719,8 @@ def _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
         raise NotImplementedError("Only 'unconditional' or 'conditional' condition_types supported for GMM")
 
     has_energy = hasattr(policy, "get_energy")
+    if viz_cond_sweep and not (conditional and has_energy):
+        raise ValueError("The conditioning sweep needs a conditional policy that exposes energies.")
 
     # KL divergence compares the learned energy landscape against the ground-truth density, so it is only
     # available for policies that expose energies. With a utility it also reports the preference-tilted
@@ -782,6 +820,9 @@ def _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
             # Denoising-MSE map only, for any diffusion policy.
             viz_denoising_mse(policy, conditional, spec=spec, seed=dmse_seed,
                               save_dir=viz_dir, name="denoising_mse")
+        elif viz_cond_sweep:
+            # Energy at t=0 only, swept across conditioning values.
+            viz_energy_condition_sweep(policy, spec=spec, save_dir=viz_dir)
         elif viz_opt:
             grad_N = min(50, N)
             grad_histories_per_opt = run_inference_with_grad_steps(

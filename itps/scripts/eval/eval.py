@@ -451,6 +451,7 @@ def main(
     viz: bool | None = False,
     viz_opt: bool = False,
     viz_dmse: bool = False,
+    viz_cond_sweep: bool = False,
     viz_dir: str | None = None,
     training_samples: Path | None = None,
     save_samples: str | None = None,
@@ -504,7 +505,8 @@ def main(
         if is_registered(hydra_cfg.env.name):
             info = get_env(hydra_cfg.env.name).evaluate(
                 policy, hydra_cfg, seed=hydra_cfg.seed, ref_policy=ref_policy,
-                viz=viz or viz_dir is not None or viz_dmse, viz_opt=viz_opt, viz_dmse=viz_dmse, viz_dir=viz_dir,
+                viz=viz or viz_dir is not None or viz_dmse or viz_cond_sweep, viz_opt=viz_opt, viz_dmse=viz_dmse,
+                viz_cond_sweep=viz_cond_sweep, viz_dir=viz_dir,
                 training_samples=training_samples, save_samples_path=save_samples,
                 render=render, n_viz_samples=n_viz_samples,
             )
@@ -598,6 +600,13 @@ if __name__ == "__main__":
              "standard figures; implies --viz (GMM only).",
     )
     parser.add_argument(
+        "--viz-cond-sweep",
+        action="store_true",
+        help="Show (or with --viz-dir, save) only the t=0 energy for each conditioning value from -5 to 5 "
+             "(every 0.2), with the value marked on the x-axis, instead of the standard figures; implies "
+             "--viz (GMM conditional EBMs only).",
+    )
+    parser.add_argument(
         "--viz-dir",
         type=str,
         default=None,
@@ -649,6 +658,7 @@ if __name__ == "__main__":
             viz=args.viz,
             viz_opt=args.viz_opt,
             viz_dmse=args.viz_dmse,
+            viz_cond_sweep=args.viz_cond_sweep,
             viz_dir=args.viz_dir,
             training_samples=args.training_samples,
             save_samples=args.save_samples,

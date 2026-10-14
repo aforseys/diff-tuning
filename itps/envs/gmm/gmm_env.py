@@ -13,7 +13,7 @@ from itps.envs.gmm.gaussian_mm import DEFAULT_SPEC, get_spec, get_utility
 class GMMEnv(Environment):
     name = "gmm"
 
-    def evaluate(self, policy, cfg, seed=None, viz=False, viz_opt=False, viz_dmse=False,
+    def evaluate(self, policy, cfg, seed=None, viz=False, viz_opt=False, viz_dmse=False, viz_cond_sweep=False,
                  training_samples=None, save_samples_path=None, viz_dir=None, ref_policy=None, **kwargs):
         """
         Sample from the policy and compare against the ground-truth mixture (KL divergence, where the
@@ -28,6 +28,9 @@ class GMMEnv(Environment):
 
         With viz_dmse, the only figure is the denoising-MSE map over the grid, averaged over the
         seeded (t, eps) draws `eval.dmse_seed` picks (default: the win rate's seed).
+
+        With viz_cond_sweep, the only figures are the t=0 energy for each conditioning value from
+        -5 to 5 (every 0.2), each marking its value on the x-axis. Conditional EBMs only.
         """
         spec = get_spec(cfg.env.get("gmm_spec", DEFAULT_SPEC))
 
@@ -64,4 +67,5 @@ class GMMEnv(Environment):
             ref_policy=ref_policy if cfg.policy.get("finetune_dpo") else None,
             viz_dmse=viz_dmse,
             dmse_seed=cfg.eval.get("dmse_seed", DEFAULT_ENERGY_SEED),
+            viz_cond_sweep=viz_cond_sweep,
         )
