@@ -26,11 +26,22 @@ from itps.envs.gmm.gaussian_mm import draw_cluster_outlines
 
 
 ## -- RUN INFERENCE --
-def gen_obs(conditional, N, device, n_clusters):
-    "Generates a batch object that matches same type as passed through model, only contains obs."
+def gen_obs(conditional, N, device, spec=None, seed=0):
+    """
+    Generates a batch object that matches same type as passed through model, only contains obs.
+
+    Conditional: one batch per cluster of `spec`, observations from `spec.sample_condition` (the
+    cluster index, or values within the cluster's condition window). Those draws use their own
+    seeded generator, so they repeat across calls and leave the global RNG untouched.
+    """
+    rng = np.random.default_rng(seed)
+    if conditional and spec is not None:
+        conditions = [spec.sample_condition(np.full(N, i), rng) for i in range(spec.n_clusters)]
+    else:
+        conditions = [np.zeros(N)]
     observations=[]
-    for i in range(n_clusters if conditional else 1):
-        obs_tensor = torch.full((N, 1, 1), i, dtype=torch.float32, device=torch.device(device))
+    for cond in conditions:
+        obs_tensor = torch.tensor(cond, dtype=torch.float32, device=torch.device(device)).reshape(N, 1, 1)
         obs_dict= {
             'observation.state':obs_tensor,
             'observation.environment_state':obs_tensor
@@ -38,12 +49,12 @@ def gen_obs(conditional, N, device, n_clusters):
         observations.append(obs_dict)
     return observations
 
-def run_inference(policy, N=100, conditional=False, methods=("ddim",), opt_params=None, n_clusters=1):
+def run_inference(policy, N=100, conditional=False, methods=("ddim",), opt_params=None, spec=None):
     if 'ired' in methods and opt_params is None:
         raise ValueError("IRED sampling requires `opt_params` (one dict per IRED variant).")
 
     device = next(policy.parameters()).device
-    obs = gen_obs(conditional=conditional, N=N, device=device, n_clusters=n_clusters)
+    obs = gen_obs(conditional=conditional, N=N, device=device, spec=spec)
 
     IRED_inference_output = [[] for _ in opt_params] if 'ired' in methods else None
     DDIM_inference_output = [] if 'ddim' in methods else None
@@ -64,12 +75,12 @@ def run_inference(policy, N=100, conditional=False, methods=("ddim",), opt_param
 
     return results
 
-def run_inference_with_grad_steps(policy, N=50, conditional=False, opt_params=None, n_clusters=1):
+def run_inference_with_grad_steps(policy, N=50, conditional=False, opt_params=None, spec=None):
     if opt_params is None:
         raise ValueError("IRED sampling requires `opt_params` (one dict per IRED variant).")
 
     device = next(policy.parameters()).device
-    obs = gen_obs(conditional=conditional, N=N, device=device, n_clusters=n_clusters)
+    obs = gen_obs(conditional=conditional, N=N, device=device, spec=spec)
 
     grad_histories_per_opt = [[] for _ in opt_params]
 
@@ -121,14 +132,14 @@ def gen_xy_grid(x_range, y_range, device, return_tensor=True, n=200):
 
     return trajs
 
-def eval_energy(policy, trajs, t, conditional, n_clusters, batch_size=256,
+def eval_energy(policy, trajs, t, conditional, spec, batch_size=256,
                 deterministic=True, n_noise=DEFAULT_ENERGY_N_NOISE, seed=DEFAULT_ENERGY_SEED):
     """
     Evaluate the policy's energy over `trajs` (a grid or sample set), one list
     entry per observation context.
     """
     device = next(policy.parameters()).device
-    observations = gen_obs(conditional=conditional, N=len(trajs), device=device, n_clusters=n_clusters)
+    observations = gen_obs(conditional=conditional, N=len(trajs), device=device, spec=spec)
     energies = []
     for obs in observations:
         outputs=[]
@@ -142,7 +153,7 @@ def eval_energy(policy, trajs, t, conditional, n_clusters, batch_size=256,
     return energies
 
 
-def eval_dpo_reward(policy, trajs, conditional, n_clusters, ref_policy=None, n_timesteps=10,
+def eval_dpo_reward(policy, trajs, conditional, spec, ref_policy=None, n_timesteps=10,
                     seed=DEFAULT_ENERGY_SEED, batch_size=256):
     """
     DPO's implicit reward over `trajs` (higher = more preferred), one list entry per
@@ -165,7 +176,7 @@ def eval_dpo_reward(policy, trajs, conditional, n_clusters, ref_policy=None, n_t
                   for t, eps in zip(timesteps, noise)]
         return torch.stack(errors).mean(dim=0)  # (B, 1)
 
-    observations = gen_obs(conditional=conditional, N=len(trajs), device=device, n_clusters=n_clusters)
+    observations = gen_obs(conditional=conditional, N=len(trajs), device=device, spec=spec)
     rewards = []
     for obs in observations:
         outputs = []
@@ -180,14 +191,14 @@ def eval_dpo_reward(policy, trajs, conditional, n_clusters, ref_policy=None, n_t
     return rewards
 
 
-def eval_noise_pred(policy, trajs, t, conditional, n_clusters, batch_size=256):
+def eval_noise_pred(policy, trajs, t, conditional, spec, batch_size=256):
     """
     The model's noise prediction at each point of `trajs` and timestep t, one (N, action_dim) array per
     observation context. Works for any diffusion policy; for an EBM it is dE/dx_t. It is with respect to
     the rescaled, normalized trajectory, not the raw data-space point.
     """
     device = next(policy.parameters()).device
-    observations = gen_obs(conditional=conditional, N=len(trajs), device=device, n_clusters=n_clusters)
+    observations = gen_obs(conditional=conditional, N=len(trajs), device=device, spec=spec)
     preds = []
     for obs in observations:
         outputs = []
@@ -269,7 +280,7 @@ def kl_divergence(policy, spec, conditional, t=0, eps=1e-8, utility=None, betas=
 
     p_x = eval_gt_pdf(traj_grid, spec, conditional=conditional)
     q_energy = eval_energy(policy, torchify(traj_grid, device=device), t=t,
-                           conditional=conditional, n_clusters=spec.n_clusters)
+                           conditional=conditional, spec=spec)
 
     assert len(p_x) == len(q_energy), "Incorrect number of distributions"
 
@@ -309,7 +320,7 @@ def log_likelihood(policy, spec, conditional, N=100, samples=None, opt_params=No
     """Mean log ground-truth density of the policy's samples, one value per sample set."""
     if samples is None:
         samples = run_inference(policy, N=N, conditional=conditional, methods=methods,
-                                opt_params=opt_params, n_clusters=spec.n_clusters)
+                                opt_params=opt_params, spec=spec)
     else:
         samples = [samples]
 
@@ -357,12 +368,12 @@ def preference_win_rate(policy, spec, utility, test_points, t=0, conditional=Fal
     device = next(policy.parameters()).device
     trajs = torchify(test_points, device=device)
     if score == "energy":
-        energies = eval_energy(policy, trajs, t=t, conditional=conditional, n_clusters=spec.n_clusters,
+        energies = eval_energy(policy, trajs, t=t, conditional=conditional, spec=spec,
                                n_noise=n_noise, deterministic=deterministic, seed=seed)
         # lower energy = preferred by the model, so rank against -energy
         values = [-energy for energy in energies]
     elif score == "dpo":
-        values = eval_dpo_reward(policy, trajs, conditional=conditional, n_clusters=spec.n_clusters,
+        values = eval_dpo_reward(policy, trajs, conditional=conditional, spec=spec,
                                  ref_policy=ref_policy, seed=seed)
     else:
         raise ValueError(f"Unknown win rate score '{score}'. Expected 'energy' or 'dpo'.")
@@ -391,7 +402,7 @@ def viz_inference(policy, samples, conditional, spec=None, learned_contour=True,
         trajs = gen_xy_grid(x_range=x_range, y_range=y_range, device=device)
         print('Evaluating energy')
         energies = eval_energy(policy, trajs, t, conditional=conditional,
-                               n_clusters=spec.n_clusters if spec is not None else 1)
+                               spec=spec)
         xx = trajs[:, 0, 0].cpu().numpy().reshape(200,200)
         yy = trajs[:, 0, 1].cpu().numpy().reshape(200,200)
         print('Energy evaluated, generating samples')
@@ -437,7 +448,7 @@ def viz_energy_landscape(policy, conditional, spec=None, t=0, x_range=(-10, 10),
     device = next(policy.parameters()).device
     trajs = gen_xy_grid(x_range=x_range, y_range=y_range, device=device)
     energies = eval_energy(policy, trajs, t, conditional=conditional,
-                           n_clusters=spec.n_clusters if spec is not None else 1)
+                           spec=spec)
 
     xx = trajs[:, 0, 0].cpu().numpy().reshape(200,200)
     yy = trajs[:, 0, 1].cpu().numpy().reshape(200,200)
@@ -475,7 +486,7 @@ def viz_denoising_mse(policy, conditional, spec=None, seed=DEFAULT_ENERGY_SEED, 
     trajs = gen_xy_grid(x_range=x_range, y_range=y_range, device=device)
     # Without a reference policy, eval_dpo_reward is -mse.
     rewards = eval_dpo_reward(policy, trajs, conditional=conditional,
-                              n_clusters=spec.n_clusters if spec is not None else 1, seed=seed)
+                              spec=spec, seed=seed)
 
     xx = trajs[:, 0, 0].cpu().numpy().reshape(200,200)
     yy = trajs[:, 0, 1].cpu().numpy().reshape(200,200)
@@ -514,15 +525,14 @@ def viz_gradient_field(policy, conditional, spec=None, t=0, x_range=(-10, 10), y
     if background not in ("white", "energy"):
         raise ValueError(f"background must be 'white' or 'energy', got {background!r}")
     device = next(policy.parameters()).device
-    n_clusters = spec.n_clusters if spec is not None else 1
 
     energies = None
     if background == "energy":
         grid = gen_xy_grid(x_range=x_range, y_range=y_range, device=device)
-        energies = eval_energy(policy, grid, t, conditional=conditional, n_clusters=n_clusters)
+        energies = eval_energy(policy, grid, t, conditional=conditional, spec=spec)
 
     arrows = gen_xy_grid(x_range=x_range, y_range=y_range, device=device, n=arrow_n)
-    preds = eval_noise_pred(policy, arrows, t, conditional=conditional, n_clusters=n_clusters)
+    preds = eval_noise_pred(policy, arrows, t, conditional=conditional, spec=spec)
     ax_pts = arrows[:, 0, 0].cpu().numpy()
     ay_pts = arrows[:, 0, 1].cpu().numpy()
     # Longest arrow spans one grid cell; relative lengths still carry magnitude.
@@ -587,7 +597,7 @@ def viz_ired_grad_steps(policy, grad_history, t, conditional, opt_vals, spec=Non
     device = next(policy.parameters()).device
     trajs = gen_xy_grid(x_range=x_range, y_range=y_range, device=device)
     energies = eval_energy(policy, trajs, t=t, conditional=conditional,
-                           n_clusters=spec.n_clusters if spec is not None else 1)
+                           spec=spec)
     xx = trajs[:, 0, 0].cpu().numpy().reshape(200, 200)
     yy = trajs[:, 0, 1].cpu().numpy().reshape(200, 200)
 
@@ -633,9 +643,10 @@ def viz_ired_grad_steps(policy, grad_history, t, conditional, opt_vals, spec=Non
     plt.tight_layout()
     _show_or_save(fig, save_dir, name)
 
-def filter_samples(samples, conditional, n_clusters):
+def filter_samples(samples, conditional, spec):
     """Split a saved (N, 3) observation array into one point set per observation context."""
-    samples_by_obs = [samples[samples[:, 0] == i, 1:] for i in range(n_clusters)]
+    clusters = spec.condition_cluster(samples[:, 0])
+    samples_by_obs = [samples[clusters == i, 1:] for i in range(spec.n_clusters)]
 
     if conditional:
         return samples_by_obs #return list with all observations divided
@@ -707,7 +718,7 @@ def _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
         # Deliberately no ref_policy, even for traditional DPO: without one, eval_dpo_reward is
         # -mse of this policy alone, not the reference-relative -(mse - mse_ref) its win rate uses.
         rewards = eval_dpo_reward(policy, torchify(pref_test_points, device=device), conditional=conditional,
-                                  n_clusters=spec.n_clusters, seed=dmse_seed)
+                                  spec=spec, seed=dmse_seed)
         for i, reward in enumerate(rewards):
             key = "dmse_test" if len(rewards) == 1 else f"dmse_test_obs{i}"
             info["aggregated"][key] = float(-reward.mean())
@@ -732,7 +743,7 @@ def _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
 
     if training_samples is not None:
         train_data = np.load(training_samples)
-        filtered_samples = filter_samples(train_data, conditional, spec.n_clusters)
+        filtered_samples = filter_samples(train_data, conditional, spec)
         _, ll_training = log_likelihood(policy, spec, conditional, samples=filtered_samples)
         print('Log likelihood of training samples:', ll_training[0])
         if utility is not None:
@@ -754,7 +765,7 @@ def _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
         # Visualize training samples if passed in
         if training_samples is not None:
             train_data_raw = np.load(training_samples)
-            train_data_split = filter_samples(train_data_raw, conditional, spec.n_clusters)
+            train_data_split = filter_samples(train_data_raw, conditional, spec)
             N_per_obs = len(train_data_split[0])
             # Draw as many policy samples per context as there are training points, so the two
             # scatters' densities compare fairly; reuse the eval samples when the counts already
@@ -763,7 +774,7 @@ def _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
                 train_cmp_samples = samples
             else:
                 train_cmp_samples = run_inference(policy, N=N_per_obs, conditional=conditional, methods=methods,
-                                                  opt_params=opt_params, n_clusters=spec.n_clusters)
+                                                  opt_params=opt_params, spec=spec)
             for label, s in sample_sets(train_cmp_samples):
                 viz_sample_comparison(s, train_data_split, save_dir=viz_dir, name=f"samples_vs_train_{label}")
 
@@ -775,7 +786,7 @@ def _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
             grad_N = min(50, N)
             grad_histories_per_opt = run_inference_with_grad_steps(
                 policy, N=grad_N, conditional=conditional, opt_params=opt_params,
-                n_clusters=spec.n_clusters,
+                spec=spec,
             )
             # Runs IRED even when 'ired' isn't in `methods` (so file_labels may have no IRED
             # entries), hence labels straight from opt_params.

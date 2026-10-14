@@ -81,10 +81,31 @@ class GMMSpec:
     weights: np.ndarray   # (K,)
     means: list           # K arrays of shape (2,)
     covs: list            # K arrays of shape (2, 2)
+    cond_halfwidth: float | None = None  # continuous condition window; None = integer cluster index
 
     @property
     def n_clusters(self):
         return len(self.means)
+
+    def sample_condition(self, comps, rng):
+        """
+        The conditional observation for points drawn from clusters `comps`: the integer cluster
+        index, or with `cond_halfwidth` set, uniform within +-cond_halfwidth of the cluster's
+        x-center (independent of where the point lands in the cluster).
+        """
+        comps = np.asarray(comps)
+        if self.cond_halfwidth is None:
+            return comps
+        centers_x = np.array([m[0] for m in self.means])
+        return centers_x[comps] + rng.uniform(-self.cond_halfwidth, self.cond_halfwidth, size=comps.shape)
+
+    def condition_cluster(self, condition):
+        """Inverse of `sample_condition`: the cluster each conditional observation belongs to."""
+        condition = np.asarray(condition)
+        if self.cond_halfwidth is None:
+            return condition
+        centers_x = np.array([m[0] for m in self.means])
+        return np.argmin(np.abs(condition[:, None] - centers_x), axis=1)
 
     def normalized_weights(self):
         w = np.asarray(self.weights, dtype=float)
@@ -168,6 +189,19 @@ GMM_SPECS = {
         ],
         covs=_isotropic_covs(0.10, 3),
     ),
+    # Three clusters along the x-axis (y=0), conditioned on a continuous value within +-0.5 of
+    # each cluster's x-center rather than an integer cluster label.
+    "x_line": GMMSpec(
+        name="x_line",
+        weights=np.array([1.0, 1.0, 1.0]),
+        means=[
+            np.array([-2.5, 0.0]),
+            np.array([0.0, 0.0]),
+            np.array([2.5, 0.0]),
+        ],
+        covs=_isotropic_covs(0.10, 3),
+        cond_halfwidth=0.5,
+    ),
 }
 
 DEFAULT_SPEC = "three_cluster"
@@ -214,13 +248,20 @@ def get_utility(name):
 # ------- Dataset generation -------
 
 def gen_dataset(spec, N, seed):
-    """Draw N samples from `spec` in both conditional and unconditional observation format."""
-    X, comps = spec.sample(N, seed)
+    """
+    Draw N samples from `spec` in both conditional and unconditional observation format. The
+    conditional observation is `spec.sample_condition` (cluster index or continuous window).
+    """
+    # A Generator passed as the seed is used as-is, so X and comps match spec.sample(N, seed);
+    # the condition draws then continue the same stream rather than replaying it.
+    rng = np.random.default_rng(seed)
+    X, comps = spec.sample(N, rng)
+    condition = spec.sample_condition(comps, rng)
 
     return {
         'X': X,
         'comps': comps,
-        'conditional_observation': np.hstack([comps[:, None], X]),
+        'conditional_observation': np.hstack([condition[:, None], X]),
         'unconditional_observation': np.hstack([np.zeros((len(X), 1)), X]),
         'spec': spec,
     }
@@ -347,5 +388,6 @@ if __name__ == "__main__":
                     dataset[f'{kind}_observation'],
                     save_dir / f"gmm_{spec.name}_{kind}_{args.n}_{args.seed}_{timestamp}.npy",
                     spec=spec.as_dict(), n_samples=args.n, seed=args.seed, kind=kind,
+                    cond_halfwidth=spec.cond_halfwidth if kind == "conditional" else None,
                 )
                 print(f"Saved {kind} dataset to {path}")
