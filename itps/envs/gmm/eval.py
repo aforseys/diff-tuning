@@ -584,10 +584,14 @@ def viz_energy_condition_sweep(policy, spec=None, t=0, cond_values=None, n_sampl
     energies = eval_energy(policy, grid, t, conditional=True, spec=spec, cond_values=cond_values)
     samples = run_inference(policy, N=n_samples, conditional=True, methods=("ddim",), spec=spec,
                             cond_values=cond_values)[-1]
+    # One color scale across the whole sweep, so the figures compare directly.
+    vmin = min(e.min() for e in energies)
+    vmax = max(e.max() for e in energies)
 
     for k, (c, energy, s) in enumerate(zip(cond_values, energies, samples)):
         fig, ax = plt.subplots(figsize=(6.5, 5.5))
-        im = ax.imshow(energy.reshape(200, 200), origin="lower", extent=[*x_range, *y_range], cmap="viridis_r")
+        im = ax.imshow(energy.reshape(200, 200), origin="lower", extent=[*x_range, *y_range], cmap="viridis_r",
+                       vmin=vmin, vmax=vmax)
         fig.colorbar(im, ax=ax, label="energy (lower = more likely)")
         ax.scatter(s[:, 0], s[:, 1], s=8, alpha=0.6, edgecolor="none", c="red")
         if spec is not None:
