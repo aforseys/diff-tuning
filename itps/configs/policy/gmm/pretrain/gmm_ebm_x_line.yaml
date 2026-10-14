@@ -3,7 +3,7 @@
 seed: 100000
 dataset_repo_id: gmm
 condition_type: conditional
-dataset_root: 'data/gmm_obs/gmm_x_line_conditional_1000_0_20261014_112738.npy'
+dataset_root: 'data/gmm_obs/gmm_x_line_conditional_200_0_20261014_144024.npy' #'data/gmm_obs/gmm_x_line_conditional_1000_0_20261014_112738.npy'
 
 env:
   gmm_spec: x_line
@@ -29,7 +29,7 @@ training:
   log_freq: 100
   save_checkpoint: true
 
-  batch_size: 256
+  batch_size: 128
   grad_clip_norm: 10
   lr: 1.0e-4
   lr_scheduler: cosine
