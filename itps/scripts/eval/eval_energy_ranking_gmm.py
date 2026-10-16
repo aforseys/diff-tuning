@@ -59,7 +59,7 @@ def eval_energy_ranking_gmm(pretrained_policy, finetuned_policy, spec, utility,
     device = next(pretrained_policy.parameters()).device
 
     obs_list = gen_obs(conditional=conditional, N=n_samples, device=device,
-                       n_clusters=spec.n_clusters)
+                       spec=spec)
 
     per_context = []
     for context_idx, obs in enumerate(obs_list):
