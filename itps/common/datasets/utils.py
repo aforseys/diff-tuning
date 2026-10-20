@@ -23,7 +23,6 @@ from typing import Dict
 import datasets
 import torch
 from datasets import load_dataset, load_from_disk
-from itps.common.datasets.compute_stats import aggregate_stats
 from huggingface_hub import DatasetCard, HfApi, hf_hub_download, snapshot_download
 from PIL import Image as PILImage
 from safetensors.torch import load_file
@@ -697,7 +696,13 @@ def concat_pairs_as_base(pos_ds, neg_ds, n_queries=None):
         delta_timestamps=pos_ds.delta_timestamps,
         hf_dataset=hf_dataset,
         episode_data_index=episode_data_index,
-        stats=aggregate_stats([pos_ds, neg_ds]),
+        # No stats. They are only read to initialise a policy's normalisation
+        # (train.py passes dataset_stats=None when finetuning, which is the only time
+        # this function runs), so computing them here would be storing an unused value --
+        # and aggregate_stats cannot do it anyway: the maze loader always emits an
+        # `episode_goal` column, for which calc_stats_from_hf_dataset reports only
+        # min/max, while aggregate_stats requires a "mean" for every key.
+        stats=None,
         info=pos_ds.info,
     )
     dataset._images = None  # from_preloaded doesn't set it, and __getitem__ reads it
