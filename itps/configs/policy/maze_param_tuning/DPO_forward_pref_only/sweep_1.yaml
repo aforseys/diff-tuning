@@ -27,8 +27,8 @@ env_type: large
 # No 'base' entry: the preference winners and losers are pooled into the base dataset,
 # so the denoising anchor uses only the finetuning samples.
 dataset_root:
-  pos: ???   # TODO: large_dp_train_*_winners.npz  (100 pairs, finetune_goal_dist, --shuffle)
-  neg: ???   # TODO: large_dp_train_*_losers.npz
+  pos: 'data/maze_comparisons/large_dp_train_maze_20261020_005309_shuffled_winners.npz'   # 1491 pairs; training uses the first n_queries=100
+  neg: 'data/maze_comparisons/large_dp_train_maze_20261020_005309_shuffled_losers.npz'
 pretrained_policy_path: 'data/maze2d_dp/large/general/train/pretrained_maze_dp'
 
 wandb:
@@ -86,8 +86,10 @@ eval:
   pref_metric: finetune_goal_dist
   default_tie_tol: true       # true -> DEFAULT_SCORE_THRESHOLDS[pref_metric]; else {metric: tol}
   pref_test_set:
-    winners: ???   # TODO: large_dp_test_*_winners.npz  (held out BY START STATE: generated
-    losers: ???    #       from the _test obs split, not a different slice of the same trials)
+    # Held out BY START STATE: generated from the _test obs split. 1504 pairs;
+    # pref_test_n draws 100, the same indices from each file.
+    winners: 'data/maze_comparisons/large_dp_test_maze_20261020_005312_shuffled_winners.npz'
+    losers: 'data/maze_comparisons/large_dp_test_maze_20261020_005312_shuffled_losers.npz'
   pref_test_n: 100            # pairs scored per eval; same seeded draw for winners and losers
   pref_test_seed: 0
 
