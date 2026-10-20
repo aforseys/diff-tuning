@@ -438,32 +438,19 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
         rng = np.random.default_rng(shuffle_seed)
         rng.shuffle(pairs)
 
-    # Episode layout: 2 agent rows + T trajectory rows. The 2 is one more than the
-    # loader needs. `load_hf_dataset` builds action = observations[1:], and the t=-1
-    # obs slot is produced by clamping the delta_timestamps query to the episode's
-    # first frame -- so ONE agent row already yields obs.state == [agent, agent],
-    # exactly as a real episode-start frame does in the base hdf5.
-    #
-    # The extra row costs one step of phase: the training window comes out as
-    #   [agent, agent, pred_traj[0] ... pred_traj[T-3]]
-    # where a 1-row layout would give the exact sampled trajectory
+    # Episode layout: ONE agent row + T trajectory rows. `load_hf_dataset` builds
+    # action = observations[1:], and the t=-1 obs slot comes from clamping the
+    # delta_timestamps query to the episode's first frame, so a single agent row already
+    # yields obs.state == [agent, agent], exactly as a real episode-start frame does in
+    # the base hdf5. The training window is then the sampled trajectory as drawn:
     #   [pred_traj[0], pred_traj[0], pred_traj[1] ... pred_traj[T-1]].
-    # So each trajectory carries one extra dwell frame at the start and its last
-    # waypoint never reaches the model -- including the endpoint the goal metrics
-    # (score_goal_dist / score_goal_progress) ranked the pair on.
     #
-    # KEPT ON PURPOSE. Winner and loser share `agent_pos` and are distorted
-    # identically, and both preference losses act on a pos/neg difference, so it
-    # cancels; the residual is ~0.14 maze cells of endpoint shift against a
-    # selection threshold worth ~1.5-2 cells, far too small to flip labels. Every
-    # existing pair dataset uses this layout, so changing it here without
-    # regenerating all of them would silently split the two conventions.
-    # If it is ever fixed: use `1 + T` here AND the matching vstack in
-    # `extract_demo_dataset`, then regenerate every pair and demo dataset together --
-    # and bump the filename prefix (e.g. 'maze_v2_') in the same change, because the
-    # .npz files carry no layout marker and old/new sets are otherwise
-    # indistinguishable on disk. Do it at a natural regeneration boundary; flipping it
-    # mid-campaign splits results into non-comparable cohorts.
+    # Datasets generated before 2026-10 used TWO agent rows, which cost one step of phase:
+    # an extra dwell frame at the start, and the trajectory's last waypoint never reached
+    # the model -- including the endpoint the goal metrics (score_goal_dist /
+    # score_goal_progress) ranked the pair on. Files written since carry n_agent_rows=1;
+    # readers treat its absence as the old 2-row layout. The two are NOT comparable, so
+    # pair and demo datasets must be regenerated together.
     #
     # This all assumes T == horizon - 1 (63), which holds because interact_maze2d sets
     # n_action_steps = horizon - n_obs_steps + 1 before collecting trials. If trials are
@@ -474,10 +461,10 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
     # the printout below before trusting a new pair set.
     T = len(pairs[0]['winner_traj'])
     N = len(pairs)
-    winners = np.zeros((N, 2 + T, 2), dtype=np.float32)
-    losers = np.zeros((N, 2 + T, 2), dtype=np.float32)
+    winners = np.zeros((N, 1 + T, 2), dtype=np.float32)
+    losers = np.zeros((N, 1 + T, 2), dtype=np.float32)
     has_goals = all('goal' in p for p in pairs)
-    goals = np.zeros((N, 2 + T, 2), dtype=np.float32) if has_goals else None
+    goals = np.zeros((N, 1 + T, 2), dtype=np.float32) if has_goals else None
     meta = []
 
     for i, pair in enumerate(pairs):
@@ -486,10 +473,10 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
                          for p in pair['winner_traj']], dtype=np.float32)
         l_xy = np.array([maze_env.gui2xy(np.array(p, dtype=float))
                          for p in pair['loser_traj']], dtype=np.float32)
-        winners[i, 0:2] = agent_xy
-        winners[i, 2:] = w_xy
-        losers[i, 0:2] = agent_xy
-        losers[i, 2:] = l_xy
+        winners[i, 0] = agent_xy
+        winners[i, 1:] = w_xy
+        losers[i, 0] = agent_xy
+        losers[i, 1:] = l_xy
         if has_goals:
             goals[i, :] = np.array(pair['goal'], dtype=np.float32)
         entry = {
@@ -502,7 +489,7 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
                               for p in pair['guide']]
         meta.append(entry)
 
-    step_size = 2 + T
+    step_size = 1 + T
     timeouts = np.zeros(N * step_size, dtype=bool)
     timeouts[np.arange(1, N) * step_size - 1] = True
 
@@ -517,7 +504,7 @@ def extract_preference_pairs(loadpath, savepath, maze_type='large', score_thresh
         json.dump(meta, f, indent=2)
 
     print(f"Saved {N} pairs → {prefix}_{{winners,losers}}.npz + _meta.json")
-    print(f"  observations shape: {winners.reshape(-1, 2).shape}  (N*(2+T)={N}*{step_size}, 2)")
+    print(f"  observations shape: {winners.reshape(-1, 2).shape}  (N*(1+T)={N}*{step_size}, 2)")
 
     return pairs
 
@@ -532,7 +519,7 @@ def visualize_preference_pairs(winners_path, losers_path, meta_path=None, maze_t
 
     Controls: N = next pair,  P = previous pair,  Q / Esc = quit
     """
-    winners_obs = np.load(winners_path)['observations']   # (N*(2+T), 2)
+    winners_obs = np.load(winners_path)['observations']   # (N*(1+T), 2)
     losers_obs  = np.load(losers_path)['observations']
 
     meta = None
@@ -540,7 +527,8 @@ def visualize_preference_pairs(winners_path, losers_path, meta_path=None, maze_t
         with open(meta_path) as f:
             meta = json.load(f)
 
-    # Infer N and step_size (step_size = 2 obs steps + T action steps)
+    # Infer N and step_size (step_size = 1 agent row + T action steps). Pair sets written
+    # before 2026-10 used two agent rows; this will mis-slice them by one frame.
     if meta is not None:
         N = len(meta)
         step_size = len(winners_obs) // N
@@ -552,7 +540,7 @@ def visualize_preference_pairs(winners_path, losers_path, meta_path=None, maze_t
             step_size = len(winners_obs)   # single pair
         N = len(winners_obs) // step_size
 
-    T = step_size - 2
+    T = step_size - 1
     print(f"Loaded {N} pairs  (T={T} trajectory steps each)")
 
     winners_eps = winners_obs.reshape(N, step_size, 2)
@@ -569,8 +557,8 @@ def visualize_preference_pairs(winners_path, losers_path, meta_path=None, maze_t
         pair_idx = max(0, min(pair_idx, N - 1))
 
         agent_xy    = winners_eps[pair_idx, 0]          # maze XY
-        winner_traj = winners_eps[pair_idx, 2:]         # (T, 2) maze XY
-        loser_traj  = losers_eps[pair_idx, 2:]          # (T, 2) maze XY
+        winner_traj = winners_eps[pair_idx, 1:]         # (T, 2) maze XY
+        loser_traj  = losers_eps[pair_idx, 1:]          # (T, 2) maze XY
 
         env.agent_gui_pos = env.xy2gui(agent_xy)
 
@@ -640,7 +628,7 @@ def extract_demo_dataset(loadpath, savepath, maze_type='large', step_threshold=0
     Convert saved trial JSONL into a demonstration dataset npz.
 
     Each trial's drawn guide is subsampled and prepended with the agent start
-    position (x2 for n_obs_steps=2) to form one training episode.
+    position to form one training episode.
 
     Asserts all trials have a non-empty guide. Short guides are kept as-is.
     The output filename automatically contains 'maze' so the dataloader routes
@@ -666,11 +654,9 @@ def extract_demo_dataset(loadpath, savepath, maze_type='large', step_threshold=0
         agent_xy = maze_env.gui2xy(np.array(trial['agent_pos'], dtype=float))
         guide_xy = np.array([maze_env.gui2xy(np.array(p, dtype=float)) for p in trial['guide']])
         subsampled = _subsample_xy_path(guide_xy, step_threshold)
-        # Two agent rows, matching `extract_preference_pairs` -- one more than the
-        # loader needs, so the guide picks up one extra dwell frame at the start and
-        # loses its last point. See the long note there for why this is kept; if it is
-        # ever fixed, both sites must change together and all datasets be regenerated.
-        episode = np.vstack([agent_xy[None], agent_xy[None], subsampled]).astype(np.float32)
+        # One agent row, matching `extract_preference_pairs` -- the loader's t=-1 clamp
+        # turns it into obs.state == [agent, agent], so the guide keeps all its points.
+        episode = np.vstack([agent_xy[None], subsampled]).astype(np.float32)
         episodes.append(episode)
         goal = trial["obs"][2:] if "obs" in trial and len(trial["obs"]) >= 4 else None
         trial_goals.append(goal)
