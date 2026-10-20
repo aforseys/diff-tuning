@@ -59,42 +59,10 @@ from itps.common.policies.diffusion.modeling_diffusion import (
     DEFAULT_ENERGY_SEED,
 )
 from itps.envs.maze.maze_maps import MAZE_MAPS
-from itps.envs.maze.maze_scoring import (
-    check_maze_collision,
-    score_center,
-    score_bottom_half,
-    score_goal_progress,
-)
+from itps.envs.maze.maze_scoring import score_metric
 from itps.common.utils.preference_scoring import pairwise_win_rate
 from itps.common.policies.factory import make_policy
 from itps.common.utils.utils import init_hydra_config, set_global_seed
-
-
-def score_metric(metric, xy_traj, maze, start=None, obs_goal=None, fixed_goal=None):
-    """Per-trajectory scores for one metric. Higher = more preferred.
-
-    The goal metrics use the same percentage-to-goal calc as eval_maze
-    (score_goal_progress): obs_goal_dist toward the per-obs goal-conditioned
-    goal, finetune_goal_dist toward a fixed goal.
-    """
-    if metric == 'collision_rate':
-        return (~check_maze_collision(xy_traj, maze)).astype(float)
-    elif metric == 'center_rate':
-        return score_center(xy_traj, maze)
-    elif metric == 'bottom_half_rate':
-        return score_bottom_half(xy_traj, maze)
-    elif metric == 'obs_goal_dist':
-        assert obs_goal is not None, \
-            "'obs_goal_dist' requires a goal-conditioned obs file (x,y,goal_x,goal_y)"
-        assert start is not None, "'obs_goal_dist' requires the start position"
-        return score_goal_progress(xy_traj, obs_goal, start)
-    elif metric == 'finetune_goal_dist':
-        assert fixed_goal is not None, \
-            "'finetune_goal_dist' requires --goal (or eval.goal in the checkpoint config)"
-        assert start is not None, "'finetune_goal_dist' requires the start position"
-        return score_goal_progress(xy_traj, fixed_goal, start)
-    else:
-        raise NotImplementedError(f"Metric '{metric}' is not implemented.")
 
 
 def eval_energy_ranking(pretrained_policy, finetuned_policy, obs_data, maze_type,

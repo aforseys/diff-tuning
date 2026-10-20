@@ -20,7 +20,11 @@ from itps.common.policies.diffusion.modeling_diffusion import (
     DEFAULT_ENERGY_N_NOISE,
     DEFAULT_ENERGY_SEED,
 )
-from itps.common.utils.preference_scoring import pairwise_win_rate
+from itps.common.utils.preference_scoring import (
+    dpo_reward,
+    policy_energy,
+    policy_win_rate,
+)
 from itps.common.utils.utils import seeded_context
 from itps.envs.gmm.gaussian_mm import draw_cluster_outlines
 
@@ -141,20 +145,14 @@ def eval_energy(policy, trajs, t, conditional, spec, batch_size=256,
     """
     Evaluate the policy's energy over `trajs` (a grid or sample set), one list
     entry per observation context (or per value of `cond_values`, if given).
+
+    The GMM part is only the observations; the energies come from
+    `preference_scoring.policy_energy`, shared with the other envs.
     """
     device = next(policy.parameters()).device
     observations = gen_obs(conditional=conditional, N=len(trajs), device=device, spec=spec, values=cond_values)
-    energies = []
-    for obs in observations:
-        outputs=[]
-        for i in range(0, trajs.size(0), batch_size):
-            batch_traj = {'action': trajs[i:i+batch_size]}
-            batch_obs = {k: v[i:i+batch_size] for k, v in obs.items()}
-            out = policy.get_energy(action_batch=batch_traj, t=t, observation_batch=batch_obs,
-                                    n_noise=n_noise, deterministic=deterministic, seed=seed)
-            outputs.append(out.detach().cpu().numpy())
-        energies.append(np.concatenate(outputs, axis=0))
-    return energies
+    return policy_energy(policy, trajs, observations, t=t, batch_size=batch_size,
+                         deterministic=deterministic, n_noise=n_noise, seed=seed)
 
 
 def eval_dpo_reward(policy, trajs, conditional, spec, ref_policy=None, n_timesteps=10,
@@ -167,32 +165,14 @@ def eval_dpo_reward(policy, trajs, conditional, spec, ref_policy=None, n_timeste
 
     The draws are seeded and shared by every trajectory and by both policies, so the
     reward differences between trajectories don't depend on which draws came up.
+
+    The GMM part is only the observations: one context per cluster when conditional.
+    The reward itself is `preference_scoring.dpo_reward`, shared with the other envs.
     """
     device = next(policy.parameters()).device
-    generator = torch.Generator(device=device).manual_seed(seed)
-    n_train_timesteps = policy.diffusion.noise_scheduler.config.num_train_timesteps
-    timesteps = torch.randint(0, n_train_timesteps, (n_timesteps,), device=device, generator=generator)
-    noise = torch.randn((n_timesteps, *trajs.shape[1:]), device=device, generator=generator)
-
-    def denoising_error(p, traj, obs):
-        batch = {**p.normalize_inputs(obs), **p.normalize_targets({'action': traj})}
-        errors = [p.diffusion._compute_denoising_sq_error(batch, t.expand(len(traj)), eps.expand_as(traj))
-                  for t, eps in zip(timesteps, noise)]
-        return torch.stack(errors).mean(dim=0)  # (B, 1)
-
     observations = gen_obs(conditional=conditional, N=len(trajs), device=device, spec=spec)
-    rewards = []
-    for obs in observations:
-        outputs = []
-        for i in range(0, trajs.size(0), batch_size):
-            batch_traj = trajs[i:i+batch_size]
-            batch_obs = {k: v[i:i+batch_size] for k, v in obs.items()}
-            mse = denoising_error(policy, batch_traj, batch_obs)
-            if ref_policy is not None:
-                mse = mse - denoising_error(ref_policy, batch_traj, batch_obs)
-            outputs.append(-mse.detach().cpu().numpy())
-        rewards.append(np.concatenate(outputs, axis=0))
-    return rewards
+    return dpo_reward(policy, trajs, observations, ref_policy=ref_policy,
+                      n_timesteps=n_timesteps, seed=seed, batch_size=batch_size)
 
 
 def eval_noise_pred(policy, trajs, t, conditional, spec, batch_size=256):
@@ -352,7 +332,7 @@ def utility_stats(utility, samples):
     return stats
 
 
-def preference_win_rate(policy, spec, utility, test_points, t=0, conditional=False,
+def eval_gmm_preference(policy, spec, utility, test_points, t=0, conditional=False,
                         n_noise=DEFAULT_ENERGY_N_NOISE, deterministic=True, seed=DEFAULT_ENERGY_SEED,
                         tie_tol=0.0, n_pairs=1000, pair_seed=0, score="energy", ref_policy=None):
     """
@@ -368,22 +348,17 @@ def preference_win_rate(policy, spec, utility, test_points, t=0, conditional=Fal
         `pair_seed` so every policy is scored on the same pairs.
 
     Returns one win rate per observation context.
+
+    The GMM parts are the observations and the ground-truth scores (the utility); the
+    ranking itself is `preference_scoring.policy_win_rate`, shared with the other envs.
     """
     device = next(policy.parameters()).device
     trajs = torchify(test_points, device=device)
-    if score == "energy":
-        energies = eval_energy(policy, trajs, t=t, conditional=conditional, spec=spec,
-                               n_noise=n_noise, deterministic=deterministic, seed=seed)
-        # lower energy = preferred by the model, so rank against -energy
-        values = [-energy for energy in energies]
-    elif score == "dpo":
-        values = eval_dpo_reward(policy, trajs, conditional=conditional, spec=spec,
-                                 ref_policy=ref_policy, seed=seed)
-    else:
-        raise ValueError(f"Unknown win rate score '{score}'. Expected 'energy' or 'dpo'.")
-    gt_scores = utility(test_points)
-    return [pairwise_win_rate(gt_scores, v.reshape(-1), tie_tol=tie_tol,
-                              n_pairs=n_pairs, seed=pair_seed)[0] for v in values]
+    observations = gen_obs(conditional=conditional, N=len(trajs), device=device, spec=spec)
+    return policy_win_rate(policy, trajs, observations, utility(test_points),
+                           score=score, ref_policy=ref_policy, t=t, n_noise=n_noise,
+                           deterministic=deterministic, seed=seed, tie_tol=tie_tol,
+                           n_pairs=n_pairs, pair_seed=pair_seed)
 
 
 ## -- VISUALIZATION FUNCTIONS --
@@ -780,7 +755,7 @@ def _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
             # DPO's implicit reward if it was DPO-finetuned.
             scores = (["energy"] if has_energy else []) + (["dpo"] if is_dpo else [])
             for score in scores:
-                win_rates = preference_win_rate(policy, spec, utility, pref_test_points,
+                win_rates = eval_gmm_preference(policy, spec, utility, pref_test_points,
                                                 conditional=conditional, tie_tol=tie_tol,
                                                 score=score, ref_policy=ref_policy)
                 for i, win_rate in enumerate(win_rates):

@@ -159,3 +159,35 @@ DEFAULT_SCORE_THRESHOLDS = {
     # distance). Only the second is a fixed function of the observation.
     'finetune_goal_dist_relative': 0.3,
 }
+
+
+def score_metric(metric, xy_traj, maze, start=None, obs_goal=None, fixed_goal=None):
+    """Per-trajectory scores for one metric. Higher = more preferred.
+
+    The goal metrics use the same percentage-to-goal calc as eval_maze
+    (score_goal_progress): obs_goal_dist toward the per-obs goal-conditioned
+    goal, finetune_goal_dist toward a fixed goal.
+
+    This is the preference convention -- direction normalized so higher wins,
+    matching how `extract_preference_pairs` labels pairs. It is deliberately NOT
+    what `eval_maze` reports: there `collision_rate` is the fraction that DID
+    collide, because that is the useful number to log.
+    """
+    if metric == 'collision_rate':
+        return (~check_maze_collision(xy_traj, maze)).astype(float)
+    elif metric == 'center_rate':
+        return score_center(xy_traj, maze)
+    elif metric == 'bottom_half_rate':
+        return score_bottom_half(xy_traj, maze)
+    elif metric == 'obs_goal_dist':
+        assert obs_goal is not None, \
+            "'obs_goal_dist' requires a goal-conditioned obs file (x,y,goal_x,goal_y)"
+        assert start is not None, "'obs_goal_dist' requires the start position"
+        return score_goal_progress(xy_traj, obs_goal, start)
+    elif metric == 'finetune_goal_dist':
+        assert fixed_goal is not None, \
+            "'finetune_goal_dist' requires --goal (or eval.goal in the checkpoint config)"
+        assert start is not None, "'finetune_goal_dist' requires the start position"
+        return score_goal_progress(xy_traj, fixed_goal, start)
+    else:
+        raise NotImplementedError(f"Metric '{metric}' is not implemented.")
