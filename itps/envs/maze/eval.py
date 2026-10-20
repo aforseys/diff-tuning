@@ -4,18 +4,22 @@
 """Evaluation for the maze2d environment: samples trajectories for saved start observations and scores
 them with the shared maze metrics (no gym env needed)."""
 import json
+from contextlib import nullcontext
 
 import numpy as np
 import torch
 
+from itps.common.utils.preference_scoring import dpo_reward, policy_win_rate
 from itps.common.utils.utils import seeded_context
 from itps.envs.maze.maze_maps import MAZE_MAPS
 from itps.envs.maze.maze_scoring import (
+    DEFAULT_SCORE_THRESHOLDS,
     check_maze_collision,
     score_center,
     score_bottom_half,
     score_goal_dist,
     score_goal_progress,
+    score_metric,
 )
 
 
@@ -162,3 +166,123 @@ def _eval_maze(policy, cfg, split):
         }
     
     return metrics_dict
+
+
+def _load_items(path, cfg, policy, device, episode_starts=False, n_items=None, seed=0):
+    """
+    Load a maze dataset file and return (trajs, obs) for a selection of its items.
+
+    episode_starts: one item per episode (the preference test set, where each episode is
+        one candidate trajectory). Otherwise `n_items` items drawn WITHOUT replacement
+        from every row whose action window lies wholly inside its episode -- no padded
+        slots, since the denoising error is computed without a mask.
+
+    The draw is seeded, so the same states are scored at every eval and by every model;
+    taking the first `n_items` instead would sample only the opening episodes of the file.
+    """
+    from itps.common.datasets.factory import resolve_delta_timestamps
+    from itps.common.datasets.lerobot_dataset import LeRobotDataset
+
+    resolve_delta_timestamps(cfg)  # idempotent; eval.py may run before make_dataset
+    kwargs = {'delta_timestamps': cfg.training.get('delta_timestamps'), 'load_images': False}
+    if policy.use_goal_cond:
+        kwargs['goal_horizon'] = cfg.training.goal_horizon
+    ds = LeRobotDataset(cfg.dataset_repo_id, root=path, **kwargs)
+
+    starts = ds.episode_data_index['from'].tolist()
+    ends = ds.episode_data_index['to'].tolist()
+    if episode_starts:
+        rows = np.array(starts)
+    else:
+        # An item at row r queries action rows r-(n_obs-1) .. r+(horizon-n_obs); keep only
+        # the rows where that whole window is inside the episode.
+        n_obs, horizon = policy.config.n_obs_steps, policy.config.horizon
+        rows = np.array([r for f, t in zip(starts, ends)
+                         for r in range(f + n_obs - 1, t - (horizon - n_obs))])
+        assert len(rows) > 0, (
+            f"No unpadded action windows in {path}: every episode is shorter than "
+            f"horizon {horizon}."
+        )
+
+    if n_items is not None and n_items < len(rows):
+        # Drawn from the row COUNT, not the row values, so winners and losers -- which have
+        # the same episode count -- select the same pair indices and stay aligned.
+        pick = np.random.default_rng(seed).choice(len(rows), size=n_items, replace=False)
+        rows = rows[np.sort(pick)]
+    rows = rows.tolist()
+
+    items = [ds[r] for r in rows]
+    assert not any(it['action_is_pad'].any() for it in items) or episode_starts, \
+        "Expected unpadded action windows; the row-selection arithmetic is wrong."
+
+    trajs = torch.stack([it['action'] for it in items]).to(device)
+    keys = ['observation.state', 'observation.environment_state']
+    if policy.use_goal_cond:
+        keys.append('episode_goal')
+    obs = {k: torch.stack([it[k] for it in items]).to(device) for k in keys}
+    return trajs, obs
+
+
+def eval_maze_preference(policy, cfg, ref_policy=None, seed=None):
+    """
+    Preference metrics on fixed held-out sets, the maze counterpart of
+    `envs.gmm.eval.eval_gmm_preference`. Returns a dict for info["aggregated"]:
+
+      win_rate_<score>  over `eval.pref_test_set` -- pre-paired winner/loser trajectories
+          that share a start observation, so only those comparisons are made. <score> is
+          "energy" for energy-based policies and "dpo" for DPO-finetuned ones (both, when
+          a DPO run uses an EBM).
+      dmse_test         mean denoising error on `eval.dmse_dataset`, the ORIGINAL
+          demonstration data -- how much of the pretrained behaviour finetuning kept.
+          No reference model, so it is comparable across objectives.
+
+    The ranking math is `preference_scoring.policy_win_rate`; this function only supplies
+    the trajectories, their observations, and the ground-truth scores.
+    """
+    out = {}
+    device = next(policy.parameters()).device
+    has_energy = hasattr(policy, "get_energy")
+    is_dpo = bool(cfg.policy.get("finetune_dpo") or cfg.policy.get("finetune_dpo_forward_kl"))
+
+    with seeded_context(seed) if seed is not None else nullcontext():
+        pref_set = cfg.eval.get("pref_test_set")
+        if pref_set is not None:
+            metric = cfg.eval.pref_metric
+            # Same n_items and seed on both, so the same pair indices are drawn from each.
+            cap = cfg.eval.get("pref_test_n")
+            pick = dict(episode_starts=True, n_items=cap, seed=cfg.eval.get("pref_test_seed", 0))
+            w_trajs, w_obs = _load_items(pref_set['winners'], cfg, policy, device, **pick)
+            l_trajs, l_obs = _load_items(pref_set['losers'], cfg, policy, device, **pick)
+            n = len(w_trajs)
+            assert len(l_trajs) == n, f"{n} winners but {len(l_trajs)} losers"
+
+            # One pool of 2N trajectories; pair k is (winner k, loser k), which share a start.
+            trajs = torch.cat([w_trajs, l_trajs])
+            obs = {k: torch.cat([w_obs[k], l_obs[k]]) for k in w_obs}
+            pairs = np.stack([np.arange(n), np.arange(n) + n], axis=1)
+
+            starts = obs['observation.state'][:, -1].cpu().numpy()   # current position
+            goals = obs['episode_goal'][:, 0].cpu().numpy() if policy.use_goal_cond else None
+            gt_scores = score_metric(metric, trajs.cpu().numpy(), MAZE_MAPS[cfg.env_type],
+                                     start=starts, obs_goal=goals,
+                                     fixed_goal=np.array(cfg.eval.goal, dtype=np.float32)
+                                     if cfg.eval.get("goal") is not None else None)
+
+            tie_tol = cfg.eval.get("default_tie_tol", True)
+            tie_tol = DEFAULT_SCORE_THRESHOLDS[metric] if tie_tol is True else tie_tol[metric]
+
+            for score in (["energy"] if has_energy else []) + (["dpo"] if is_dpo else []):
+                win_rate = policy_win_rate(policy, trajs, [obs], gt_scores, score=score,
+                                           ref_policy=ref_policy if cfg.policy.get("finetune_dpo") else None,
+                                           tie_tol=tie_tol, pairs=pairs)[0]
+                out[f"win_rate_{score}"] = win_rate
+
+        dmse_set = cfg.eval.get("dmse_dataset")
+        if dmse_set is not None:
+            trajs, obs = _load_items(dmse_set, cfg, policy, device,
+                                     n_items=cfg.eval.get("dmse_n", 1000),
+                                     seed=cfg.eval.get("dmse_seed", 0))
+            # No ref_policy: D-MSE is this policy's own error, comparable across objectives.
+            out["dmse_test"] = float(-dpo_reward(policy, trajs, [obs])[0].mean())
+
+    return out
