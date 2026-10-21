@@ -3,7 +3,7 @@
 seed: 100000
 dataset_repo_id: gmm
 condition_type: conditional
-dataset_root: 'data/gmm_obs/gmm_x_line_conditional_200_0_20261014_144024.npy' #'data/gmm_obs/gmm_x_line_conditional_1000_0_20261014_112738.npy'
+dataset_root: 'data/gmm_obs/gmm_x_line_conditional_20_0_20261021_102635.npy' #'data/gmm_obs/gmm_x_line_conditional_1000_0_20261014_112738.npy'
 
 env:
   gmm_spec: x_line
@@ -50,11 +50,11 @@ training:
 
 eval:
   n_samples: 200
-  opt_params: [{'n_opt': 1, 't_subset': null, 'denoise': False}, {'n_opt': 1, 't_subset': 5, 'denoise': True}]
+  opt_params: []
   methods: ['ddim']
 
 policy:
-  name: ebm_diffusion
+  name: diffusion
 
   # Input / output structure.
   n_obs_steps: 1
