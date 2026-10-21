@@ -29,9 +29,9 @@ class GMMEnv(Environment):
         With viz_dmse, the only figure is the denoising-MSE map over the grid, averaged over the
         seeded (t, eps) draws `eval.dmse_seed` picks (default: the win rate's seed).
 
-        With viz_cond_sweep, the only figures are the t=0 energy for each conditioning value from
-        -5 to 5 (every 0.2), with 200 DDIM samples drawn at that value on top and the value marked
-        on the x-axis. Conditional EBMs only.
+        With viz_cond_sweep, the only figures are 200 DDIM samples for each conditioning value from
+        -5 to 5 (every 0.2), drawn over the t=0 energy for an EBM, with the value marked on the
+        x-axis. Conditional policies only.
         """
         spec = get_spec(cfg.env.get("gmm_spec", DEFAULT_SPEC))
 

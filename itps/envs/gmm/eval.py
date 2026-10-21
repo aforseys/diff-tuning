@@ -544,30 +544,36 @@ def viz_gradient_field(policy, conditional, spec=None, t=0, x_range=(-10, 10), y
         fig.tight_layout()
         _show_or_save(fig, save_dir, f"{name}_obs{i}")
 
-def viz_energy_condition_sweep(policy, spec=None, t=0, cond_values=None, n_samples=200, x_range=(-5, 5),
-                               y_range=(-5, 5), save_dir=None, name="energy_cond_sweep"):
+def viz_condition_sweep(policy, spec=None, t=0, cond_values=None, n_samples=200, x_range=(-5, 5),
+                        y_range=(-5, 5), save_dir=None, name=None):
     """
-    The energy over the grid at timestep t, one figure per conditioning value (default -5 to 5
-    every 0.2), with `n_samples` DDIM samples drawn at that value on top and the value marked by
-    a red dot on the x-axis. Shows how the landscape and the samples follow a continuous
-    condition, including between and beyond the training windows.
+    One figure per conditioning value (default -5 to 5 every 0.2): `n_samples` DDIM samples drawn
+    at that value, over the energy at timestep t for an EBM (on one color scale across the sweep),
+    with the value marked by a red dot on the x-axis. Shows how the samples (and landscape) follow
+    a continuous condition, including between and beyond the training windows.
     """
     if cond_values is None:
         cond_values = np.round(np.linspace(-5, 5, 51), 1) + 0.0  # + 0.0 turns -0.0 into 0.0
-    device = next(policy.parameters()).device
-    grid = gen_xy_grid(x_range=x_range, y_range=y_range, device=device)
-    energies = eval_energy(policy, grid, t, conditional=True, spec=spec, cond_values=cond_values)
+    has_energy = hasattr(policy, "get_energy")
+    if name is None:
+        name = "energy_cond_sweep" if has_energy else "samples_cond_sweep"
     samples = run_inference(policy, N=n_samples, conditional=True, methods=("ddim",), spec=spec,
                             cond_values=cond_values)[-1]
-    # One color scale across the whole sweep, so the figures compare directly.
-    vmin = min(e.min() for e in energies)
-    vmax = max(e.max() for e in energies)
+    energies = [None] * len(cond_values)
+    if has_energy:
+        device = next(policy.parameters()).device
+        grid = gen_xy_grid(x_range=x_range, y_range=y_range, device=device)
+        energies = eval_energy(policy, grid, t, conditional=True, spec=spec, cond_values=cond_values)
+        # One color scale across the whole sweep, so the figures compare directly.
+        vmin = min(e.min() for e in energies)
+        vmax = max(e.max() for e in energies)
 
     for k, (c, energy, s) in enumerate(zip(cond_values, energies, samples)):
         fig, ax = plt.subplots(figsize=(6.5, 5.5))
-        im = ax.imshow(energy.reshape(200, 200), origin="lower", extent=[*x_range, *y_range], cmap="viridis_r",
-                       vmin=vmin, vmax=vmax)
-        fig.colorbar(im, ax=ax, label="energy (lower = more likely)")
+        if energy is not None:
+            im = ax.imshow(energy.reshape(200, 200), origin="lower", extent=[*x_range, *y_range],
+                           cmap="viridis_r", vmin=vmin, vmax=vmax)
+            fig.colorbar(im, ax=ax, label="energy (lower = more likely)")
         ax.scatter(s[:, 0], s[:, 1], s=8, alpha=0.6, edgecolor="none", c="red")
         if spec is not None:
             draw_cluster_outlines(ax, spec)
@@ -578,7 +584,8 @@ def viz_energy_condition_sweep(policy, spec=None, t=0, cond_values=None, n_sampl
         ax.set_aspect("equal")
         ax.set_xlabel("X")
         ax.set_ylabel("Y")
-        ax.set_title(f"Energy conditioned on {c:+.1f} (t={t})")
+        ax.set_title(f"{'Energy and samples' if energy is not None else 'Samples'} conditioned on {c:+.1f}"
+                     + (f" (t={t})" if energy is not None else ""))
         fig.tight_layout()
         _show_or_save(fig, save_dir, f"{name}_s{k:02d}_c{c:+.1f}")
 
@@ -702,8 +709,8 @@ def _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
         raise NotImplementedError("Only 'unconditional' or 'conditional' condition_types supported for GMM")
 
     has_energy = hasattr(policy, "get_energy")
-    if viz_cond_sweep and not (conditional and has_energy):
-        raise ValueError("The conditioning sweep needs a conditional policy that exposes energies.")
+    if viz_cond_sweep and not conditional:
+        raise ValueError("The conditioning sweep needs a conditional policy.")
 
     # KL divergence compares the learned energy landscape against the ground-truth density, so it is only
     # available for policies that expose energies. With a utility it also reports the preference-tilted
@@ -804,8 +811,8 @@ def _eval_GMM(policy, spec, condition_type, N, viz, training_samples,
             viz_denoising_mse(policy, conditional, spec=spec, seed=dmse_seed,
                               save_dir=viz_dir, name="denoising_mse")
         elif viz_cond_sweep:
-            # Energy at t=0 only, swept across conditioning values.
-            viz_energy_condition_sweep(policy, spec=spec, save_dir=viz_dir)
+            # Samples (over the t=0 energy, for an EBM) only, swept across conditioning values.
+            viz_condition_sweep(policy, spec=spec, save_dir=viz_dir)
         elif viz_opt:
             grad_N = min(50, N)
             grad_histories_per_opt = run_inference_with_grad_steps(

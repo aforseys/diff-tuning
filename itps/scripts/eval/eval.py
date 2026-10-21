@@ -602,9 +602,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--viz-cond-sweep",
         action="store_true",
-        help="Show (or with --viz-dir, save) only the t=0 energy for each conditioning value from -5 to 5 "
-             "(every 0.2), with 200 DDIM samples drawn at that value on top and the value marked on the "
-             "x-axis, instead of the standard figures; implies --viz (GMM conditional EBMs only).",
+        help="Show (or with --viz-dir, save) only 200 DDIM samples for each conditioning value from -5 to 5 "
+             "(every 0.2), drawn over the t=0 energy for an EBM, with the value marked on the x-axis, "
+             "instead of the standard figures; implies --viz (GMM conditional policies only).",
     )
     parser.add_argument(
         "--viz-dir",
