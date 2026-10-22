@@ -33,12 +33,12 @@ hydra:
 device: "cuda"  # cpu
 
 training:
-  train_only_FiLM: false
-  offline_steps: 10000
+  train_only_FiLM: true
+  offline_steps: 1000
   online_steps: 0
-  eval_freq: 1000
-  save_freq: 1000
-  log_freq: 500
+  eval_freq: 200
+  save_freq: 200
+  log_freq: 200
   save_checkpoint: true
 
   batch_size: 64            # only 100 preference pairs, so keep this under 100
@@ -149,7 +149,7 @@ policy:
   energy_landscape_loss_weight: 0.0
 
   finetune_energy_landscape: True
-  finetune_loss_weight: 1.0
+  finetune_loss_weight: 2.0
 
   finetune_demos: false
   demo_finetune_loss_weight: 0.0
