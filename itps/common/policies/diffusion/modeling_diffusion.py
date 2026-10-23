@@ -672,7 +672,7 @@ class EBMDiffusionModel(DiffusionModel):
                 pred_noise = self.model(sample, batched_t, global_cond=global_cond)
                 x0_hat = (sample - torch.sqrt(1-alpha_bar_t)*pred_noise)/torch.sqrt(alpha_bar_t)
                 sample_new = (torch.sqrt(alpha_bar_t) * x0_hat).detach()
-                # sample_new = torch.clamp(torch.sqrt(alpha_bar_t) * x0_hat, -max_val, max_val).detach()
+                sample_new = torch.clamp(torch.sqrt(alpha_bar_t) * x0_hat, -max_val, max_val).detach()
 
                 if return_grad_steps:
                     # Undo the timestep scaling so callers only need to unnormalize.
@@ -691,16 +691,16 @@ class EBMDiffusionModel(DiffusionModel):
                     # IRED-style step size: beta_t / sqrt(1 - alpha_bar_t)
                     opt_step_size = beta_t / torch.sqrt(1 - alpha_bar_t)
 
-                    # sample_new = sample - opt_step_size * grad * 2
+                    sample_new = sample - opt_step_size * grad * 2
 
                     #opt_step_size = torch.sqrt(1-alpha_bar_t)
-                    eps = torch.randn(sample.shape, device=sample.device)
+                    #eps = torch.randn(sample.shape, device=sample.device)
 
-                    sample_new = sample - opt_step_size * grad + torch.sqrt(2*beta_t)*eps
+                    #sample_new = sample - opt_step_size * grad + torch.sqrt(2*beta_t)*eps
 
 
                     # clamp to expected scale at this noise level
-                    # sample_new = torch.clamp(sample_new, -max_val, max_val)
+                    sample_new = torch.clamp(sample_new, -max_val, max_val)
 
                     if return_grad_steps:
                         # Undo the timestep scaling so callers only need to unnormalize.
