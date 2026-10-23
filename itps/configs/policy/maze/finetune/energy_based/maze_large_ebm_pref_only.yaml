@@ -14,8 +14,8 @@ env_type: large
 # No 'base' entry: the preference winners and losers are pooled into the base dataset,
 # so the denoising anchor uses only the finetuning samples.
 dataset_root:
-  pos: 'data/maze_comparisons/large_dp_train_maze_20261020_005309_shuffled_winners.npz'
-  neg: 'data/maze_comparisons/large_dp_train_maze_20261020_005309_shuffled_losers.npz'
+  pos: 'data/maze_comparisons/large_maze_goal_steer_train_rel_maze_20261023_144250_shuffled_winners.npz'
+  neg: 'data/maze_comparisons/large_maze_goal_steer_train_rel_maze_20261023_144250_shuffled_losers.npz'
 pretrained_policy_path: 'data/maze2d_dp/large/general/train/2026.10.16/14.35.10_maze2d_ebm_diffusion/checkpoints/last/pretrained_model'
 
 wandb:
@@ -41,7 +41,8 @@ training:
   log_freq: 200
   save_checkpoint: true
 
-  batch_size: 64            # only 100 preference pairs, so keep this under 100
+  batch_size: 256            # the preference loader draws 100 pairs with repeats at this
+                             # size; matches the reference config's batch
   grad_clip_norm: 10
   lr: 1.0e-5
   lr_scheduler: cosine
@@ -78,10 +79,10 @@ eval:
   pref_metric: finetune_goal_dist
   default_tie_tol: true       # true -> DEFAULT_SCORE_THRESHOLDS[pref_metric]; else {metric: tol}
   pref_test_set:
-    # Held out BY START STATE: generated from the _test obs split. 1504 pairs;
+    # Held out BY START STATE: generated from the _test obs split;
     # pref_test_n draws 100, the same indices from each file.
-    winners: 'data/maze_comparisons/large_dp_test_maze_20261020_005312_shuffled_winners.npz'
-    losers: 'data/maze_comparisons/large_dp_test_maze_20261020_005312_shuffled_losers.npz'
+    winners: 'data/maze_comparisons/large_maze_goal_steer_test_rel_maze_20261023_144254_shuffled_winners.npz'
+    losers: 'data/maze_comparisons/large_maze_goal_steer_test_rel_maze_20261023_144254_shuffled_losers.npz'
   pref_test_n: 100
   pref_test_seed: 0
 
