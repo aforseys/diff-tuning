@@ -224,10 +224,20 @@ def load_hf_dataset(repo_id: str, version: str, root: Path, split: str, goal_hor
             episode_index, frame_index, index, episode_goal = create_episode_and_frame_indices(timeouts, observations, goal_horizon)
             if saved_goals is not None:
                 episode_goal = saved_goals[:-1, :2]
+            state = observations[:-1, :2]
+            action = observations[1:, :2]
+            if 'hdf5' not in root:
+                # Drop each episode's last row: `action` is a global shift, so its target is
+                # the next episode's first observation. hdf5 demos chain continuously, so
+                # they are excluded.
+                keep = ~timeouts
+                state, action, episode_goal = state[keep], action[keep], episode_goal[keep]
+                episode_index, frame_index = episode_index[keep], frame_index[keep]
+                index = np.arange(len(frame_index))
             data_dict = {
-                'observation.state': observations[:-1, :2],
-                'observation.environment_state': observations[:-1, :2],
-                'action': observations[1:, :2],
+                'observation.state': state,
+                'observation.environment_state': state,
+                'action': action,
                 'episode_index': episode_index,
                 'frame_index': frame_index,
                 'timestamp': np.copy(frame_index)/10.0,
@@ -620,28 +630,36 @@ class PreferencePairDataset(torch.utils.data.Dataset):
             "to": torch.arange(1, n + 1, dtype=torch.long),
         }
 
+        # One item per pair, so the dataset is `n` windows total and they never change,
+        # while the loader redraws batch_size of them every step. Assemble each once here:
+        # load_previous_and_future_frames costs ~2.8 ms a call and otherwise dominates
+        # tune_dataloading_s. Sound only while __getitem__ is deterministic, which rules
+        # out per-call image augmentation.
+        assert pos_ds.image_transforms is None and neg_ds.image_transforms is None, \
+            "Cached items would freeze per-call image augmentation."
+        self._items = []
+        for s in self.start_indices:
+            start_idx = int(s.item())
+
+            pos_sample = self.pos_ds[start_idx]
+            neg_sample = self.neg_ds[start_idx]
+
+            # these should now always be aligned and at frame_index == 0
+            if "episode_index" in pos_sample and "episode_index" in neg_sample:
+                assert pos_sample["episode_index"].item() == neg_sample["episode_index"].item()
+                assert pos_sample["frame_index"].item() == neg_sample["frame_index"].item()
+                assert pos_sample["frame_index"].item() == 0, (
+                    f"Expected only episode starts, got frame_index={pos_sample['frame_index'].item()}"
+                )
+
+            self._items.append({"pos": pos_sample, "neg": neg_sample})
+
     def __len__(self):
         # one item per episode, not per frame
         return len(self.start_indices)
 
     def __getitem__(self, idx):
-        start_idx = int(self.start_indices[idx].item())
-
-        pos_sample = self.pos_ds[start_idx]
-        neg_sample = self.neg_ds[start_idx]
-
-        # these should now always be aligned and at frame_index == 0
-        if "episode_index" in pos_sample and "episode_index" in neg_sample:
-            assert pos_sample["episode_index"].item() == neg_sample["episode_index"].item()
-            assert pos_sample["frame_index"].item() == neg_sample["frame_index"].item()
-            assert pos_sample["frame_index"].item() == 0, (
-                f"Expected only episode starts, got frame_index={pos_sample['frame_index'].item()}"
-            )
-
-        return {
-            "pos": pos_sample,
-            "neg": neg_sample,
-        }
+        return self._items[idx]
 
 
 def concat_pairs_as_base(pos_ds, neg_ds, n_queries=None):

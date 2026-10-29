@@ -46,7 +46,7 @@ training:
   grad_clip_norm: 10
   lr: 1.0e-5
   lr_scheduler: cosine
-  lr_warmup_steps: 500
+  lr_warmup_steps: 50       # 5% of offline_steps, matching the GMM finetune configs
   adam_betas: [0.95, 0.999]
   adam_eps: 1.0e-8
   adam_weight_decay: 1.0e-6
@@ -58,10 +58,10 @@ training:
     observation.state: "[i / ${fps} for i in range(1 - ${policy.n_obs_steps}, 1)]"
     action: "[i / ${fps} for i in range(1 - ${policy.n_obs_steps}, 1 - ${policy.n_obs_steps} + ${policy.horizon})]"
 
-  # = policy.horizon / 2. A pooled preference episode is 1 agent row + 63 trajectory rows,
-  # so only its first row has a fully unpadded action window; dropping the last 32 keeps
-  # rows 0-31, giving 32 anchor items per episode instead of 1. The padded slots in rows
-  # 1-31 are masked by do_mask_loss_for_padding.
+  # = policy.horizon / 2. A pooled preference episode is 63 rows: the loader drops each
+  # episode's last row, whose action target would be the next episode's first observation.
+  # Dropping the last 32 keeps rows 0-30, giving 31 anchor items per episode instead of 1.
+  # Every anchor has >=1 padded action slot, masked by do_mask_loss_for_padding.
   drop_n_last_frames: 32
 
 eval:
@@ -150,7 +150,7 @@ policy:
   energy_landscape_loss_weight: 0.0
 
   finetune_energy_landscape: True
-  finetune_loss_weight: 2.0
+  finetune_loss_weight: 5.0
 
   finetune_demos: false
   demo_finetune_loss_weight: 0.0
