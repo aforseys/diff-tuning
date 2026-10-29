@@ -129,7 +129,14 @@ class Logger:
                 resume="must" if cfg.resume else None,
             )
             print(colored("Logs will be synced with wandb.", "blue", attrs=["bold"]))
-            logging.info(f"Track this run --> {colored(wandb.run.get_url(), 'yellow', attrs=['bold'])}")
+            # No URL when running offline (Supercloud compute nodes have no internet), and
+            # `get_url()` has been dropped from newer wandb in favour of the `url` property.
+            # Read the value rather than call the method, and skip when there isn't one.
+            run_url = getattr(wandb.run, "url", None)
+            if run_url:
+                logging.info(f"Track this run --> {colored(run_url, 'yellow', attrs=['bold'])}")
+            else:
+                logging.info(f"wandb offline; sync later with: wandb sync {log_dir}/wandb")
             self._wandb = wandb
 
     @classmethod
