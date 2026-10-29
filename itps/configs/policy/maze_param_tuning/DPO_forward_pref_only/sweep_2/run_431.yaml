@@ -40,7 +40,7 @@ training:
     observation.state: '[i / ${fps} for i in range(1 - ${policy.n_obs_steps}, 1)]'
     action: '[i / ${fps} for i in range(1 - ${policy.n_obs_steps}, 1 - ${policy.n_obs_steps}
       + ${policy.horizon})]'
-  drop_n_last_frames: 32
+  drop_n_last_frames: 62
   offline_steps: 10000
   lr: 1.0e-05
   batch_size: 64
