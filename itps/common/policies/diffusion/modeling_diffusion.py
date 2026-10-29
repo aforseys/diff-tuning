@@ -690,14 +690,12 @@ class EBMDiffusionModel(DiffusionModel):
 
                     # IRED-style step size: beta_t / sqrt(1 - alpha_bar_t)
                     opt_step_size = beta_t / torch.sqrt(1 - alpha_bar_t)
-
                     sample_new = sample - opt_step_size * grad * 2
 
-                    #opt_step_size = torch.sqrt(1-alpha_bar_t)
+                    # Noise addition (scaled Langevin sampling)
+                    #scale=1
                     #eps = torch.randn(sample.shape, device=sample.device)
-
-                    #sample_new = sample - opt_step_size * grad + torch.sqrt(2*beta_t)*eps
-
+                    #sample_new = sample - opt_step_size * grad + torch.sqrt(2*beta_t*scale)*eps
 
                     # clamp to expected scale at this noise level
                     sample_new = torch.clamp(sample_new, -max_val, max_val)
