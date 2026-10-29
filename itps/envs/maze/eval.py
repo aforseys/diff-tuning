@@ -168,6 +168,9 @@ def _eval_maze(policy, cfg, split):
     return metrics_dict
 
 
+_ITEMS_CACHE = {}
+
+
 def _load_items(path, cfg, policy, device, episode_starts=False, n_items=None, seed=0):
     """
     Load a maze dataset file and return (trajs, obs) for a selection of its items.
@@ -179,7 +182,15 @@ def _load_items(path, cfg, policy, device, episode_starts=False, n_items=None, s
 
     The draw is seeded, so the same states are scored at every eval and by every model;
     taking the first `n_items` instead would sample only the opening episodes of the file.
+
+    That makes the result identical at every eval, so it is cached. Uncached, each eval
+    rebuilds a LeRobotDataset per file -- for eval.dmse_dataset a re-read of the hdf5 and
+    a reset_episode_index .map() over ~250k rows -- and re-reads every window.
     """
+    key = (str(path), episode_starts, n_items, seed, policy.use_goal_cond, str(device))
+    if key in _ITEMS_CACHE:
+        return _ITEMS_CACHE[key]
+
     from itps.common.datasets.factory import resolve_delta_timestamps
     from itps.common.datasets.lerobot_dataset import LeRobotDataset
 
@@ -220,6 +231,7 @@ def _load_items(path, cfg, policy, device, episode_starts=False, n_items=None, s
     if policy.use_goal_cond:
         keys.append('episode_goal')
     obs = {k: torch.stack([it[k] for it in items]).to(device) for k in keys}
+    _ITEMS_CACHE[key] = (trajs, obs)
     return trajs, obs
 
 
@@ -276,6 +288,15 @@ def eval_maze_preference(policy, cfg, ref_policy=None, seed=None):
                                            ref_policy=ref_policy if cfg.policy.get("finetune_dpo") else None,
                                            tie_tol=tie_tol, pairs=pairs)[0]
                 out[f"win_rate_{score}"] = win_rate
+
+            # D-MSE on each side of the held-out pairs, alongside dmse_test on the demos
+            # below: the same denoising error, so the three share (t, eps) draws and are
+            # directly comparable. Reuses the tensors already loaded above. Note these
+            # windows are episode starts, so one of the 64 action slots is edge padding
+            # that dpo_reward does not mask, unlike the unpadded dmse_test windows.
+            for side, (s_trajs, s_obs) in (("winners", (w_trajs, w_obs)),
+                                           ("losers", (l_trajs, l_obs))):
+                out[f"dmse_{side}"] = float(-dpo_reward(policy, s_trajs, [s_obs])[0].mean())
 
         dmse_set = cfg.eval.get("dmse_dataset")
         if dmse_set is not None:
