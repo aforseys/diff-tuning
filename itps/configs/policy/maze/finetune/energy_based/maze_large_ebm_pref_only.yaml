@@ -41,6 +41,8 @@ training:
   log_freq: 200
   save_checkpoint: true
 
+  num_workers: 8             # base loader is the bottleneck here (~2.8 ms/item); 3 workers
+                             # leave it ~0.24 s/step behind a 0.055 s update
   batch_size: 256            # the preference loader draws 100 pairs with repeats at this
                              # size; matches the reference config's batch
   grad_clip_norm: 10

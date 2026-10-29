@@ -555,7 +555,11 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
         )
         pref_tune_dataloader = torch.utils.data.DataLoader(
             pref_tune_dataset,
-            num_workers=cfg.training.num_workers,
+            # PreferencePairDataset assembles every item in __init__, so workers here would
+            # only pickle a fixed cache across a process boundary. Collating inline costs a
+            # few ms a step and frees num_workers processes for the base loader, which is
+            # the binding constraint under Supercloud's NTPP budget.
+            num_workers=0,
             batch_size=cfg.training.batch_size,
             sampler=pref_sampler,
             pin_memory=device.type != "cpu",
