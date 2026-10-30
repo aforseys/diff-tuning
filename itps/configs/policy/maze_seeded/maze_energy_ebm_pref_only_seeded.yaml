@@ -1,0 +1,172 @@
+# @package _global_
+# Final seeded runs for energy-landscape finetuning (our method, EBM policy, preference pairs only)
+# on the large maze: the exact settings of maze_param_tuning/energy_ebm_pref_only/sweep_2/run_33,
+# repeated over 10 seeds. Expand with:
+#   python scripts/generate_configs.py --config configs/policy/maze_seeded/maze_energy_ebm_pref_only_seeded.yaml \
+#       --out_dir configs/policy/maze_seeded/maze_energy_ebm_pref_only_seeded/
+# Seeds 0-9 are new: tuning used 100000, which is left out so the average isn't biased toward it.
+#
+# run_33 = offline_steps 500, lr 1e-5, batch_size 32, train_only_FiLM false,
+# finetune_loss_weight 2. Two deliberate departures from the sweep, following gmm_seeded/:
+# save_checkpoint is on with save_freq = offline_steps, so only the final model is written and is
+# available for post-hoc D-MSE maps, and eval_freq 50 gives 10 eval points across the run.
+#
+# Logs to the same wandb project as maze_dpo_forward_pref_only_seeded, on the same pairs and the
+# same eval sets. Note batch_size is 32 here against that config's 64: each method keeps its own
+# tuned best cell, so this is a best-vs-best comparison rather than a batch-matched one.
+sweep:
+  seed: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+seed: 0  # overridden by the sweep
+dataset_repo_id: maze2d
+condition_type: unconditional
+env_type: large
+# No 'base' entry: the preference winners and losers are pooled into the base dataset,
+# so the denoising anchor uses only the finetuning samples.
+dataset_root:
+  # Same pairs as maze_param_tuning/ and maze_dpo_forward_pref_only_seeded, so the methods are
+  # compared on identical preference data. Training uses the first n_queries=100.
+  pos: 'data/maze_comparisons/large_maze_goal_steer_train_rel_maze_20261023_144250_shuffled_winners.npz'
+  neg: 'data/maze_comparisons/large_maze_goal_steer_train_rel_maze_20261023_144250_shuffled_losers.npz'
+pretrained_policy_path: 'data/maze2d_dp/large/general/train/2026.10.16/14.35.10_maze2d_ebm_diffusion/checkpoints/last/pretrained_model'
+
+wandb:
+  enable: true
+  project: maze-final-seeded
+
+config_name: ???  # Set at runtime by run_job.py
+
+hydra:
+  run:
+    # Set `dir` to where you would like to save all of the run outputs. If you run another training session
+    # with the same value for `dir` its contents will be overwritten unless you set `resume` to true.
+    dir: data/maze2d_dp/large/general/seeded/maze_energy_ebm_pref_only_seeded/${now:%Y.%m.%d}/${hydra.job.name}
+  job:
+    name: maze_large_energy_ebm_pref_only_seed${seed}_${now:%Y.%m.%d.%H.%M.%S}_${env.name}_${config_name}_${policy.name}
+
+device: "cuda"  # cpu
+
+training:
+  train_only_FiLM: false
+  offline_steps: 500
+  online_steps: 0
+  eval_freq: 50
+  save_freq: 500             # = offline_steps: final model only, kept for post-hoc D-MSE maps
+  log_freq: 50
+  save_checkpoint: True
+  batch_size: 32
+  num_workers: 4             # base loader needs ~bs * 2.8ms / updt_s workers; bs = 32 here
+  grad_clip_norm: 10
+  lr: 1.0e-5
+  lr_scheduler: cosine
+  lr_warmup_steps: 50
+  adam_betas: [0.95, 0.999]
+  adam_eps: 1.0e-8
+  adam_weight_decay: 1.0e-6
+  online_steps_between_rollouts: 1
+  n_queries: 100            # cap the preference pairs used for training
+
+  delta_timestamps:
+    observation.environment_state: "[i / ${fps} for i in range(1 - ${policy.n_obs_steps}, 1)]"
+    observation.state: "[i / ${fps} for i in range(1 - ${policy.n_obs_steps}, 1)]"
+    action: "[i / ${fps} for i in range(1 - ${policy.n_obs_steps}, 1 - ${policy.n_obs_steps} + ${policy.horizon})]"
+
+  # = policy.horizon - 2. A pooled preference episode is 63 rows, so this keeps only row 0:
+  # the episode-start window over frames -1..62, whose single padded slot is masked by
+  # do_mask_loss_for_padding. 200 anchors in all (100 winners + 100 losers), so batch_size
+  # must stay <= 200 or the base loader yields no batches.
+  drop_n_last_frames: 62
+
+eval:
+  n_samples: 32     # trajectory samples per starting observation
+  opt_params: [{'n_opt': 1, 't_subset': 5, 'denoise': True}]
+  methods: ['ired', 'ddim']
+  goal: [0.98, 9.95]                                  # maze XY; must match --goal at pair generation
+  metrics: [collision_rate, finetune_goal_dist]
+  train_obs: data/maze_obs/set_obs_40_seed0_20260427_231422_train
+  test_obs: data/maze_obs/set_obs_40_seed0_20260427_231422_test
+
+  # Preference metrics on fixed held-out sets (see envs/maze/eval.eval_maze_preference).
+  # An EBM reports win_rate_energy here; the DPO runs report win_rate_dpo. dmse_test,
+  # dmse_winners and dmse_losers are common to both.
+  pref_metric: finetune_goal_dist
+  default_tie_tol: true       # true -> DEFAULT_SCORE_THRESHOLDS[pref_metric]; else {metric: tol}
+  pref_test_set:
+    # Held out BY START STATE: generated from the _test obs split;
+    # pref_test_n draws 100, the same indices from each file.
+    winners: 'data/maze_comparisons/large_maze_goal_steer_test_rel_maze_20261023_144254_shuffled_winners.npz'
+    losers: 'data/maze_comparisons/large_maze_goal_steer_test_rel_maze_20261023_144254_shuffled_losers.npz'
+  pref_test_n: 100            # pairs scored per eval; same seeded draw for winners and losers
+  pref_test_seed: 0           # fixed across the sweep, so every seed scores the same pairs
+
+  # D-MSE: denoising error on the ORIGINAL demonstration data, so it measures what
+  # finetuning cost on the pretraining distribution. Named separately from dataset_root
+  # because this is a pref-only run and has no base dataset.
+  dmse_dataset: 'data/maze2d-large-sparse-v1.hdf5'
+  dmse_n: 1000
+  dmse_seed: 0                # fixed across the sweep, so every seed scores the same demos
+
+policy:
+  name: ebm_diffusion
+
+  # Input / output structure.
+  n_obs_steps: 2
+  horizon: 64
+  n_action_steps: 8
+
+  input_shapes:
+    observation.environment_state: [2]
+    observation.state: ["${env.state_dim}"]
+  output_shapes:
+    action: ["${env.action_dim}"]
+
+  # Normalization / Unnormalization
+  input_normalization_modes:
+    observation.environment_state: min_max
+    observation.state: min_max
+  output_normalization_modes:
+    action: min_max
+
+  # Architecture / modeling.
+  # Vision backbone.
+  vision_backbone: resnet18
+  crop_shape: [84, 84]
+  crop_is_random: True
+  pretrained_backbone_weights: null
+  use_group_norm: True
+  spatial_softmax_num_keypoints: 32
+  # Unet.
+  down_dims: [128, 256, 512]
+  kernel_size: 5
+  n_groups: 8
+  diffusion_step_embed_dim: 128
+  use_film_scale_modulation: True
+  # Noise scheduler.
+  noise_scheduler_type: DDIM
+  num_train_timesteps: 100
+  beta_schedule: squaredcos_cap_v2
+  beta_start: 0.0001
+  beta_end: 0.02
+  prediction_type: epsilon # epsilon / sample
+  clip_sample: True
+  clip_sample_range: 1.0
+
+  # Inference
+  num_inference_steps: 10  # if not provided, defaults to `num_train_timesteps`
+
+  # Loss computation
+  do_mask_loss_for_padding: True
+
+  gradient_loss_weight: 1.0
+
+  supervise_energy_landscape: false
+  energy_landscape_loss_weight: 0.0
+
+  finetune_energy_landscape: true
+  finetune_loss_weight: 2
+
+  finetune_demos: false
+  demo_finetune_loss_weight: 0.0
+
+  finetune_dpo: false
+  finetune_dpo_forward_kl: false
