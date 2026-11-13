@@ -423,7 +423,13 @@ def viz_inference(policy, samples, conditional, spec=None, learned_contour=True,
 
 def viz_energy_landscape(policy, conditional, spec=None, t=0, x_range=(-10, 10), y_range=(-10, 10),
                          save_dir=None, name="energy_surface"):
-    """3D surface of the raw energy at denoising timestep t."""
+    """
+    3D surface of the raw energy at denoising timestep t.
+
+    With save_dir, the grid values are also saved as <name>_obs{i}.npz (keys x, y, energy), so
+    figures for several models can be redrawn on one shared color scale
+    (scripts/eval/plot_gmm_dmse.py --key energy --norm unit), mirroring viz_denoising_mse.
+    """
     device = next(policy.parameters()).device
     trajs = gen_xy_grid(x_range=x_range, y_range=y_range, device=device)
     energies = eval_energy(policy, trajs, t, conditional=conditional,
@@ -435,6 +441,9 @@ def viz_energy_landscape(policy, conditional, spec=None, t=0, x_range=(-10, 10),
     #plot all energy landscapes in list given trajs (len(list) = n conditions)
     for i in range(len(energies)):
         zz = energies[i].reshape(200,200)
+        if save_dir is not None:
+            os.makedirs(save_dir, exist_ok=True)
+            np.savez(os.path.join(save_dir, f"{name}_obs{i}.npz"), x=xx, y=yy, energy=zz)
         if conditional:
             title = f"Energy landscape conditioned on cluster observation {i} (t={t})"
         else:
