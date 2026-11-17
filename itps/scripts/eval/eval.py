@@ -468,6 +468,10 @@ def main(
         out_dir = f"outputs/eval/{dt.now().strftime('%Y-%m-%d/%H-%M-%S')}_{hydra_cfg.env.name}_{hydra_cfg.policy.name}"
         out_dir_path = Path(out_dir)
         out_dir_path.mkdir(parents=True, exist_ok=False)
+    else:
+        # An explicit --out-dir was never created, so the eval_info.json write at the end of this
+        # function failed after all the sampling had already been done.
+        Path(out_dir).mkdir(parents=True, exist_ok=True)
 
     # Check device is available
     device = get_safe_torch_device(hydra_cfg.device, log=True)
