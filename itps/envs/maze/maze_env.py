@@ -20,7 +20,7 @@ class MazeEnv(Environment):
         With `eval.pref_test_set` / `eval.dmse_dataset`, also reports the preference metrics
         (win rate against `eval.pref_metric`, and denoising error on the original data).
         """
-        info = {"aggregated": {}}
+        info = {"aggregated": {}, "per_obs": {}}
         info["aggregated"].update(eval_maze_preference(policy, cfg, ref_policy=ref_policy, seed=seed))
         if cfg.eval.get("train_obs") is None and cfg.eval.get("test_obs") is None:
             return info
@@ -29,4 +29,7 @@ class MazeEnv(Environment):
             for label, metrics in split_info.items():
                 for metric_name, vals in metrics.items():
                     info["aggregated"][f"{metric_name}_{label}"] = vals["mean"]
+                    # Kept out of `aggregated`, which is logged to wandb as scalars -- these are
+                    # one value per start/goal observation, for localizing which pairs fail.
+                    info["per_obs"][f"{metric_name}_{label}"] = vals["per_obs"]
         return info
