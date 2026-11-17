@@ -222,7 +222,12 @@ class Logger:
         Given the last checkpoint in the logging directory, load the optimizer state, scheduler state, and
         random state, and return the global training step.
         """
-        training_state = torch.load(self.last_checkpoint_dir / self.training_state_file_name)
+        # weights_only=False restores the pre-2.6 torch.load default. This file is written by
+        # save_training_state below, not fetched from anywhere, and it holds optimizer/scheduler
+        # state plus OmegaConf containers that the weights_only unpickler rejects.
+        training_state = torch.load(
+            self.last_checkpoint_dir / self.training_state_file_name, weights_only=False
+        )
         optimizer.load_state_dict(training_state["optimizer"])
         if scheduler is not None:
             scheduler.load_state_dict(training_state["scheduler"])
