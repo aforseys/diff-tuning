@@ -891,12 +891,61 @@ class EBMDiffusionModel(DiffusionModel):
         # term. This follows IRED, where the landscape supervision is applied uniformly across
         # timesteps. Consequence: its weight relative to gradient_loss_weight rises at high t,
         # where the timestep weight -> 0.
-        # The shared eps (scaled by neg_eps_weight for the negative) is also load-bearing:
-        # the "negative" IS this same trajectory at 2x noise, so the draws must match.
-        neg_eps_weight = 2.0  # Negative batch will just be corrupted version of positive. Can test various ways (here 2x noise). Starting point in IRED and used in itps was 3x.
-        loss_energy = self._compute_comparison_energy_loss(batch, batch, eps, eps * neg_eps_weight, timesteps, mask=mask_concat)
+        # The shared eps is also load-bearing: with the fixed negative below, the "negative" IS
+        # this same trajectory at higher noise, so the draws must match.
+        neg_eps_weight = self.config.neg_eps_weight
+        if self.config.hard_negative:
+            # IRED's model-adaptive negative: descend on the current energy to find where the model
+            # wrongly scores low, then re-noise that point with the SAME eps at the SAME timestep.
+            neg_batch = dict(batch)
+            neg_batch["action"] = self._hard_negative_x0(batch, eps, timesteps, neg_eps_weight)
+            loss_energy = self._compute_comparison_energy_loss(batch, neg_batch, eps, eps, timesteps, mask=mask_concat)
+        else:
+            # Fixed negative: this same trajectory at neg_eps_weight x noise.
+            loss_energy = self._compute_comparison_energy_loss(batch, batch, eps, eps * neg_eps_weight, timesteps, mask=mask_concat)
 
         return self.config.energy_landscape_loss_weight * loss_energy, {"loss_energy": loss_energy.mean()}
+
+    def _hard_negative_x0(self, batch: dict[str, Tensor], eps: Tensor, timesteps: Tensor, neg_eps_weight: float) -> Tensor:
+        """
+        IRED's model-adaptive negative, returned in x0 space (p_losses in IRED's
+        denoising_diffusion_pytorch_1d.py): noise the trajectory by neg_eps_weight, descend on the
+        CURRENT energy at the same timestep, then rescale back to x0. The caller re-noises it with
+        the original eps.
+
+        The point of this over the fixed over-noised negative: descending the current energy lands
+        wherever the model wrongly thinks energy is low, so the contrastive term supervises the
+        model's own errors instead of one fixed, data-independent direction.
+
+        Everything about the descent is pinned to IRED's p_losses call, opt_step(..., step=2,
+        sf=1.0), on a continuous-valued dataset (self.continuous True, as here) -- deliberately
+        not configurable:
+          - 2 steps, gradient scales 1.0 then 2.0. opt_step shadows its own `sf` argument, so the
+            passed 1.0 applies only to the first step and 2.0 thereafter.
+          - sample clamped to +/- 2*sqrt(alpha_bar_t) on BOTH steps, because that reassignment
+            happens before the clamp, so even step 0's clamp already uses 2.0.
+          - x0 estimate clamped to +/- 2, as p_losses does.
+        opt_energy's hardcoded `* 2` belongs to that sampler and is not reused here; it applies
+        from its first step, which is the one place this still differs from IRED's continuous path.
+        """
+        trajectory = batch["action"]
+        global_cond = self._prepare_global_conditioning(batch)
+        mask = self._padding_mask(batch)
+
+        alpha_bar = self.noise_scheduler.alphas_cumprod.to(trajectory.device)[timesteps].view(-1, 1, 1)
+        beta = self.noise_scheduler.betas.to(trajectory.device)[timesteps].view(-1, 1, 1)
+        step_size = beta / torch.sqrt(1 - alpha_bar)
+        bound = 2.0 * torch.sqrt(alpha_bar)
+
+        neg = self.noise_scheduler.add_noise(trajectory, eps * neg_eps_weight, timesteps)
+        with torch.enable_grad():
+            for scale in (1.0, 2.0):
+                grad = self.model(neg, timesteps, global_cond=global_cond, mask=mask)
+                # Detached each step, as in IRED's opt_step(eval=True): the negative is a target,
+                # not something to backprop the descent through.
+                neg = torch.clamp(neg - step_size * grad * scale, -bound, bound).detach()
+
+        return torch.clamp(neg / torch.sqrt(alpha_bar), -2.0, 2.0)
 
     def _compute_comparison_energy_loss(self, pos_batch, neg_batch, eps_pos, eps_neg, timesteps, mask=None):
         """

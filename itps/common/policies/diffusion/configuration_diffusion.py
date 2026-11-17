@@ -157,6 +157,13 @@ class DiffusionConfig:
     gradient_loss_weight: float = 1
     supervise_energy_landscape: bool = False
     energy_landscape_loss_weight: float = 0.5
+    # Negative for the energy-landscape loss. neg_eps_weight scales the noise (IRED uses 3.0).
+    # hard_negative False keeps the fixed over-noised negative; True switches to IRED's
+    # construction, descending on the CURRENT energy to find where the model wrongly scores low
+    # and training against that point. The descent has no knobs -- it is pinned to IRED's
+    # continuous-dataset settings; see EBMDiffusionModel._hard_negative_x0.
+    neg_eps_weight: float = 2.0
+    hard_negative: bool = False
     finetune_energy_landscape: bool = False
     finetune_loss_weight: float = 0
     finetune_dpo: bool = False
