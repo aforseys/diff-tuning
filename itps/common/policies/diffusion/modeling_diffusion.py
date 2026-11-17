@@ -277,8 +277,15 @@ class DiffusionModel(nn.Module):
 
     # ========= inference  ============
     def conditional_sample(
-        self, batch_size: int, global_cond: Tensor | None = None, generator: torch.Generator | None = None
+        self, batch_size: int, global_cond: Tensor | None = None, generator: torch.Generator | None = None,
+        return_path: bool = False,
     ) -> Tensor:
+        """
+        With return_path, also returns the list of (t, x_t) the sampler visited, x_t BEFORE the
+        model was evaluated at it. These are the points the field is actually queried at during
+        inference -- almost none of which are draws from q(x_t | x_0) for a real x_0, which is the
+        only place the denoising loss ever looks. For scripts/eval/compare_fields.py.
+        """
         device = get_device_from_parameters(self)
         dtype = get_dtype_from_parameters(self)
 
@@ -292,7 +299,10 @@ class DiffusionModel(nn.Module):
 
         self.noise_scheduler.set_timesteps(self.num_inference_steps)
 
+        path = [] if return_path else None
         for t in self.noise_scheduler.timesteps:
+            if return_path:
+                path.append((int(t), sample.detach().clone()))
             # Predict model output (noise estimate).
             model_output = self.model(
                 sample,
@@ -302,6 +312,8 @@ class DiffusionModel(nn.Module):
             # Compute previous image: x_t -> x_t-1
             sample = self.noise_scheduler.step(model_output, t, sample, generator=generator).prev_sample
 
+        if return_path:
+            return sample, path
         return sample
 
     def _prepare_global_conditioning(self, batch: dict[str, Tensor]) -> Tensor:
