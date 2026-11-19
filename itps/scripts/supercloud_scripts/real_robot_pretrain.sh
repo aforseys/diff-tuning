@@ -15,7 +15,7 @@
 #       python -c "import torchvision; torchvision.models.resnet18(weights='IMAGENET1K_V1')"
 #
 # Submit from the itps/ dir:
-#   LLsub ./scripts/supercloud_scripts/real_robot_pretrain.sh [3,2,9]
+#   LLsub ./scripts/supercloud_scripts/real_robot_pretrain.sh [3,2,9] -g volta:2
 #     3 nodes x 2 processes (one run per GPU) x 9 threads (1 main + 8 dataloader workers) = 6 slots for 5 runs.
 # Memory: each run holds all images in RAM (~9 GB, ~2x that while loading, ~28 GB peak with overhead); at
 # ~9.6 GB per core, NTPP 9 gives ~87 GB per process.
