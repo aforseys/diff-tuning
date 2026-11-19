@@ -976,6 +976,14 @@ class EBMDiffusionModel(DiffusionModel):
 
         return torch.clamp(neg / torch.sqrt(alpha_bar), -2.0, 2.0)
 
+    def _random_crop_in_use(self) -> bool:
+        """True when the image conditioning is stochastic: training with a random crop smaller than the image."""
+        config = self.config
+        if not (self._use_images and self.training and config.crop_is_random and config.crop_shape is not None):
+            return False
+        image_hw = [tuple(shape[1:]) for key, shape in config.input_shapes.items() if key.startswith("observation.image")]
+        return any(hw != tuple(config.crop_shape) for hw in image_hw)
+
     def _compute_comparison_energy_loss(self, pos_batch, neg_batch, eps_pos, eps_neg, timesteps, mask=None):
         """
         eps_pos / eps_neg are passed explicitly rather than derived from one draw, so the
@@ -988,7 +996,11 @@ class EBMDiffusionModel(DiffusionModel):
         """
         global_cond_pos = self._prepare_global_conditioning(pos_batch)
         global_cond_neg = self._prepare_global_conditioning(neg_batch)
-        assert torch.equal(global_cond_pos, global_cond_neg), "Global conditions of pref comparisons must match"
+        # The match check assumes deterministic conditioning. With a random crop smaller than the image (the
+        # real-robot configs), every encoder call in training draws its own crop, so the two differ by design and
+        # the check is skipped. Robosuite's crop equals its image (a no-op crop), so it is still checked there.
+        if not self._random_crop_in_use():
+            assert torch.equal(global_cond_pos, global_cond_neg), "Global conditions of pref comparisons must match"
 
         positive_trajs = pos_batch["action"]
         negative_trajs = neg_batch["action"]
