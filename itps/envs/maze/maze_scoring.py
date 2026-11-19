@@ -13,11 +13,13 @@ pixel space) and take the raw boolean maze grid (True = wall) as an argument.
 import numpy as np
 
 
-def check_maze_collision(xy_traj, maze):
+def maze_collision_steps(xy_traj, maze):
     """
     xy_traj: (batch, steps, 2) numpy array in maze coordinate space
     maze: 2D boolean array where True = wall
-    Returns: (batch,) boolean array, True if trajectory has any collision
+    Returns: (batch, steps) boolean array, True where that step is in a wall (or is NaN).
+    `check_maze_collision` is this reduced over steps; kept separate so callers can ask WHERE
+    along the horizon a trajectory leaves the free space.
     """
     batch_size, num_steps, _ = xy_traj.shape
     xy_flat = xy_traj.reshape(-1, 2)
@@ -28,7 +30,16 @@ def check_maze_collision(xy_traj, maze):
     my = np.round(xy_flat[:, 1]).astype(int)
     collisions = maze[mx, my].reshape(batch_size, num_steps)
     collisions |= nan_mask.reshape(batch_size, num_steps)
-    return np.any(collisions, axis=1)
+    return collisions
+
+
+def check_maze_collision(xy_traj, maze):
+    """
+    xy_traj: (batch, steps, 2) numpy array in maze coordinate space
+    maze: 2D boolean array where True = wall
+    Returns: (batch,) boolean array, True if trajectory has any collision
+    """
+    return np.any(maze_collision_steps(xy_traj, maze), axis=1)
 
 
 def score_center(xy_traj, maze):
