@@ -27,7 +27,7 @@ from pathlib import Path
 
 import numpy as np
 from matplotlib import pyplot as plt
-from matplotlib.colors import Normalize
+from matplotlib.colors import ListedColormap, Normalize
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from itps.envs.gmm.gaussian_mm import draw_cluster_outlines, get_spec, get_utility
@@ -97,6 +97,9 @@ def main():
     parser.add_argument("--n-std", type=float, default=2.0, help="cluster outline radius in standard deviations")
     parser.add_argument("--lim", type=float, nargs=2, default=(-10, 10), help="x and y axis limits")
     parser.add_argument("--cmap", default="viridis")
+    parser.add_argument("--cmap-range", type=float, nargs=2, default=None,
+                        help="use only this part of --cmap; --cmap RdPu --cmap-range 0.3 1 matches the reward "
+                             "dots of plot_gmm_energy_3d.py")
     parser.add_argument("--cbar-label", default="reward ($r^*$)", help='colorbar label (default: "reward ($r^*$)")')
     parser.add_argument("--out-dir", required=True)
     args = parser.parse_args()
@@ -110,15 +113,18 @@ def main():
     # One color scale for every figure: the training data's utility range.
     norm = Normalize(vmin=train_u.min(), vmax=train_u.max(), clip=True)
     print(f"Color scale (training-data utility range): [{norm.vmin:.4f}, {norm.vmax:.4f}]")
+    cmap = args.cmap
+    if args.cmap_range is not None:
+        cmap = ListedColormap(plt.get_cmap(args.cmap)(np.linspace(*args.cmap_range, 256)))
 
-    plot_samples(train, "Training samples", spec, utility, norm, args.cmap, args.n_std, args.lim,
+    plot_samples(train, "Training samples", spec, utility, norm, cmap, args.n_std, args.lim,
                  args.cbar_label, out_dir / "training_samples.png")
     for entry in args.samples:
         title, rest = entry.split("=", 1)
         path, key = rest.rsplit(":", 1)
         points = np.load(path)[key]
         slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")
-        plot_samples(points, title, spec, utility, norm, args.cmap, args.n_std, args.lim,
+        plot_samples(points, title, spec, utility, norm, cmap, args.n_std, args.lim,
                      args.cbar_label, out_dir / f"{slug}.png")
 
 

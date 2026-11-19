@@ -43,6 +43,24 @@ from plot_gmm_samples import finish_panel
 from itps.envs.gmm.gaussian_mm import get_spec
 
 
+def visible(x, y, z, lim):
+    """The values of z inside the plotted area lim x lim."""
+    inside = (x >= lim[0]) & (x <= lim[1]) & (y >= lim[0]) & (y <= lim[1])
+    return z[inside]
+
+
+def unit_normalize(x, y, z, lim):
+    """
+    Min-max normalize one map to [0,1] over the plotted area, NOT over the full grid: the corners
+    are extrapolation far from any data, and letting them set the denominator makes it swing
+    between models for reasons unrelated to the landscape. Values outside the area are clipped
+    so the [0,1] colorbar stays honest. Returns (normalized z, lo, hi).
+    """
+    v = visible(x, y, z, lim)
+    lo, hi = float(v.min()), float(v.max())
+    return np.clip((z - lo) / max(hi - lo, 1e-12), 0.0, 1.0), lo, hi
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--maps", nargs="+", required=True, help='one per model: "Title=path/to/denoising_mse_obs0.npz"')
@@ -68,27 +86,19 @@ def main():
         d = np.load(path)
         maps.append((title, d["x"], d["y"], d[args.key]))
 
-    def visible(x, y, z):
-        inside = (x >= args.lim[0]) & (x <= args.lim[1]) & (y >= args.lim[0]) & (y <= args.lim[1])
-        return z[inside]
-
     if args.norm == "unit":
-        # Each map min-max normalized over the plotted area, NOT over the full grid: the corners
-        # are extrapolation far from any data, and letting them set the denominator makes it swing
-        # between models for reasons unrelated to the landscape. Values outside the area are clipped
-        # so the [0,1] colorbar stays honest.
+        # Each map min-max normalized over the plotted area (see unit_normalize).
         rescaled = []
         for title, x, y, z in maps:
-            v = visible(x, y, z)
-            lo, hi = float(v.min()), float(v.max())
-            rescaled.append((title, x, y, np.clip((z - lo) / max(hi - lo, 1e-12), 0.0, 1.0)))
+            z_unit, lo, hi = unit_normalize(x, y, z, args.lim)
+            rescaled.append((title, x, y, z_unit))
             print(f"{title}: {args.key} range over plotted area [{lo:.4g}, {hi:.4g}] -> [0, 1]")
         maps = rescaled
         norm = Normalize(vmin=0.0, vmax=1.0)
     else:
         # One color scale for every map: min/max over all maps, within the plotted area.
-        vmin = min(visible(x, y, z).min() for _, x, y, z in maps)
-        vmax = max(visible(x, y, z).max() for _, x, y, z in maps)
+        vmin = min(visible(x, y, z, args.lim).min() for _, x, y, z in maps)
+        vmax = max(visible(x, y, z, args.lim).max() for _, x, y, z in maps)
         norm = LogNorm(vmin=vmin, vmax=vmax)
         print(f"Shared {args.cbar_label} color scale (log): [{vmin:.4g}, {vmax:.4g}]")
 
