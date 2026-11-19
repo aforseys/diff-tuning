@@ -1,0 +1,126 @@
+# @package _global_
+# Ablation arm (DP): full-width UNet [512, 1024, 2048] instead of [256, 512, 1024].
+# Identical to run_dp_visual.yaml except policy.down_dims and the job name.
+
+seed: 100000
+config_name: null           # filled by run_job.py (Supercloud scripts); unused otherwise
+dataset_repo_id: real_robot
+condition_type: unconditional
+dataset_root: data/real_robot/cup_multi_shelf.hdf5   # written by convert_cup_demos.py
+past_action_visible: false
+# Joint actions are chunk-wise offsets from the window's observed joint positions: label_i = q[t+i] - q[t]
+# (the gripper width stays absolute). At rollout: target_i = q_obs[t] + label_i -- no cumsum.
+action_anchor: chunk
+image_shape: [3, 120, 160]   # 1280x720 -> 4:3 center crop (960x720) -> 120x160; same for both cameras
+
+wandb:
+  enable: true
+  project: "real-robot-base-models"
+  disable_artifact: true     # otherwise every checkpoint is also stored as a wandb artifact
+
+hydra:
+  run:
+    dir: data/real_robot/train/${now:%Y.%m.%d}/${hydra.job.name}
+  job:
+    name: ${now:%H.%M.%S}_${env.name}_${policy.name}_visual_capacity
+
+device: cuda
+use_amp: True                # pending the EBM AMP check (fp16 on V100); must match run_ebm_visual.yaml
+
+training:
+  offline_steps: 400000      # = robosuite's step count (still converging there); ~660 epochs at batch 128
+  online_steps: 0
+  eval_freq: 0               # no eval: real-world rollouts
+  save_freq: 40000           # 10 checkpoints
+  keep_only_last_training_state: true   # optimizer state only in the latest checkpoint (resume)
+  log_freq: 500
+  save_checkpoint: true
+  batch_size: 128
+  num_workers: 8
+  grad_clip_norm: 10
+  lr: 1.0e-4
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
+  adam_betas: [0.95, 0.999]
+  adam_eps: 1.0e-8
+  adam_weight_decay: 1.0e-6
+  online_steps_between_rollouts: 1
+  drop_n_last_frames: 7      # horizon(16) - n_action_steps(8) - n_obs_steps(2) + 1
+
+  # EMA exactly as Diffusion Policy (itps/common/policies/ema_model.py); checkpoints save the EMA weights.
+  ema:
+    enable: true
+    update_after_step: 0
+    inv_gamma: 1.0
+    power: 0.75
+    min_value: 0.0
+    max_value: 0.9999
+
+  delta_timestamps:
+    observation.state: "[i / ${fps} for i in range(1 - ${policy.n_obs_steps}, 1)]"
+    observation.image.wrist: "[i / ${fps} for i in range(1 - ${policy.n_obs_steps}, 1)]"
+    observation.image.agent: "[i / ${fps} for i in range(1 - ${policy.n_obs_steps}, 1)]"
+    action: "[i / ${fps} for i in range(1 - ${policy.n_obs_steps}, 1 - ${policy.n_obs_steps} + ${policy.horizon})]"
+
+policy:
+  name: diffusion
+
+  n_obs_steps: 2
+  horizon: 16             # 1.6 s at 10 Hz; must be divisible by 4 (two stride-2 UNet downsamples)
+  n_action_steps: 8
+
+  # Cameras: observation.image.<cam> <- obs/<cam>_image in the converted hdf5 (wrist + agent pending Step 0).
+  input_shapes:
+    observation.state: [8]   # 7 measured joint positions + measured gripper width
+    observation.image.wrist: ${image_shape}
+    observation.image.agent: ${image_shape}
+  output_shapes:
+    action: [8]              # 7 chunk-wise joint offsets + absolute gripper width
+
+  input_normalization_modes:
+    observation.state: min_max
+    observation.image.wrist: min_max
+    observation.image.agent: min_max
+  output_normalization_modes:
+    action: min_max
+
+  use_stats_mapping: false
+
+  # Vision backbone: one ResNet-18 per camera, from scratch, GroupNorm (EMA-safe).
+  vision_backbone: resnet18
+  crop_shape: [108, 144]  # 90% of image_shape; random in training, center at inference
+  crop_is_random: True
+  pretrained_backbone_weights: null
+  use_group_norm: True
+  freeze_backbone_batch_norm: False
+  imagenet_norm: False
+  use_separate_rgb_encoder_per_camera: True
+  spatial_softmax_num_keypoints: 32
+
+  # UNet
+  down_dims: [512, 1024, 2048]
+  kernel_size: 5
+  n_groups: 8
+  diffusion_step_embed_dim: 128
+  use_film_scale_modulation: True
+
+  # Noise scheduler
+  noise_scheduler_type: DDIM
+  num_train_timesteps: 100
+  beta_schedule: squaredcos_cap_v2
+  beta_start: 0.0001
+  beta_end: 0.02
+  prediction_type: epsilon
+  clip_sample: True
+  clip_sample_range: 1.0
+  num_inference_steps: 10
+
+  do_mask_loss_for_padding: True
+  gradient_loss_weight: 1
+  # Plain diffusion: no energy parameterization, so the landscape loss is off.
+  supervise_energy_landscape: False
+  energy_landscape_loss_weight: 0.0
+  neg_eps_weight: 2.0
+  hard_negative: False
+  finetune_energy_landscape: false
+  finetune_loss_weight: 0

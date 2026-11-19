@@ -30,6 +30,7 @@ from omegaconf import DictConfig, ListConfig, OmegaConf
 from termcolor import colored
 from torch import nn
 from torch.cuda.amp import GradScaler
+from torch.nn.modules.batchnorm import _BatchNorm
 
 from itps.common.datasets.factory import make_dataset, resolve_delta_timestamps
 from itps.common.datasets.lerobot_dataset import MultiLeRobotDataset
@@ -38,6 +39,7 @@ from itps.common.datasets.sampler import EpisodeAwareSampler
 from itps.common.datasets.utils import cycle, PreferencePairDataset, concat_pairs_as_base
 from itps.common.envs.factory import make_env
 from itps.common.logger import Logger, log_output_dir
+from itps.common.policies.ema_model import EMAModel
 from itps.common.policies.factory import make_policy
 from itps.common.policies.policy_protocol import PolicyWithUpdate
 from itps.common.policies.utils import get_device_from_parameters
@@ -391,6 +393,28 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
         ref_policy.eval()
         ref_policy.requires_grad_(False)
 
+    # EMA of the policy weights, wired exactly as in Diffusion Policy's train workspace: a deepcopy taken
+    # here, `ema.step(policy)` after every optimizer/scheduler step, and the EMA copy is what gets evaluated
+    # and saved as pretrained_model/. Off unless `training.ema.enable` is set.
+    ema, ema_policy = None, None
+    ema_cfg = cfg.training.get("ema")
+    if ema_cfg is not None and ema_cfg.get("enable", False):
+        assert cfg.training.online_steps == 0, "EMA is only wired into the offline training loop."
+        # EMAModel copies BatchNorm affine params instead of averaging them and never touches buffers, so a
+        # BatchNorm's running stats in the EMA copy would stay at their initial values. Require none
+        # (GroupNorm, or FrozenBatchNorm2d whose stats are fixed buffers, are fine).
+        batch_norms = [n for n, m in policy.named_modules() if isinstance(m, _BatchNorm)]
+        assert not batch_norms, f"EMA with trainable BatchNorm (stale running stats in the EMA copy): {batch_norms}"
+        ema_policy = deepcopy(policy)
+        ema = EMAModel(
+            ema_policy,
+            update_after_step=ema_cfg.update_after_step,
+            inv_gamma=ema_cfg.inv_gamma,
+            power=ema_cfg.power,
+            min_value=ema_cfg.min_value,
+            max_value=ema_cfg.max_value,
+        )
+
     # Create optimizer and scheduler
     # Check to see if only finetuning FiLM layers:
     train_FiLM_only = False
@@ -411,6 +435,10 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
 
     if cfg.resume:
         step = logger.load_last_training_state(optimizer, lr_scheduler)
+        if ema is not None:
+            # make_policy loaded pretrained_model/ (= the EMA weights) into both copies; restore the online
+            # weights. As in DP, the EMAModel itself is not checkpointed, so its warmup restarts on resume.
+            policy.load_state_dict(logger.load_last_online_state_dict())
 
     num_learnable_params = sum(p.numel() for p in policy.parameters() if p.requires_grad)
     num_total_params = sum(p.numel() for p in policy.parameters())
@@ -430,16 +458,18 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
         step_identifier = f"{step:0{_num_digits}d}"
         if cfg.training.eval_freq > 0 and step % cfg.training.eval_freq == 0:
             logging.info(f"Eval policy at step {step}")
-            policy.eval()
+            # As in DP, rollouts use the EMA weights when EMA is on.
+            eval_target = ema_policy if ema_policy is not None else policy
+            eval_target.eval()
             with torch.no_grad(), torch.autocast(device_type=device.type) if cfg.use_amp else nullcontext():
                 if is_registered(cfg.env.name):
-                    eval_info = get_env(cfg.env.name).evaluate(policy, cfg, seed=cfg.seed, ref_policy=ref_policy)
+                    eval_info = get_env(cfg.env.name).evaluate(eval_target, cfg, seed=cfg.seed, ref_policy=ref_policy)
 
                 else:
                     assert eval_env is not None
                     eval_info = eval_policy(
                         eval_env,
-                        policy,
+                        eval_target,
                         cfg.eval.n_episodes,
                         videos_dir=Path(out_dir) / "eval" / f"videos_step_{step_identifier}",
                         max_episodes_rendered=4,
@@ -465,6 +495,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
                 optimizer,
                 lr_scheduler,
                 identifier=step_identifier,
+                ema_policy=ema_policy,
             )
             logging.info("Resume training")
 
@@ -619,6 +650,8 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
             tune_batch = tune_batch,
             ref_model = ref_policy
         )
+        if ema is not None:
+            ema.step(policy)  # DP order: after optimizer.step() and lr_scheduler.step()
 
         train_info["dataloading_s"] = dataloading_s
         train_info["tune_dataloading_s"] = tune_dataloading_s

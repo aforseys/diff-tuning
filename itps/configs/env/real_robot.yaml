@@ -1,0 +1,13 @@
+# @package _global_
+# Real-robot demos (joint-space, 10 Hz). Deliberately NOT a registered environment
+# (itps.envs.is_registered): there is no simulator, so with training.eval_freq: 0
+# train.py never builds or calls an env. Policies are evaluated by real rollouts.
+
+fps: 10
+
+env:
+  name: real_robot
+  task: real_robot
+  state_dim: 8    # 7 measured joint positions + measured gripper width
+  action_dim: 8   # 7 chunk-wise joint offsets (q[t+i] - q[t]) + absolute gripper width
+  fps: ${fps}

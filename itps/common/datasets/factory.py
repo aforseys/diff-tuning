@@ -110,6 +110,11 @@ def make_dataset(cfg, split: str = "train") -> LeRobotDataset | MultiLeRobotData
             past_action_visible=cfg.get("past_action_visible", False),
             load_images=load_images,
         )
+        # Chunk-relative joint actions (real_robot); the sampler's drop_n_last_frames is passed so the action
+        # stats cover exactly the windows training draws. Only added when set, so other datasets are untouched.
+        if cfg.get("action_anchor"):
+            dataset_kwargs["action_anchor"] = cfg.action_anchor
+            dataset_kwargs["drop_n_last_frames"] = cfg.training.get("drop_n_last_frames", 0) or 0
 
         # Add goal horizon if necessary 
         if cfg.condition_type.lower() != "unconditional":

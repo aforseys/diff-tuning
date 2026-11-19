@@ -129,6 +129,15 @@ class DiffusionConfig:
     crop_is_random: bool = True
     pretrained_backbone_weights: str | None = None
     use_group_norm: bool = True
+    # Replace the backbone's BatchNorm layers with torchvision's FrozenBatchNorm2d (running stats and affine
+    # become fixed buffers, e.g. ImageNet's). For pretrained backbones with use_group_norm=False; with fixed
+    # stats the online and EMA copies agree, so EMA stays valid.
+    freeze_backbone_batch_norm: bool = False
+    # Map the incoming images (min-max normalized to [-1, 1]) to ImageNet mean/std inside the encoder, as
+    # pretrained torchvision weights expect. Requires min_max normalization for every image key.
+    imagenet_norm: bool = False
+    # One ResNet per camera instead of a single encoder shared by all cameras (Diffusion Policy's default).
+    use_separate_rgb_encoder_per_camera: bool = False
     spatial_softmax_num_keypoints: int = 32
     # Unet.
     down_dims: tuple[int, ...] = (512, 1024, 2048)
@@ -206,6 +215,19 @@ class DiffusionConfig:
                         f"`input_shapes[{image_key}]` does not match `input_shapes[{first_image_key}]`, but we "
                         "expect all image shapes to match."
                     )
+
+        if self.freeze_backbone_batch_norm and self.use_group_norm:
+            raise ValueError(
+                "`freeze_backbone_batch_norm` replaces BatchNorm with FrozenBatchNorm2d; it can't be combined with "
+                "`use_group_norm`, which replaces BatchNorm with GroupNorm."
+            )
+        if self.imagenet_norm:
+            not_min_max = [k for k in image_keys if self.input_normalization_modes.get(k) != "min_max"]
+            if not_min_max:
+                raise ValueError(
+                    f"`imagenet_norm` expects min_max-normalized images in [-1, 1]; these image keys aren't: "
+                    f"{not_min_max}."
+                )
 
         supported_prediction_types = ["epsilon", "sample"]
         if self.prediction_type not in supported_prediction_types:

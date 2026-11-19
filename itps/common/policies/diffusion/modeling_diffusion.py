@@ -228,8 +228,14 @@ class DiffusionModel(nn.Module):
         self._use_env_state = False
         if num_images > 0:
             self._use_images = True
-            self.rgb_encoder = DiffusionRgbEncoder(config)
-            global_cond_dim += self.rgb_encoder.feature_dim * num_images
+            if config.use_separate_rgb_encoder_per_camera:
+                # One encoder per camera, indexed in the order the camera images are stacked
+                # (DiffusionPolicy.expected_image_keys).
+                self.rgb_encoder = nn.ModuleList([DiffusionRgbEncoder(config) for _ in range(num_images)])
+                global_cond_dim += self.rgb_encoder[0].feature_dim * num_images
+            else:
+                self.rgb_encoder = DiffusionRgbEncoder(config)
+                global_cond_dim += self.rgb_encoder.feature_dim * num_images
         if "observation.environment_state" in config.input_shapes:
             self._use_env_state = True
             global_cond_dim += config.input_shapes["observation.environment_state"][0]
@@ -322,14 +328,25 @@ class DiffusionModel(nn.Module):
         global_cond_feats = [batch["observation.state"]]
         # Extract image feature (first combine batch, sequence, and camera index dims).
         if self._use_images:
-            img_features = self.rgb_encoder(
-                einops.rearrange(batch["observation.images"], "b s n ... -> (b s n) ...")
-            )
-            # Separate batch dim and sequence dim back out. The camera index dim gets absorbed into the
-            # feature dim (effectively concatenating the camera features).
-            img_features = einops.rearrange(
-                img_features, "(b s n) ... -> b s (n ...)", b=batch_size, s=n_obs_steps
-            )
+            if self.config.use_separate_rgb_encoder_per_camera:
+                # Camera index first, so each camera's images go through its own encoder.
+                images_per_camera = einops.rearrange(batch["observation.images"], "b s n ... -> n (b s) ...")
+                img_features = torch.cat(
+                    [encoder(images) for encoder, images in zip(self.rgb_encoder, images_per_camera, strict=True)]
+                )
+                # Same layout as the shared-encoder branch: camera features concatenated per obs step.
+                img_features = einops.rearrange(
+                    img_features, "(n b s) ... -> b s (n ...)", b=batch_size, s=n_obs_steps
+                )
+            else:
+                img_features = self.rgb_encoder(
+                    einops.rearrange(batch["observation.images"], "b s n ... -> (b s n) ...")
+                )
+                # Separate batch dim and sequence dim back out. The camera index dim gets absorbed into the
+                # feature dim (effectively concatenating the camera features).
+                img_features = einops.rearrange(
+                    img_features, "(b s n) ... -> b s (n ...)", b=batch_size, s=n_obs_steps
+                )
             global_cond_feats.append(img_features)
 
         if self._use_env_state:
@@ -1191,6 +1208,20 @@ class DiffusionRgbEncoder(nn.Module):
                 predicate=lambda x: isinstance(x, nn.BatchNorm2d),
                 func=lambda x: nn.GroupNorm(num_groups=x.num_features // 16, num_channels=x.num_features),
             )
+        elif config.freeze_backbone_batch_norm:
+            # Keep each BatchNorm's (e.g. ImageNet) statistics and affine exactly, as fixed buffers.
+            self.backbone = _replace_submodules(
+                root_module=self.backbone,
+                predicate=lambda x: isinstance(x, nn.BatchNorm2d),
+                func=_frozen_batch_norm_from,
+            )
+
+        # Optional ImageNet input normalization (registered only when used, so other checkpoints' state
+        # dicts are unchanged).
+        self.imagenet_norm = config.imagenet_norm
+        if self.imagenet_norm:
+            self.register_buffer("imagenet_mean", torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1))
+            self.register_buffer("imagenet_std", torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1))
 
         # Set up pooling and final layers.
         # Use a dry run to get the feature map shape.
@@ -1226,11 +1257,24 @@ class DiffusionRgbEncoder(nn.Module):
             else:
                 # Always use center crop for eval.
                 x = self.center_crop(x)
+        if self.imagenet_norm:
+            # Images arrive min-max normalized to [-1, 1]; back to [0, 1], then ImageNet mean/std.
+            x = ((x + 1) / 2 - self.imagenet_mean) / self.imagenet_std
         # Extract backbone feature.
         x = torch.flatten(self.pool(self.backbone(x)), start_dim=1)
         # Final linear layer with non-linearity.
         x = self.relu(self.out(x))
         return x
+
+
+def _frozen_batch_norm_from(bn: nn.BatchNorm2d) -> torchvision.ops.misc.FrozenBatchNorm2d:
+    """A FrozenBatchNorm2d computing exactly what `bn` computes in eval mode, with everything as buffers."""
+    frozen = torchvision.ops.misc.FrozenBatchNorm2d(bn.num_features, eps=bn.eps)
+    frozen.weight.copy_(bn.weight.detach())
+    frozen.bias.copy_(bn.bias.detach())
+    frozen.running_mean.copy_(bn.running_mean)
+    frozen.running_var.copy_(bn.running_var)
+    return frozen
 
 
 def _replace_submodules(

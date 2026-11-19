@@ -111,10 +111,65 @@ def get_hf_dataset_safe_version(repo_id: str, version: str) -> str:
         return version
 
 
+def _load_real_robot_hdf5(root, past_action_visible: bool = False, load_images: bool = True) -> datasets.Dataset:
+    """Real-robot demos converted by itps/envs/real_robot/convert_cup_demos.py (one 10 Hz grid per demo).
+
+    Built per episode -- nothing is shifted across episode boundaries. For a demo with T frames, row k (k < T-1):
+        observation.state = [q[k], width[k]]          measured joint positions + measured gripper width (8,)
+        action            = [q[k+1], width[k+1]]      ABSOLUTE next joints + next width (8,)
+    The joint actions are made chunk-relative per window (q[k+1] - q[t] for the window's anchor t) in
+    LeRobotDataset.__getitem__ when `action_anchor: chunk` -- that depends on the window, so it can't be stored.
+    Images (uint8, N x 3 x H x W) are kept outside the HF dataset, keyed by policy input name
+    ('observation.image.<cam>'), as `hf_dataset._images`.
+    """
+    import h5py
+    import numpy as np
+
+    if past_action_visible:
+        raise NotImplementedError("past_action_visible is not supported for real_robot data")
+
+    states, actions, episode_indices, frame_indices, timestamps, global_indices = [], [], [], [], [], []
+    with h5py.File(root, "r") as f:
+        cams = f.attrs["cameras"].split(",")
+        images = {f"observation.image.{cam}": [] for cam in cams}
+        demo_keys = sorted(f["data"].keys(), key=lambda k: int(k.split("_")[1]))
+        global_idx = 0
+        for ep_idx, key in enumerate(demo_keys):
+            g = f["data"][key]
+            q = g["obs/joint_pos"][:]           # (T, 7)
+            w = g["obs/gripper_width"][:]       # (T,)
+            n = len(q) - 1                      # rows that have a next frame
+            states.append(np.concatenate([q[:n], w[:n, None]], axis=1).astype(np.float32))
+            actions.append(np.concatenate([q[1:], w[1:, None]], axis=1).astype(np.float32))
+            if load_images:
+                for cam in cams:
+                    images[f"observation.image.{cam}"].append(g[f"obs/{cam}_image"][:n].transpose(0, 3, 1, 2))
+            episode_indices.append(np.full(n, ep_idx, dtype=np.int64))
+            frame_indices.append(np.arange(n, dtype=np.int64))
+            timestamps.append(np.arange(n, dtype=np.float32) / 10.0)  # frames are on an exact 10 Hz grid
+            global_indices.append(np.arange(global_idx, global_idx + n, dtype=np.int64))
+            global_idx += n
+
+    hf_dataset = datasets.Dataset.from_dict({
+        "observation.state": np.concatenate(states, axis=0),
+        "action": np.concatenate(actions, axis=0),
+        "episode_index": np.concatenate(episode_indices, axis=0),
+        "frame_index": np.concatenate(frame_indices, axis=0),
+        "timestamp": np.concatenate(timestamps, axis=0),
+        "index": np.concatenate(global_indices, axis=0),
+    })
+    hf_dataset._images = (
+        {k: np.concatenate(v, axis=0) for k, v in images.items()} if load_images else None
+    )
+    return hf_dataset
+
+
 def load_hf_dataset(repo_id: str, version: str, root: Path, split: str, goal_horizon: int=60, past_action_visible: bool=False, load_images: bool=True) -> datasets.Dataset:
     """hf_dataset contains all the observations, states, actions, rewards, etc."""
     if root is not None:
-        if 'robosuite' in repo_id:  # robosuite demos from collect_demos.py
+        if 'real_robot' in repo_id:  # real-robot demos from itps/envs/real_robot/convert_cup_demos.py
+            hf_dataset = _load_real_robot_hdf5(root, past_action_visible=past_action_visible, load_images=load_images)
+        elif 'robosuite' in repo_id:  # robosuite demos from collect_demos.py
             import h5py
             import numpy as np
 

@@ -182,10 +182,13 @@ class Logger:
         train_step: int,
         optimizer: Optimizer,
         scheduler: LRScheduler | None,
+        online_state_dict: dict | None = None,
     ):
         """Checkpoint the global training_step, optimizer state, scheduler state, and random state.
 
-        All of these are saved as "training_state.pth" under the checkpoint directory.
+        All of these are saved as "training_state.pth" under the checkpoint directory. With EMA, the
+        pretrained_model/ weights are the EMA copy, so the online (optimized) weights needed to resume are
+        stored here as "online_model".
         """
         training_state = {
             "step": train_step,
@@ -194,6 +197,8 @@ class Logger:
         }
         if scheduler is not None:
             training_state["scheduler"] = scheduler.state_dict()
+        if online_state_dict is not None:
+            training_state["online_model"] = online_state_dict
         torch.save(training_state, save_dir / self.training_state_file_name)
 
     def save_checkpont(
@@ -203,19 +208,56 @@ class Logger:
         optimizer: Optimizer,
         scheduler: LRScheduler | None,
         identifier: str,
+        ema_policy: Policy | None = None,
     ):
-        """Checkpoint the model weights and the training state."""
+        """Checkpoint the model weights and the training state.
+
+        With `ema_policy`, pretrained_model/ holds the EMA weights (what eval, rollouts and finetuning load,
+        as in Diffusion Policy) and the online weights go into training_state.pth for resuming.
+        With `training.keep_only_last_training_state`, the previous checkpoint's training_state.pth (optimizer
+        moments, ~2x the weights) is deleted once the new one is written, so only the latest stays resumable.
+        """
         checkpoint_dir = self.checkpoints_dir / str(identifier)
         wandb_artifact_name = (
             None
             if self._wandb is None
             else f"{self._group.replace(':', '_').replace('/', '_')}-{self._cfg.seed}-{identifier}"
         )
-        self.save_model(
-            checkpoint_dir / self.pretrained_model_dir_name, policy, wandb_artifact_name=wandb_artifact_name
+        # Resolve before save_model, which removes the `last` symlink.
+        previous_checkpoint_dir = (
+            self.last_checkpoint_dir.resolve() if self.last_checkpoint_dir.exists() else None
         )
-        self.save_training_state(checkpoint_dir, train_step, optimizer, scheduler)
+        self.save_model(
+            checkpoint_dir / self.pretrained_model_dir_name,
+            ema_policy if ema_policy is not None else policy,
+            wandb_artifact_name=wandb_artifact_name,
+        )
+        self.save_training_state(
+            checkpoint_dir,
+            train_step,
+            optimizer,
+            scheduler,
+            online_state_dict=policy.state_dict() if ema_policy is not None else None,
+        )
         os.symlink(checkpoint_dir.absolute(), self.last_checkpoint_dir)
+        if (
+            self._cfg.training.get("keep_only_last_training_state", False)
+            and previous_checkpoint_dir is not None
+            and previous_checkpoint_dir != checkpoint_dir.absolute().resolve()
+        ):
+            (previous_checkpoint_dir / self.training_state_file_name).unlink(missing_ok=True)
+
+    def load_last_online_state_dict(self) -> dict:
+        """The online (non-EMA) weights saved by save_checkpont(..., ema_policy=...), for resuming with EMA."""
+        training_state = torch.load(
+            self.last_checkpoint_dir / self.training_state_file_name, weights_only=False
+        )
+        if "online_model" not in training_state:
+            raise KeyError(
+                "Resuming with EMA needs the online weights, but the last checkpoint's training_state.pth has "
+                "no 'online_model' entry (was it saved without EMA?)."
+            )
+        return training_state["online_model"]
 
     def load_last_training_state(self, optimizer: Optimizer, scheduler: LRScheduler | None) -> int:
         """

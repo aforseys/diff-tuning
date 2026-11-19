@@ -34,6 +34,7 @@ from itps.common.datasets.utils import (
     load_videos,
     reset_episode_index,
 )
+from itps.common.datasets.chunk_relative import to_chunk_relative, window_action_stats
 from itps.common.datasets.video_utils import VideoFrame, load_from_videos
 
 # For maintainers, see lerobot/common/datasets/push_dataset_to_hub/CODEBASE_VERSION.md
@@ -79,7 +80,15 @@ class LeRobotDataset(torch.utils.data.Dataset):
         goal_horizon: int | None = 60,
         past_action_visible: bool = False,
         load_images: bool = True,
+        action_anchor: str | None = None,
+        drop_n_last_frames: int = 0,
     ):
+        """
+        action_anchor: None keeps actions as stored. "chunk" makes the first 7 action dims (joints) offsets from the
+            window's observed joint positions (itps/common/datasets/chunk_relative.py), per item and in the stats.
+        drop_n_last_frames: the training sampler's value (EpisodeAwareSampler); only used so the chunk-relative
+            action stats cover exactly the windows training draws.
+        """
         super().__init__()
         self.repo_id = repo_id
         self.root = root
@@ -87,12 +96,19 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self.image_transforms = image_transforms
         self.delta_timestamps = delta_timestamps
         self.goal_horizon = goal_horizon
+        self.action_anchor = action_anchor
+        if action_anchor not in (None, "chunk"):
+            raise ValueError(f"action_anchor must be None or 'chunk', got {action_anchor!r}")
         # load data from hub or locally when root is provided
         # TODO(rcadene, aliberts): implement faster transfer
         # https://huggingface.co/docs/huggingface_hub/en/guides/download#faster-downloads
         self.hf_dataset = load_hf_dataset(repo_id, CODEBASE_VERSION, root, split, self.goal_horizon, past_action_visible=past_action_visible, load_images=load_images)
-        self._images = getattr(self.hf_dataset, '_images', None)  # (N, 3, H, W) uint8 or None
-        _custom = ('maze2d', 'zarr', 'gmm', 'robosuite')
+        # Images kept outside the HF dataset: {policy input key: (N, 3, H, W) uint8}, or None. robosuite stores a
+        # single agentview array; real_robot stores one array per camera.
+        self._images = getattr(self.hf_dataset, '_images', None)
+        if isinstance(self._images, np.ndarray):
+            self._images = {'observation.image.agentview': self._images}
+        _custom = ('maze2d', 'zarr', 'gmm', 'robosuite', 'real_robot')
         if split == "train" and not any(k in repo_id for k in _custom):
             self.episode_data_index = load_episode_data_index(repo_id, CODEBASE_VERSION, root)
         else:
@@ -101,10 +117,11 @@ class LeRobotDataset(torch.utils.data.Dataset):
         if any(k in repo_id for k in _custom):
             self.stats = calc_stats_from_hf_dataset(self.hf_dataset)
             if self._images is not None:
-                self.stats['observation.image.agentview'] = {
-                    'max': torch.ones(3, 1, 1),
-                    'min': torch.zeros(3, 1, 1),
-                }
+                for image_key in self._images:
+                    self.stats[image_key] = {
+                        'max': torch.ones(3, 1, 1),
+                        'min': torch.zeros(3, 1, 1),
+                    }
             self.info = {'codebase_version': 'v0.0',
                          'fps': 10,
                          'video': False,}
@@ -112,9 +129,31 @@ class LeRobotDataset(torch.utils.data.Dataset):
         else:
             self.stats = load_stats(repo_id, CODEBASE_VERSION, root)
             self.info = load_info(repo_id, CODEBASE_VERSION, root)
+        if action_anchor == "chunk":  # after self.info: the window offsets need fps
+            self.stats['action'] = self._chunk_relative_action_stats(drop_n_last_frames)
         if self.video:
             self.videos_dir = load_videos(repo_id, CODEBASE_VERSION, root)
             self.video_backend = video_backend if video_backend is not None else "pyav"
+
+    def _chunk_offsets(self, key: str) -> np.ndarray:
+        """Integer frame offsets of a delta_timestamps window, e.g. [-1, 0, ..., 14] for the action window."""
+        return np.round(np.asarray(self.delta_timestamps[key]) * self.fps).astype(int)
+
+    def _chunk_relative_action_stats(self, drop_n_last_frames: int) -> dict[str, torch.Tensor]:
+        """Action stats over the chunk-relative labels of every window training draws (not over single rows,
+        whose joint values are absolute targets and ~horizon x narrower than a window's offsets)."""
+        if self.delta_timestamps is None or "action" not in self.delta_timestamps:
+            raise ValueError("action_anchor='chunk' needs delta_timestamps with an 'action' window")
+        if self._chunk_offsets("observation.state")[-1] != 0:
+            raise ValueError("action_anchor='chunk' needs the observation.state window to end at the current frame")
+        return window_action_stats(
+            actions=torch.stack(self.hf_dataset["action"]).numpy(),
+            states=torch.stack(self.hf_dataset["observation.state"]).numpy(),
+            episode_from=self.episode_data_index["from"].tolist(),
+            episode_to=self.episode_data_index["to"].tolist(),
+            action_offsets=self._chunk_offsets("action"),
+            drop_n_last_frames=drop_n_last_frames,
+        )
 
     @property
     def fps(self) -> int:
@@ -181,18 +220,23 @@ class LeRobotDataset(torch.utils.data.Dataset):
         item = self.hf_dataset[idx]
 
         if self.delta_timestamps is not None:
-            if self._images is not None and 'observation.image.agentview' in self.delta_timestamps:
-                # Images stored outside hf_dataset — swap image key for 'index' with same timestamps
+            image_keys = [k for k in (self._images or {}) if k in self.delta_timestamps]
+            if image_keys:
+                # Images stored outside hf_dataset — swap the image keys for 'index' with the same timestamps
                 # so load_previous_and_future_frames returns the global frame indices we need.
-                img_ts = self.delta_timestamps['observation.image.agentview']
-                dt = {k: v for k, v in self.delta_timestamps.items() if k != 'observation.image.agentview'}
+                img_ts = self.delta_timestamps[image_keys[0]]
+                assert all(list(self.delta_timestamps[k]) == list(img_ts) for k in image_keys), (
+                    "all cameras must share one observation window"
+                )
+                dt = {k: v for k, v in self.delta_timestamps.items() if k not in image_keys}
                 dt['index'] = img_ts
                 item = load_previous_and_future_frames(item, self.hf_dataset, self.episode_data_index, dt, self.tolerance_s)
                 indices = np.array(item.pop('index'))
                 item.pop('index_is_pad', None)
-                item['observation.image.agentview'] = torch.from_numpy(
-                    self._images[indices].astype(np.float32) / 255.0
-                )  # (n_obs_steps, 3, H, W)
+                for image_key in image_keys:
+                    item[image_key] = torch.from_numpy(
+                        self._images[image_key][indices].astype(np.float32) / 255.0
+                    )  # (n_obs_steps, 3, H, W)
             else:
                 item = load_previous_and_future_frames(
                     item,
@@ -201,6 +245,10 @@ class LeRobotDataset(torch.utils.data.Dataset):
                     self.delta_timestamps,
                     self.tolerance_s,
                 )
+
+            if self.action_anchor == "chunk":
+                # Joint actions -> offsets from this window's observed joints (the last observation.state step).
+                item["action"] = to_chunk_relative(item["action"], item["observation.state"][-1])
 
         if self.video:
             item = load_from_videos(
