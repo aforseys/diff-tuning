@@ -10,7 +10,7 @@
 #   * itps/data/real_robot/cup_overfit10.hdf5 AND cup_multi_shelf.hdf5 are copied over (rank 0 checks both).
 #
 # Submit from the itps/ dir:
-#   LLsub ./scripts/supercloud_scripts/real_robot_overfit.sh [1,2,9]
+#   LLsub ./scripts/supercloud_scripts/real_robot_overfit.sh [1,2,9] -g volta:2
 #     1 node x 2 processes (one run per GPU) x 9 threads (1 main + 8 dataloader workers).
 #
 # Rank 0, before its training run, also runs envs/real_robot/check_dataset.py on both converted files WITH
