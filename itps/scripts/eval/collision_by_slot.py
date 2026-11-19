@@ -99,6 +99,9 @@ def main():
     maze = MAZE_MAPS[cfg.env_type]
     n_samples = cfg.eval.n_samples
     obs_file = cfg.eval.test_obs if args.split == "test" else cfg.eval.train_obs
+    # build_obs reads cfg.eval.test_obs; set it so --split selects the file without a second
+    # code path for loading observations.
+    cfg.eval.test_obs = obs_file
 
     obs_data = np.array(json.load(open(obs_file)), dtype=np.float32)
     n_obs = len(obs_data)
@@ -108,7 +111,7 @@ def main():
 
     for label, pol in ((args.label_a, pa), (args.label_b, pb)):
         torch.manual_seed(args.seed)  # same prior draws for both policies
-        obs = build_obs(cfg, pol, args.device, n_samples, obs_file=obs_file)
+        obs = build_obs(cfg, pol, args.device, n_samples)
         traj = sample_trajs(pol, obs, list(cfg.eval.methods))
         report(label, maze_collision_steps(traj, maze), n_obs, n_samples, goal_dist, args.n_bins)
 
