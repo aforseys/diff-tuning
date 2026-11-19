@@ -4,6 +4,8 @@ Written for: the Claude agent on the robot command computer, which has no contex
 
 **Handoff:** this file is the handoff from the training-side sessions. The robot-computer session writes all of the code below.
 
+**Who runs what:** Claude never runs anything that can move the arm or gripper. The user runs every motion script, and Claude hands over the exact command. Claude may run the offline checks (A–B), the live image check (C), `dry_run_policy.py` and `place_cup.py`. None of these can move the robot, by construction (see D).
+
 ## Context
 - **What was trained:** two visual policies (repo `github.com/aforseys/diff-tuning`, a LeRobot fork), both overfit for 30k steps on 10 demos of a single setup: cup start `s1_disc5` → shelf `e1`.
   - DP: `diffusion`.
@@ -125,7 +127,10 @@ Also print the mean absolute pixel difference.
   - **Episode cap:** 40 s (demos are about 26 s).
   - **Keyboard stop:** via `playback.RawTerminal`/`read_key`.
   - Someone on the e-stop.
-  - **A `--dry_run` mode:** run the policy live, command nothing, and print and plot the targets. It also reports whether any safety check would have tripped.
+  - **Dry run as its own entry point, `scripts/cup_demos/dry_run_policy.py`, not a flag:**
+    - It runs the same observation and inference loop, with the same safety checks. It prints and plots the targets and reports which checks would have tripped.
+    - It never constructs the tracker and never sends a gripper or motion command. No `start_joint_impedance_tracker`, `robot.move`, `move_to_start` or `move_width` is reachable from it.
+    - A separate script makes "cannot move" structural, so Claude can safely run the dry run while every motion script stays the user's to run.
 - **Per-rollout log:** policy images, q, width, every predicted chunk with timestamps, latency, gripper commands, outcome.
 
 **E. `scripts/cup_demos/place_cup.py`** in the robot repo: a quick check, run before every rollout, for putting the cup exactly at the start.
@@ -139,7 +144,8 @@ Also print the mean absolute pixel difference.
   - Show the live cup centroid's offset in pixels from the reference, per camera, as an arrow.
   - Print PASS when both cameras are within tolerance. The run loop refuses to start without a PASS from just before.
   - Two viewpoints pin down x and y. The overlay also shows if the cup is rotated, if it has a handle.
-- **Optional pointer mode,** for setting up or when unsure:
+- `place_cup.py` itself never moves anything: the user puts the robot at home first.
+- **Optional pointer mode,** in its own script, `scripts/cup_demos/place_cup_pointer.py`, because it moves the arm. For setting up or when unsure:
   1. With the gripper open, move the arm to the demo's frame a few steps before `first_gripper_close_index` (`playback.py`), using `JointMotion`. That puts it just above the grasp.
   2. Place the cup between the fingers.
   3. Return home and run the live check.
@@ -153,7 +159,7 @@ Also print the mean absolute pixel difference.
    - Jog the EE down toward the table with teleop: the watchdog must trip above the table.
 5. **Actuation test without the policy.** Stream one recorded `s1_disc5→e1` demo's 10 Hz q and width from the hdf5 through D's tracker and gripper-threshold path, with the cup in place. The grasp and place should succeed. This keeps actuation bugs separate from policy bugs.
    No safety check should trip during it.
-6. `--dry_run` at home: the first targets should be near the current q, repeated chunks should be stable, and no check should trip.
+6. `dry_run_policy.py` at home: the first targets should be near the current q, repeated chunks should be stable, and no check should trip.
 7. Closed-loop rollouts, DP first, then the EBM. Each one starts with E's cup check passing at home.
    - The cup goes at `s1_disc5` and the target is shelf `e1`, the only trained setup.
    - Do 10 trials each.
