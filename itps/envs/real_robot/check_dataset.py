@@ -1,7 +1,7 @@
 """Check the real_robot dataset loader against the converted file, read independently. No model is built.
 
     python itps/envs/real_robot/check_dataset.py --root itps/data/real_robot/cup_overfit10.hdf5 \
-        [--config real_robot/overfit/run_dp_visual_overfit10] [--n_items 2000]
+        [--config real_robot/overfit/run_dp_visual_overfit10] [--n_items 2000] [--raw_demos_dir <recorder demos>]
 
 Goes through the real config and make_dataset (so the factory wiring is tested too), then checks, for sampled
 training items, against values read straight from the hdf5:
@@ -11,6 +11,8 @@ training items, against values read straight from the hdf5:
   * action stats == min/max recomputed here from the raw arrays, over the windows the sampler draws;
   * every drawn label normalizes into [-1, 1] (what clip_sample assumes);
   * glitch check: per-joint window max vs 99.9th percentile.
+With --raw_demos_dir (the recorder's .h5 files), first: every stored image == image_pipeline applied to its raw
+frame in THIS environment, bit for bit -- catches an opencv/libjpeg version difference from the conversion.
 """
 import argparse
 import os
@@ -23,6 +25,7 @@ from hydra import compose, initialize_config_dir
 from itps.common.datasets.chunk_relative import N_ANCHORED_DIMS, from_chunk_relative
 from itps.common.datasets.factory import make_dataset
 from itps.common.datasets.sampler import EpisodeAwareSampler
+from itps.envs.real_robot.image_pipeline import decode_recorded, to_policy_image
 
 CONFIG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../configs")
 
@@ -38,6 +41,28 @@ def raw_episodes(root, load_images=True):
         ]
 
 
+def check_raw_frames(root, raw_dir):
+    """Every stored policy image == to_policy_image(decode_recorded(its raw frame)) in this environment."""
+    import cv2
+
+    n = n_diff = worst = 0
+    with h5py.File(root, "r") as f:
+        cams = f.attrs["cameras"].split(",")
+        for key in sorted(f["data"], key=lambda k: int(k.split("_")[1])):
+            g = f["data"][key]
+            idx = g["source_frame_index"][:]
+            with h5py.File(os.path.join(os.path.expanduser(raw_dir), g.attrs["source_file"]), "r") as raw:
+                for cam in cams:
+                    stored = g[f"obs/{cam}_image"][:]
+                    for j, i in enumerate(idx):
+                        d = np.abs(to_policy_image(decode_recorded(raw[f"images/{cam}"][i])).astype(int)
+                                   - stored[j].astype(int)).max()
+                        n, n_diff, worst = n + 1, n_diff + int(d > 0), max(worst, int(d))
+    print(f"[raw frames] opencv {cv2.__version__}: {n} stored images vs their raw frames, {n_diff} differ "
+          f"(worst {worst} uint8 levels)")
+    assert n_diff == 0, "this environment's decode/resize differs from the conversion's"
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", required=True)
@@ -45,7 +70,11 @@ def main():
     parser.add_argument("--n_items", type=int, default=2000)
     parser.add_argument("--no_images", action="store_true",
                         help="skip loading images (the full file needs ~2x its image bytes in RAM, ~18 GB)")
+    parser.add_argument("--raw_demos_dir", default=None,
+                        help="the recorder's demo .h5 files: also check stored images against the raw frames")
     args = parser.parse_args()
+    if args.raw_demos_dir:
+        check_raw_frames(args.root, args.raw_demos_dir)
 
     with initialize_config_dir(config_dir=os.path.abspath(CONFIG_DIR), version_base=None):
         cfg = compose("default", overrides=["env=real_robot", f"policy={args.config}",
