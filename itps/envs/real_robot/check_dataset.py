@@ -7,7 +7,8 @@ Goes through the real config and make_dataset (so the factory wiring is tested t
 training items, against values read straight from the hdf5:
   * observation.state / images: the right frames (t-1, t), first frame repeated at an episode start;
   * actions: anchor + chunk-relative label == the recorded absolute target [q[k+1], width[k+1]] (round trip),
-    and the window's first joint label is exactly 0;
+    and the window's first joint label is exactly 0. With `action_labels: commanded` in the config, the joint
+    target is q_cmd[k+1] (cmd/joint_pos) and the first label is q_cmd[t] - q[t];
   * action stats == min/max recomputed here from the raw arrays, over the windows the sampler draws;
   * every drawn label normalizes into [-1, 1] (what clip_sample assumes);
   * glitch check: per-joint window max vs 99.9th percentile.
@@ -30,12 +31,14 @@ from itps.envs.real_robot.image_pipeline import decode_recorded, to_policy_image
 CONFIG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../configs")
 
 
-def raw_episodes(root, load_images=True):
+def raw_episodes(root, load_images=True, label_key="obs/joint_pos"):
+    """q / w: measured joints and gripper width. q_label: the joints the action labels come from (label_key)."""
     with h5py.File(root, "r") as f:
         cams = f.attrs["cameras"].split(",") if load_images else []
         keys = sorted(f["data"].keys(), key=lambda k: int(k.split("_")[1]))
         return cams, [
             {"q": f[f"data/{k}/obs/joint_pos"][:], "w": f[f"data/{k}/obs/gripper_width"][:],
+             "q_label": f[f"data/{k}/{label_key}"][:],
              "img": {c: f[f"data/{k}/obs/{c}_image"][:] for c in cams}}
             for k in keys
         ]
@@ -94,9 +97,11 @@ def main():
     assert policy_keys <= set(cfg.training.delta_timestamps), "policy keys without a delta_timestamps window"
     offsets = ds._chunk_offsets("action")
     obs_offsets = ds._chunk_offsets("observation.state")
-    cams, eps = raw_episodes(args.root, load_images=not args.no_images)
+    action_labels = cfg.get("action_labels") or "measured"
+    label_key = {"measured": "obs/joint_pos", "commanded": "cmd/joint_pos"}[action_labels]
+    cams, eps = raw_episodes(args.root, load_images=not args.no_images, label_key=label_key)
     print(f"dataset: {ds.num_episodes} episodes, {len(ds)} rows, cameras {cams}, action offsets "
-          f"{offsets[0]}..{offsets[-1]}, drop_n_last_frames {drop}")
+          f"{offsets[0]}..{offsets[-1]}, drop_n_last_frames {drop}, action labels {action_labels} ({label_key})")
 
     # Row -> (episode, frame) and the sampler's anchors.
     ep_of_row = np.concatenate([np.full(len(e["q"]) - 1, i) for i, e in enumerate(eps)])
@@ -111,7 +116,7 @@ def main():
         for t in range(n - drop):
             k = t + offsets
             k = k[(k >= 0) & (k < n)]
-            lab = np.concatenate([e["q"][k + 1] - e["q"][t], e["w"][k + 1, None]], axis=1)
+            lab = np.concatenate([e["q_label"][k + 1] - e["q"][t], e["w"][k + 1, None]], axis=1)
             labels.append(lab)
     labels = np.concatenate(labels)
     assert np.allclose(ds.stats["action"]["min"].numpy(), labels.min(0), atol=1e-6), "action min differs"
@@ -145,16 +150,20 @@ def main():
         valid = (k >= 0) & (k < n)
         assert torch.equal(item["action_is_pad"], torch.from_numpy(~valid)), f"row {row}: padding mask"
         absolute = from_chunk_relative(item["action"], item["observation.state"][-1]).numpy()
-        exp_abs = np.concatenate([e["q"][k[valid] + 1], e["w"][k[valid] + 1, None]], axis=1)
+        exp_abs = np.concatenate([e["q_label"][k[valid] + 1], e["w"][k[valid] + 1, None]], axis=1)
         assert np.allclose(absolute[valid], exp_abs, atol=1e-5), f"row {row}: anchor + label != recorded target"
         if valid[0] and offsets[0] == -1:
-            assert np.abs(item["action"][0, :N_ANCHORED_DIMS].numpy()).max() < 1e-5, f"row {row}: first label != 0"
+            # The window's first label is q_label[t] - q[t]: exactly 0 for measured labels.
+            exp_first = e["q_label"][t] - e["q"][t]
+            assert np.allclose(item["action"][0, :N_ANCHORED_DIMS].numpy(), exp_first, atol=1e-5), \
+                f"row {row}: first label != q_label[t] - q[t]"
         lab = item["action"][torch.from_numpy(valid)]
         normalized = (lab - a_min) / (a_max - a_min) * 2 - 1
         assert normalized.min() >= -1 - 1e-5 and normalized.max() <= 1 + 1e-5, f"row {row}: label outside [-1, 1]"
     print(f"[items] {len(picks)} items (incl. every episode's first and last anchor): states, "
           f"{'frames of ' + ', '.join(cams) if cams else 'NO images (--no_images)'}, padding mask, "
-          f"anchor + label == recorded target, first label 0, normalized in [-1, 1]")
+          f"anchor + label == recorded target, "
+          f"first label {'0' if action_labels == 'measured' else 'q_cmd[t] - q[t]'}, normalized in [-1, 1]")
     print("OK")
 
 
