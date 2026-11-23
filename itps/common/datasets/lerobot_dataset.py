@@ -82,12 +82,15 @@ class LeRobotDataset(torch.utils.data.Dataset):
         load_images: bool = True,
         action_anchor: str | None = None,
         drop_n_last_frames: int = 0,
+        action_labels: str = "measured",
     ):
         """
         action_anchor: None keeps actions as stored. "chunk" makes the first 7 action dims (joints) offsets from the
             window's observed joint positions (itps/common/datasets/chunk_relative.py), per item and in the stats.
         drop_n_last_frames: the training sampler's value (EpisodeAwareSampler); only used so the chunk-relative
             action stats cover exactly the windows training draws.
+        action_labels: real_robot only. "measured" (default) labels the joints with the measured next positions;
+            "commanded" with the commanded joint targets (cmd/joint_pos), see utils._load_real_robot_hdf5.
         """
         super().__init__()
         self.repo_id = repo_id
@@ -102,7 +105,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
         # load data from hub or locally when root is provided
         # TODO(rcadene, aliberts): implement faster transfer
         # https://huggingface.co/docs/huggingface_hub/en/guides/download#faster-downloads
-        self.hf_dataset = load_hf_dataset(repo_id, CODEBASE_VERSION, root, split, self.goal_horizon, past_action_visible=past_action_visible, load_images=load_images)
+        self.action_labels = action_labels
+        self.hf_dataset = load_hf_dataset(repo_id, CODEBASE_VERSION, root, split, self.goal_horizon, past_action_visible=past_action_visible, load_images=load_images, action_labels=action_labels)
         # Images kept outside the HF dataset: {policy input key: (N, 3, H, W) uint8}, or None. robosuite stores a
         # single agentview array; real_robot stores one array per camera.
         self._images = getattr(self.hf_dataset, '_images', None)

@@ -115,6 +115,10 @@ def make_dataset(cfg, split: str = "train") -> LeRobotDataset | MultiLeRobotData
         if cfg.get("action_anchor"):
             dataset_kwargs["action_anchor"] = cfg.action_anchor
             dataset_kwargs["drop_n_last_frames"] = cfg.training.get("drop_n_last_frames", 0) or 0
+        # Which joints label the actions (real_robot): "measured" (default) or "commanded" (cmd/joint_pos).
+        # Only added when set, so every existing config trains exactly as before.
+        if cfg.get("action_labels"):
+            dataset_kwargs["action_labels"] = cfg.action_labels
 
         # Add goal horizon if necessary 
         if cfg.condition_type.lower() != "unconditional":

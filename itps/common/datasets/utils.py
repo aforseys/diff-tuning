@@ -111,7 +111,8 @@ def get_hf_dataset_safe_version(repo_id: str, version: str) -> str:
         return version
 
 
-def _load_real_robot_hdf5(root, past_action_visible: bool = False, load_images: bool = True) -> datasets.Dataset:
+def _load_real_robot_hdf5(root, past_action_visible: bool = False, load_images: bool = True,
+                          action_labels: str = "measured") -> datasets.Dataset:
     """Real-robot demos converted by itps/envs/real_robot/convert_cup_demos.py (one 10 Hz grid per demo).
 
     Built per episode -- nothing is shifted across episode boundaries. For a demo with T frames, row k (k < T-1):
@@ -121,12 +122,19 @@ def _load_real_robot_hdf5(root, past_action_visible: bool = False, load_images: 
     LeRobotDataset.__getitem__ when `action_anchor: chunk` -- that depends on the window, so it can't be stored.
     Images (uint8, N x 3 x H x W) are kept outside the HF dataset, keyed by policy input name
     ('observation.image.<cam>'), as `hf_dataset._images`.
+
+    action_labels: "measured" (default) takes the action joints from obs/joint_pos, as above. "commanded" takes them
+    from cmd/joint_pos -- the joint targets the robot was COMMANDED at each frame, added to a converted file by
+    SimpleTrajectoryRecorder's scripts/cup_demos/build_cmd_labels.py: action = [q_cmd[k+1], width[k+1]], so the
+    chunk-relative label is q_cmd[t+i] - q_meas[t]. The state (the model's input) and the gripper label stay measured.
     """
     import h5py
     import numpy as np
 
     if past_action_visible:
         raise NotImplementedError("past_action_visible is not supported for real_robot data")
+    if action_labels not in ("measured", "commanded"):
+        raise ValueError(f"action_labels must be 'measured' or 'commanded', got {action_labels!r}")
 
     states, actions, episode_indices, frame_indices, timestamps, global_indices = [], [], [], [], [], []
     with h5py.File(root, "r") as f:
@@ -139,8 +147,17 @@ def _load_real_robot_hdf5(root, past_action_visible: bool = False, load_images: 
             q = g["obs/joint_pos"][:]           # (T, 7)
             w = g["obs/gripper_width"][:]       # (T,)
             n = len(q) - 1                      # rows that have a next frame
+            if action_labels == "commanded":
+                if "cmd/joint_pos" not in g:
+                    raise ValueError(f"{root}: {key} has no cmd/joint_pos -- action_labels: commanded needs a file "
+                                     f"built by build_cmd_labels.py")
+                q_label = g["cmd/joint_pos"][:]  # (T, 7) commanded joint targets at the same frames
+                if q_label.shape != q.shape:
+                    raise ValueError(f"{root}: {key} cmd/joint_pos {q_label.shape} != obs/joint_pos {q.shape}")
+            else:
+                q_label = q
             states.append(np.concatenate([q[:n], w[:n, None]], axis=1).astype(np.float32))
-            actions.append(np.concatenate([q[1:], w[1:, None]], axis=1).astype(np.float32))
+            actions.append(np.concatenate([q_label[1:], w[1:, None]], axis=1).astype(np.float32))
             if load_images:
                 for cam in cams:
                     images[f"observation.image.{cam}"].append(g[f"obs/{cam}_image"][:n].transpose(0, 3, 1, 2))
@@ -164,11 +181,14 @@ def _load_real_robot_hdf5(root, past_action_visible: bool = False, load_images: 
     return hf_dataset
 
 
-def load_hf_dataset(repo_id: str, version: str, root: Path, split: str, goal_horizon: int=60, past_action_visible: bool=False, load_images: bool=True) -> datasets.Dataset:
+def load_hf_dataset(repo_id: str, version: str, root: Path, split: str, goal_horizon: int=60, past_action_visible: bool=False, load_images: bool=True, action_labels: str = "measured") -> datasets.Dataset:
     """hf_dataset contains all the observations, states, actions, rewards, etc."""
+    if action_labels != "measured" and not (root is not None and 'real_robot' in repo_id):
+        raise ValueError(f"action_labels {action_labels!r} is only supported for real_robot data")
     if root is not None:
         if 'real_robot' in repo_id:  # real-robot demos from itps/envs/real_robot/convert_cup_demos.py
-            hf_dataset = _load_real_robot_hdf5(root, past_action_visible=past_action_visible, load_images=load_images)
+            hf_dataset = _load_real_robot_hdf5(root, past_action_visible=past_action_visible, load_images=load_images,
+                                               action_labels=action_labels)
         elif 'robosuite' in repo_id:  # robosuite demos from collect_demos.py
             import h5py
             import numpy as np
