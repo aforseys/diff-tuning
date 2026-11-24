@@ -355,7 +355,7 @@ class DiffusionModel(nn.Module):
 
         sched = self.noise_scheduler
         sched.set_timesteps(self.num_inference_steps)
-        grid = sched.timesteps
+        grid = [int(t) for t in sched.timesteps]
 
         global_cond = self._prepare_global_conditioning(batch)
         assert global_cond.shape[0] == batch_size, (
@@ -364,7 +364,21 @@ class DiffusionModel(nn.Module):
 
         # Each element's capture step, uniform over the inference grid. One point per element, so
         # batch size stays matched against the demo_noise sampler.
-        k = torch.randint(0, len(grid), (batch_size,), device=device)
+        #
+        # The index bookkeeping is done on the HOST and uploaded once, so the loop below contains no
+        # device->host transfers. Computing `(k >= i).nonzero()` on the device instead costs one
+        # synchronization per step -- which measured as the dominant cost of this function, several
+        # times the teacher forwards themselves.
+        k = torch.randint(0, len(grid), (batch_size,))
+        n_steps = int(k.max()) + 1  # nothing past the deepest draw is ever needed
+        live_host = [(k >= i).nonzero(as_tuple=True)[0] for i in range(n_steps)]
+        keep_host = [k[rows] == i for i, rows in enumerate(live_host)]
+        live = [rows.to(device) for rows in live_host]
+        keep = [m.to(device) for m in keep_host]
+        drop = [(~m).to(device) for m in keep_host]
+        hit = [rows[m].to(device) for rows, m in zip(live_host, keep_host)]
+        move = [rows[~m].to(device) for rows, m in zip(live_host, keep_host)]
+
         x = torch.randn(
             size=(batch_size, self.config.horizon, self.config.output_shapes["action"][0]),
             dtype=dtype,
@@ -374,26 +388,21 @@ class DiffusionModel(nn.Module):
         target = torch.empty_like(x)
         timesteps = torch.empty(batch_size, dtype=torch.long, device=device)
 
-        for i, t in enumerate(grid):
-            live = (k >= i).nonzero(as_tuple=True)[0]  # rows that have not been captured yet
-            if len(live) == 0:
-                break
+        for i in range(n_steps):
+            t = grid[i]
+            rows = live[i]
             eps_t = self.model(
-                x[live],
-                torch.full((len(live),), int(t), dtype=torch.long, device=device),
-                global_cond=global_cond[live],
+                x[rows],
+                torch.full((len(rows),), t, dtype=torch.long, device=device),
+                global_cond=global_cond[rows],
             ).detach()
-            at_i = k[live] == i
             # Captured here, and the eps just computed at this state IS its target.
-            hit = live[at_i]
-            x_t[hit] = x[hit]
-            timesteps[hit] = int(t)
-            target[hit] = eps_t[at_i]
+            x_t[hit[i]] = x[hit[i]]
+            timesteps[hit[i]] = t
+            target[hit[i]] = eps_t[keep[i]]
             # Everything else takes one more DDIM step.
-            onward = ~at_i
-            if onward.any():
-                moving = live[onward]
-                x[moving] = sched.step(eps_t[onward], t, x[moving]).prev_sample
+            if len(move[i]):
+                x[move[i]] = sched.step(eps_t[drop[i]], t, x[move[i]]).prev_sample
 
         return x_t, timesteps, target
 

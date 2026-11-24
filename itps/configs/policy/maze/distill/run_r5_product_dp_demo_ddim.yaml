@@ -24,7 +24,10 @@ wandb:
 
 eval:
   # Per-timestep field match against the teacher, logged beside the rollout metrics.
+  # Declared (not left to .get defaults) so they can be overridden without hydra's +key syntax.
   field_match: data/maze2d-sparse-v3.hdf5
+  field_match_n: 256     # probe windows, and the sampling batch for the two path probes
+  field_match_seed: 0
 
 teacher_policy_path: 'data/maze2d_dp/sparse/gc/train/dp_sparse_gc/pretrained_model'
 init_from_teacher: true

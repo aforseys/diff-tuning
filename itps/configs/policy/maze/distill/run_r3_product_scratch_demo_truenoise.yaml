@@ -25,7 +25,10 @@ wandb:
 
 eval:
   # Per-timestep field match against the teacher, logged beside the rollout metrics.
+  # Declared (not left to .get defaults) so they can be overridden without hydra's +key syntax.
   field_match: data/maze2d-sparse-v3.hdf5
+  field_match_n: 256     # probe windows, and the sampling batch for the two path probes
+  field_match_seed: 0
 
 # No teacher: distill_sampler/distill_target keep their defaults (demo_noise / true_noise).
 policy:
