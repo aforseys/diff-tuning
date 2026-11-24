@@ -164,6 +164,10 @@ class DiffusionConfig:
     # Loss computation
     do_mask_loss_for_padding: bool = False
     gradient_loss_weight: float = 1
+    # How the scalar energy is built from the UNet output s (ebm_diffusion only; ignored by the plain
+    # policy, which has no EBMWrapper). "magnitude" is sum(s^2); "product" is the inner-product form
+    # 0.5 * sum(x * s) (Du et al. 2023 Table A1; Guth et al. 2025 Eq. 10). See EBMWrapper.forward.
+    energy_mode: str = "magnitude"
     supervise_energy_landscape: bool = False
     energy_landscape_loss_weight: float = 0.5
     # Negative for the energy-landscape loss. neg_eps_weight scales the noise (IRED uses 3.0).
@@ -181,6 +185,20 @@ class DiffusionConfig:
     dpo_params: dict = field(default_factory=lambda: {"rho": 500, "mu": 0.2, "b": 0})
     finetune_demos: bool = False
     demo_finetune_loss_weight: float = 0.0
+
+    # Distillation from a frozen teacher (cfg.teacher_policy_path). Defaults reproduce ordinary
+    # training exactly, so every existing config is unaffected.
+    #   distill_sampler         where x_t comes from: noised demo windows, or states the teacher's
+    #                           own DDIM sampler visits (see DiffusionModel.teacher_rollout_points).
+    #   distill_target          what eps_hat regresses onto: the drawn noise, or the teacher's eps.
+    #   distill_timestep_support  demo_noise only -- "ddim" restricts t to the inference grid so it
+    #                           matches where teacher_rollout can look. "all" samples all timesteps.
+    #   distill_anchor_weight   lambda on the ordinary training loss (denoising + energy landscape)
+    #                           added alongside the distillation term.
+    distill_sampler: str = "demo_noise"
+    distill_target: str = "true_noise"
+    distill_timestep_support: str = "all"
+    distill_anchor_weight: float = 0.0
 
 
     def __post_init__(self):
@@ -239,4 +257,33 @@ class DiffusionConfig:
             raise ValueError(
                 f"`noise_scheduler_type` must be one of {supported_noise_schedulers}. "
                 f"Got {self.noise_scheduler_type}."
+            )
+        # Both are single-step solvers, which teacher_rollout_points relies on: it drops finished
+        # rows from the batch mid-rollout, which is only sound when `step` carries no history.
+        supported_energy_modes = ["magnitude", "product"]
+        if self.energy_mode not in supported_energy_modes:
+            raise ValueError(
+                f"`energy_mode` must be one of {supported_energy_modes}. Got {self.energy_mode}."
+            )
+        supported_samplers = ["demo_noise", "teacher_rollout"]
+        if self.distill_sampler not in supported_samplers:
+            raise ValueError(
+                f"`distill_sampler` must be one of {supported_samplers}. Got {self.distill_sampler}."
+            )
+        supported_targets = ["true_noise", "teacher_eps"]
+        if self.distill_target not in supported_targets:
+            raise ValueError(
+                f"`distill_target` must be one of {supported_targets}. Got {self.distill_target}."
+            )
+        supported_supports = ["all", "ddim"]
+        if self.distill_timestep_support not in supported_supports:
+            raise ValueError(
+                f"`distill_timestep_support` must be one of {supported_supports}. "
+                f"Got {self.distill_timestep_support}."
+            )
+        # "true_noise" is the noise that produced x_t, so it only exists where we did the noising.
+        if self.distill_target == "true_noise" and self.distill_sampler != "demo_noise":
+            raise ValueError(
+                "`distill_target: true_noise` requires `distill_sampler: demo_noise` -- there is no "
+                f"drawn noise to regress onto at teacher-rollout states. Got {self.distill_sampler}."
             )

@@ -3,7 +3,7 @@
 # Alexandra Forsey-Smerek
 """The maze2d environment: trajectories are scored offline against the maze metrics, with no simulator."""
 from itps.envs.base_env import Environment
-from itps.envs.maze.eval import eval_maze, eval_maze_preference
+from itps.envs.maze.eval import eval_field_match, eval_maze, eval_maze_preference
 
 
 class MazeEnv(Environment):
@@ -19,9 +19,13 @@ class MazeEnv(Environment):
 
         With `eval.pref_test_set` / `eval.dmse_dataset`, also reports the preference metrics
         (win rate against `eval.pref_metric`, and denoising error on the original data).
+
+        With `eval.field_match` and a teacher in `ref_policy`, also reports the per-timestep field
+        match against that teacher -- the distillation runs' primary measurement.
         """
         info = {"aggregated": {}, "per_obs": {}}
         info["aggregated"].update(eval_maze_preference(policy, cfg, ref_policy=ref_policy, seed=seed))
+        info["aggregated"].update(eval_field_match(policy, cfg, ref_policy=ref_policy, seed=seed))
         if cfg.eval.get("train_obs") is None and cfg.eval.get("test_obs") is None:
             return info
         for split in ("train", "test"):

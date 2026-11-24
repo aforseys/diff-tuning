@@ -39,6 +39,7 @@ import numpy as np
 import torch
 
 from itps.common.policies.factory import make_policy
+from itps.common.utils.field_match import field_match_stats
 from itps.common.utils.utils import init_hydra_config
 
 
@@ -106,14 +107,6 @@ def eps_at(policy, x, t, global_cond):
     t_batch = torch.full(x.shape[:1], t, dtype=torch.long, device=x.device)
     out = policy.diffusion.model(x.clone().requires_grad_(False), t_batch, global_cond=global_cond)
     return out.detach()
-
-
-def stats(ea, eb):
-    a = ea.flatten(1)
-    b = eb.flatten(1)
-    cos = torch.nn.functional.cosine_similarity(a, b, dim=1)
-    na, nb = a.norm(dim=1), b.norm(dim=1)
-    return cos.mean().item(), na.mean().item(), nb.mean().item()
 
 
 def main():
@@ -190,12 +183,17 @@ def main():
     # --- on each sampling path ---
     for owner in (args.label_a, args.label_b):
         print(f"\n### on {owner}'s own sampling path ###")
-        print(f"{'t':>5}{'cos':>9}{'|eps| ' + args.label_a:>14}{'|eps| ' + args.label_b:>14}{'ratio':>9}")
+        print(f"{'t':>5}{'cos':>9}{'cos p5':>9}{'rel':>9}"
+              f"{'|eps| ' + args.label_a:>14}{'|eps| ' + args.label_b:>14}{'ratio':>9}")
         for t, xt in paths[owner][1]:
             ea = eps_at(pa, xt, t, gc_a)
             eb = eps_at(pb, xt, t, gc_b)
-            cos, na, nb = stats(ea, eb)
-            print(f"{t:>5}{cos:>9.4f}{na:>14.3f}{nb:>14.3f}{na / max(nb, 1e-9):>9.3f}")
+            # Shared with the logged training metric (envs/maze/eval.eval_field_match), so the CLI
+            # and wandb cannot disagree.
+            s = field_match_stats(ea, eb)
+            print(f"{t:>5}{s['cos_mean']:>9.4f}{s['cos_p5']:>9.4f}{s['rel']:>9.4f}"
+                  f"{s['norm_a']:>14.3f}{s['norm_b']:>14.3f}"
+                  f"{s['norm_a'] / max(s['norm_b'], 1e-9):>9.3f}")
 
     print(f"\nsqrt(D) for reference: {np.sqrt(np.prod(paths[args.label_a][0].shape[1:])):.3f}"
           f"   (expected ||eps|| if the model matched a true N(0,I) draw)")

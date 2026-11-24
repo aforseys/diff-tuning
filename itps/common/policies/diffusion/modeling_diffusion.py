@@ -215,7 +215,8 @@ def _make_noise_scheduler(name: str, **kwargs: dict) -> DDPMScheduler | DDIMSche
 
 class DiffusionModel(nn.Module):
     # Loss terms reported by `compute_loss` for logging (-1 when a term isn't used).
-    loss_component_names = ("loss_mse", "loss_dpo_finetune", "loss_demo_finetune")
+    loss_component_names = ("loss_mse", "loss_dpo_finetune", "loss_demo_finetune",
+                            "loss_distill", "loss_anchor")
 
     def __init__(self, config: DiffusionConfig):
         super().__init__()
@@ -281,6 +282,14 @@ class DiffusionModel(nn.Module):
         else:
             self.num_inference_steps = config.num_inference_steps
 
+        # The timesteps inference actually visits -- a strided subset of the training timesteps
+        # (e.g. {0, 10, ..., 90} for 10 steps over 100). Derived, not configured. Used by
+        # distill_timestep_support="ddim" to restrict demo noising to where sampling can look.
+        # persistent=False keeps it out of state_dict, so existing checkpoints still load strictly.
+        self.noise_scheduler.set_timesteps(self.num_inference_steps)
+        self.register_buffer("_ddim_timesteps", self.noise_scheduler.timesteps.clone().long(),
+                             persistent=False)
+
     # ========= inference  ============
     def conditional_sample(
         self, batch_size: int, global_cond: Tensor | None = None, generator: torch.Generator | None = None,
@@ -321,6 +330,72 @@ class DiffusionModel(nn.Module):
         if return_path:
             return sample, path
         return sample
+
+    def teacher_rollout_points(self, batch: dict[str, Tensor], batch_size: int):
+        """
+        Training points from THIS model's own DDIM sampler, for distillation
+        (config.distill_sampler "teacher_rollout"). Call it on the frozen teacher, under no_grad.
+
+        Returns (x_t, timesteps, eps_teacher): per batch element, a state the sampler visited at a
+        uniformly chosen one of its `num_inference_steps` steps, that state's timestep, and this model's
+        eps there -- which is the regression target. Almost none of these are draws from q(x_t | x_0), so
+        they are exactly where the denoising objective never looks.
+
+        Each element LEAVES the batch once captured, so reaching step k costs that element k+1 forwards
+        rather than the whole chain: 5.5x batch_size forward-rows for a 10-step grid instead of 11x. Note
+        the cost rises with the step index, i.e. as the noise level FALLS -- low-t states are the ones
+        that require running the chain to the end.
+
+        Sound only for a single-step solver (DDPM/DDIM, enforced in DiffusionConfig.__post_init__):
+        `noise_scheduler.step` keeps no history, so dropping finished rows cannot perturb the rows still
+        going, and DDIM's default eta=0 adds no noise.
+        """
+        device = get_device_from_parameters(self)
+        dtype = get_dtype_from_parameters(self)
+
+        sched = self.noise_scheduler
+        sched.set_timesteps(self.num_inference_steps)
+        grid = sched.timesteps
+
+        global_cond = self._prepare_global_conditioning(batch)
+        assert global_cond.shape[0] == batch_size, (
+            f"conditioning has {global_cond.shape[0]} rows for batch_size {batch_size}"
+        )
+
+        # Each element's capture step, uniform over the inference grid. One point per element, so
+        # batch size stays matched against the demo_noise sampler.
+        k = torch.randint(0, len(grid), (batch_size,), device=device)
+        x = torch.randn(
+            size=(batch_size, self.config.horizon, self.config.output_shapes["action"][0]),
+            dtype=dtype,
+            device=device,
+        )
+        x_t = torch.empty_like(x)
+        target = torch.empty_like(x)
+        timesteps = torch.empty(batch_size, dtype=torch.long, device=device)
+
+        for i, t in enumerate(grid):
+            live = (k >= i).nonzero(as_tuple=True)[0]  # rows that have not been captured yet
+            if len(live) == 0:
+                break
+            eps_t = self.model(
+                x[live],
+                torch.full((len(live),), int(t), dtype=torch.long, device=device),
+                global_cond=global_cond[live],
+            ).detach()
+            at_i = k[live] == i
+            # Captured here, and the eps just computed at this state IS its target.
+            hit = live[at_i]
+            x_t[hit] = x[hit]
+            timesteps[hit] = int(t)
+            target[hit] = eps_t[at_i]
+            # Everything else takes one more DDIM step.
+            onward = ~at_i
+            if onward.any():
+                moving = live[onward]
+                x[moving] = sched.step(eps_t[onward], t, x[moving]).prev_sample
+
+        return x_t, timesteps, target
 
     def _prepare_global_conditioning(self, batch: dict[str, Tensor]) -> Tensor:
         """Encode image features and concatenate them all together along with the state vector."""
@@ -429,19 +504,39 @@ class DiffusionModel(nn.Module):
 
         components = {name: torch.tensor(-1, dtype=torch.float32) for name in self.loss_component_names}
 
+        # The anchor is the ORDINARY training loss (denoising + energy landscape). It is scaled by
+        # distill_anchor_weight only when there is a distillation term for it to anchor; 1.0 otherwise,
+        # which is every pretrain and finetune config that does not set distill_target.
+        # Gated on tune_batch too: distillation is pretraining-shaped, so a finetune run that
+        # inherited distill_target (e.g. from a distilled student's config) must not have its
+        # landscape term silently scaled by lambda.
+        distilling = tune_batch is None and self.config.distill_target == "teacher_eps"
+        anchor_weight = self.config.distill_anchor_weight if distilling else 1.0
+
         if tune_batch is None:
-            eps = torch.randn(trajectory.shape, device=trajectory.device)
-            loss_mse = self._timestep_weight(timesteps) * self._compute_denoising_sq_error(
-                batch, timesteps, eps, mask=self._padding_mask(batch)
-            )
-            loss = self.config.gradient_loss_weight * loss_mse
-            components["loss_mse"] = loss_mse.mean()
+            loss = 0.0
+            if distilling:
+                x_t, timesteps_distill, target, mask = self._distillation_points(batch, timesteps, ref_model)
+                loss_distill = self._timestep_weight(timesteps_distill) * self._compute_denoising_sq_error(
+                    batch, timesteps_distill, None, mask=mask, noisy_trajectory=x_t, target=target
+                )
+                loss = loss + self.config.gradient_loss_weight * loss_distill
+                components["loss_distill"] = loss_distill.mean()
+
+            # anchor_weight is 1.0 whenever we are not distilling, so this is the ordinary loss.
+            if anchor_weight > 0:
+                eps = torch.randn(trajectory.shape, device=trajectory.device)
+                loss_mse = self._timestep_weight(timesteps) * self._compute_denoising_sq_error(
+                    batch, timesteps, eps, mask=self._padding_mask(batch)
+                )
+                loss = loss + anchor_weight * self.config.gradient_loss_weight * loss_mse
+                components["loss_anchor" if distilling else "loss_mse"] = loss_mse.mean()
         else:
             loss, finetune_components = self._finetune_loss(batch, tune_batch, timesteps, ref_model=ref_model)
             components.update(finetune_components)
 
         auxiliary_loss, auxiliary_components = self._auxiliary_loss(batch, timesteps)
-        loss = loss + auxiliary_loss
+        loss = loss + anchor_weight * auxiliary_loss
         components.update(auxiliary_components)
 
         return loss.mean(), components
@@ -580,16 +675,63 @@ class DiffusionModel(nn.Module):
         """(B, 1) loss weight at the sampled timesteps (from `self.loss_weight`)."""
         return extract(self.loss_weight, timesteps, (timesteps.shape[0], 1))
 
-    def _compute_denoising_sq_error(self, batch, timesteps, eps, mask=None):
+    def _distillation_points(self, batch: dict[str, Tensor], timesteps: Tensor, ref_model):
+        """
+        (x_t, timesteps, target, mask) for a distillation step: query points plus the frozen teacher's eps
+        there. config.distill_sampler decides where the query points come from.
+
+        "teacher_rollout" uses states the teacher's own DDIM sampler visits -- the region the denoising
+        objective never looks at. mask is None there: that x_t is a generated trajectory with no padded
+        slots, and batch["action_is_pad"] describes the conditioning window, not this trajectory. Its
+        timesteps come from the sampler grid, so the batch's shared draw does not apply.
+
+        "demo_noise" noises the batch's real trajectory in place, so the usual padding mask applies and
+        the shared timesteps are reused -- unless distill_timestep_support is "ddim", which restricts
+        them to the inference grid so the two samplers see the same set of noise levels.
+        """
+        assert ref_model is not None, (
+            "distill_target 'teacher_eps' needs a frozen teacher; set cfg.teacher_policy_path"
+        )
+        trajectory = batch["action"]
+        batch_size = trajectory.shape[0]
+
+        if self.config.distill_sampler == "teacher_rollout":
+            with torch.no_grad():
+                x_t, timesteps, target = ref_model.diffusion.teacher_rollout_points(batch, batch_size)
+            return x_t, timesteps, target, None
+
+        if self.config.distill_timestep_support == "ddim":
+            idx = torch.randint(0, len(self._ddim_timesteps), (batch_size,), device=trajectory.device)
+            timesteps = self._ddim_timesteps[idx]
+        eps = torch.randn(trajectory.shape, device=trajectory.device)
+        x_t = self.noise_scheduler.add_noise(trajectory, eps, timesteps)
+        with torch.no_grad():
+            target = ref_model.diffusion.model(
+                x_t,
+                timesteps,
+                global_cond=ref_model.diffusion._prepare_global_conditioning(batch),
+            ).detach()
+        return x_t, timesteps, target, self._padding_mask(batch)
+
+    def _compute_denoising_sq_error(self, batch, timesteps, eps, mask=None, noisy_trajectory=None, target=None):
+        """
+        Squared error between the model's prediction at (x_t, timesteps) and a target.
+
+        By default x_t is a draw from q(x_t | x_0) for the batch's own trajectory and the target is the
+        noise that produced it -- the ordinary denoising loss. Distillation overrides both:
+        `noisy_trajectory` supplies query points the loss would never otherwise see (teacher DDIM states),
+        and `target` supplies a teacher's eps in place of the drawn noise. `eps` is then unused.
+        """
 
         # Assuming noise prediction
         assert self.config.prediction_type == "epsilon", "Assumes target prediction is noise."
-        target = eps
+        target = eps if target is None else target
 
         # Forward diffusion
         global_cond = self._prepare_global_conditioning(batch)
         trajectory = batch["action"]
-        noisy_trajectory = self.noise_scheduler.add_noise(trajectory, eps, timesteps)
+        if noisy_trajectory is None:
+            noisy_trajectory = self.noise_scheduler.add_noise(trajectory, eps, timesteps)
 
         # Predict noise and compare to target
         pred = self.model(noisy_trajectory, timesteps, global_cond=global_cond, mask=mask)
@@ -614,13 +756,21 @@ class DiffusionModel(nn.Module):
 
 class EBMWrapper(nn.Module):
     """
-    Turns the UNet into an energy-based model: the energy of a noisy trajectory is the squared UNet output
-    summed over the trajectory, and the noise prediction is the gradient of that energy w.r.t. the input.
+    Turns the UNet into an energy-based model: a scalar energy is built from the UNet output and the noise
+    prediction is the gradient of that energy w.r.t. the input.
+
+    Two energy forms, selected by config.energy_mode. Either way eps_hat = dE/dx is what the denoising loss
+    regresses against eps, so after training both have ||eps_hat|| ~ ||eps|| -- the FIELD scale does not
+    depend on the mode. What differs is the energy VALUE: magnitude is bounded below by 0, product is not.
+    Every consumer of the value compares differences (softplus(E_pos - E_neg) in
+    _compute_comparison_energy_loss, ranking in preference_scoring.policy_win_rate), so both work, but the
+    typical size of those differences differs and loss_energy is not comparable across modes.
     """
 
-    def __init__(self, ebm):
+    def __init__(self, ebm, energy_mode: str = "magnitude"):
         super(EBMWrapper, self).__init__()
         self.model = ebm
+        self.energy_mode = energy_mode
 
     def forward(self, x: Tensor, timestep: Tensor | int, global_cond=None, return_energy=False, return_both=False, mask=None):
 
@@ -635,7 +785,14 @@ class EBMWrapper(nn.Module):
             # Check differentiability
             assert out.requires_grad, "model output is not differentiable — autograd graph broken!"
 
-            energy_per_state = out.pow(2)
+            if self.energy_mode == "product":
+                # Inner-product energy (Du et al. 2023 Table A1; Guth et al. 2025 Eq. 10), giving
+                # eps_hat = 0.5 * (s + J^T x). The 0.5 is load-bearing under teacher-weight init:
+                # where the field is near-linear, J^T x ~ s and eps_hat starts near the teacher's
+                # eps rather than near 2x it.
+                energy_per_state = 0.5 * x * out
+            else:
+                energy_per_state = out.pow(2)
 
             # Don't use padding actions in energy calculation
             if mask is not None:
@@ -666,7 +823,7 @@ class EBMDiffusionModel(DiffusionModel):
 
     def __init__(self, config: DiffusionConfig):
         super().__init__(config)
-        self.model = EBMWrapper(self.unet)
+        self.model = EBMWrapper(self.unet, config.energy_mode)
 
     # ========= inference  ============
     def opt_energy(self, batch_size: int, global_cond: Tensor | None = None, generator: torch.Generator | None = None, *, steps_per_timestep: int, opt_subset: int | None, denoise: bool, return_grad_steps: bool = False

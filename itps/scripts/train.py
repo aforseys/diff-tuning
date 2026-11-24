@@ -393,6 +393,42 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
         ref_policy.eval()
         ref_policy.requires_grad_(False)
 
+    # Distillation: the teacher is a separately trained policy loaded from disk and frozen, threaded
+    # through the same `ref_model` argument DPO's reference uses. Distillation runs are pretrain-shaped
+    # (dataset_root stays a string, so `finetune` is False), so this never collides with that branch.
+    if cfg.get("teacher_policy_path"):
+        assert ref_policy is None, "teacher_policy_path and finetune_dpo are mutually exclusive"
+        teacher_path = str(cfg.teacher_policy_path)
+        teacher_cfg = init_hydra_config(str(Path(teacher_path) / "config.yaml"), [f"device={cfg.device}"])
+        ref_policy = make_policy(hydra_cfg=teacher_cfg, pretrained_policy_name_or_path=teacher_path)
+        ref_policy.eval()
+        ref_policy.requires_grad_(False)
+        assert ref_policy.diffusion.num_inference_steps == policy.diffusion.num_inference_steps, (
+            "teacher and student must share num_inference_steps: the teacher's sampler grid is where "
+            "the training points come from, and the student's is what distill_timestep_support reads."
+        )
+
+        # Distillation targets are the teacher's eps in the TEACHER's normalized action space, so the
+        # student has to normalize identically. make_policy fits these from the dataset, so they already
+        # agree whenever dataset_root matches -- copy anyway so that stops being load-bearing.
+        for mod in ("normalize_inputs", "normalize_targets", "unnormalize_outputs"):
+            getattr(policy, mod).load_state_dict(getattr(ref_policy, mod).state_dict())
+
+        if cfg.get("init_from_teacher"):
+            # Weights only. This is not the resume path, so the optimizer, LR schedule, step counter,
+            # grad scaler and RNG all stay freshly initialized.
+            # Copy named submodules rather than the whole state_dict: `diffusion.model` aliases the UNet
+            # (EBMWrapper wraps it and adds no parameters of its own) and the two policy classes store
+            # that alias under different names, so a whole-policy strict load would not line up.
+            copied = {"unet"} | ({"rgb_encoder"} if hasattr(policy.diffusion, "rgb_encoder") else set())
+            for name in copied:
+                getattr(policy.diffusion, name).load_state_dict(
+                    getattr(ref_policy.diffusion, name).state_dict()
+                )
+            leftover = {n.split(".")[0] for n, _ in policy.diffusion.named_parameters()} - copied - {"model"}
+            assert not leftover, f"teacher init would skip learnable submodules: {leftover}"
+            logging.info(f"initialized {sorted(copied)} from teacher {teacher_path}")
+
     # EMA of the policy weights, wired exactly as in Diffusion Policy's train workspace: a deepcopy taken
     # here, `ema.step(policy)` after every optimizer/scheduler step, and the EMA copy is what gets evaluated
     # and saved as pretrained_model/. Off unless `training.ema.enable` is set.

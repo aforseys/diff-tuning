@@ -9,6 +9,7 @@ from contextlib import nullcontext
 import numpy as np
 import torch
 
+from itps.common.utils.field_match import field_match_stats
 from itps.common.utils.preference_scoring import dpo_reward, policy_win_rate
 from itps.common.utils.utils import seeded_context
 from itps.envs.maze.maze_maps import MAZE_MAPS
@@ -305,5 +306,74 @@ def eval_maze_preference(policy, cfg, ref_policy=None, seed=None):
                                      seed=cfg.eval.get("dmse_seed", 0))
             # No ref_policy: D-MSE is this policy's own error, comparable across objectives.
             out["dmse_test"] = float(-dpo_reward(policy, trajs, [obs])[0].mean())
+
+    return out
+
+
+def eval_field_match(policy, cfg, ref_policy=None, seed=None):
+    """
+    Per-timestep agreement between this policy's noise field and a frozen teacher's, over three sets
+    of query points. Gated on `eval.field_match` (the hdf5 the on-manifold set is drawn from) and on
+    having a teacher, so it costs nothing for runs that are not distilling.
+
+    Returns flat scalars for info["aggregated"], named fieldmatch_<probe>_<stat>_t<ttt>
+    (e.g. fieldmatch_teacherpath_cos_mean_t090). The stats are
+    `common.utils.field_match.field_match_stats`.
+
+      onmanifold   real demo windows noised to each inference timestep. This is where the denoising
+                   loss supervises, so both fields should agree -- the control that says the
+                   measurement is sound rather than a result in itself.
+      teacherpath  states the TEACHER's sampler visits: off the tube q(x_t | x_0), which is where
+                   the EBM and DP fields were measured to diverge as t -> 0.
+      studentpath  the same along the STUDENT's own sampler. Distilling on teacher states is
+                   off-policy, so this is what says whether the student is right where IT goes.
+
+    All three share the same conditioning, so differences between them are only about where the
+    field is queried, never about which observations were used.
+    """
+    if ref_policy is None or cfg.eval.get("field_match") is None:
+        return {}
+
+    device = next(policy.parameters()).device
+    draw_seed = cfg.eval.get("field_match_seed", 0)
+    grid = [int(t) for t in policy.diffusion._ddim_timesteps]
+
+    trajs, obs = _load_items(cfg.eval.field_match, cfg, policy, device,
+                             n_items=cfg.eval.get("field_match_n", 256), seed=draw_seed)
+
+    out = {}
+    with torch.no_grad():
+        nb_student = {**policy.normalize_inputs(dict(obs)), **policy.normalize_targets({"action": trajs})}
+        nb_teacher = {**ref_policy.normalize_inputs(dict(obs)), **ref_policy.normalize_targets({"action": trajs})}
+        gc_student = policy.diffusion._prepare_global_conditioning(nb_student)
+        gc_teacher = ref_policy.diffusion._prepare_global_conditioning(nb_teacher)
+        x0 = nb_student["action"]
+        batch_size = x0.shape[0]
+
+        # On-manifold: a fresh eps per timestep from a seeded generator, so the same query points are
+        # scored at every eval and by every model without persisting anything to disk.
+        gen = torch.Generator(device=device).manual_seed(draw_seed)
+        probes = {"onmanifold": [
+            (t, policy.diffusion.noise_scheduler.add_noise(
+                x0,
+                torch.randn(x0.shape, device=device, generator=gen),
+                torch.full((batch_size,), t, dtype=torch.long, device=device)))
+            for t in grid
+        ]}
+        for name, (pol, global_cond) in (("teacherpath", (ref_policy, gc_teacher)),
+                                         ("studentpath", (policy, gc_student))):
+            gen = torch.Generator(device=device).manual_seed(draw_seed)
+            _, path = pol.diffusion.conditional_sample(
+                batch_size, global_cond=global_cond, generator=gen, return_path=True)
+            probes[name] = path
+
+        for probe, points in probes.items():
+            for t, x_t in points:
+                timesteps = torch.full((batch_size,), t, dtype=torch.long, device=device)
+                # .clone() because EBMWrapper.forward calls requires_grad_ on its input in place.
+                eps_student = policy.diffusion.model(x_t.clone(), timesteps, global_cond=gc_student).detach()
+                eps_teacher = ref_policy.diffusion.model(x_t.clone(), timesteps, global_cond=gc_teacher).detach()
+                for stat, value in field_match_stats(eps_student, eps_teacher).items():
+                    out[f"fieldmatch_{probe}_{stat}_t{t:03d}"] = value
 
     return out
