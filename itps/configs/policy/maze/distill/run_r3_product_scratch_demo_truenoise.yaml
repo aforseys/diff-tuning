@@ -1,0 +1,37 @@
+# @package _global_
+# R3: inner-product energy trained the ORDINARY way -- no distillation, no teacher. Pairs with
+# R2 (distillation vs ordinary training) and with B1 = maze_sparse_ebm (product vs magnitude).
+# Deliberately keeps the full inherited loss, contrastive term included, so it differs from B1 in
+# exactly one knob. NOTE loss_energy is not comparable to B1's: softplus(E_pos - E_neg) is scaled
+# differently for the two energy forms.
+#
+# Inherits everything from maze/pretrain/maze_sparse_ebm -- 100k steps, lr 1e-4 cosine with 500-step warmup, batch 256,
+# save_freq/eval_freq 5000, horizon 64, num_inference_steps 10. Only the keys below differ, so
+# the arms stay comparable by construction. See scripts/supercloud_scripts/maze_distill.sh.
+defaults:
+  - /policy/maze/pretrain/maze_sparse_ebm
+  - _self_
+
+config_name: null   # filled by run_job.py
+
+hydra:
+  run:
+    dir: data/maze2d_dp/sparse/gc/distill/${now:%Y.%m.%d}/${hydra.job.name}
+  job:
+    name: ${now:%H.%M.%S}_${env.name}_r3_product_scratch_demo_truenoise
+
+wandb:
+  project: maze-distill
+
+eval:
+  # Per-timestep field match against the teacher, logged beside the rollout metrics.
+  field_match: data/maze2d-sparse-v3.hdf5
+
+# No teacher: distill_sampler/distill_target keep their defaults (demo_noise / true_noise).
+policy:
+  energy_mode: product
+
+training:
+  # Not set by the inherited config, so it would default to 3 (configs/default.yaml). The LLsub
+  # triple must cover 1 main + this many workers: [3,2,9].
+  num_workers: 8
