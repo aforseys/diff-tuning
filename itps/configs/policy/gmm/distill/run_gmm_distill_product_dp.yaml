@@ -1,0 +1,44 @@
+# @package _global_
+# Distil the base GMM DP into a product-energy student -- the R1 recipe applied to the GMM testbed.
+# Inherits everything from gmm/pretrain/gmm_ebm: unconditional, cluster_line spec, horizon 1,
+# batch 256, lr 1e-4 cosine with 500-step warmup, DDIM 10/100. No EMA.
+#
+# offline_steps 5000 -> 2500 (half), since R1 on the sparse maze converged by 20-30k of 100k.
+#
+# NOTE there is no field-match metric here: eval_field_match is wired into MazeEnv.evaluate only.
+# GMM instead reports KL against the ground-truth mixture and sample log-likelihood. Prefer the
+# log-likelihood as the headline -- kl_divergence goes through E = -sigma_t log p_t + c, and the
+# product energy has no E >= 0 anchor pinning c the way the magnitude form does, so absolute KL is
+# not necessarily comparable to the magnitude EBM's.
+#
+# eval.opt_params is inherited, so IRED sampling is also evaluated. That is fine: eps = grad E is
+# trained to match eps either way, so the gradient scale -- and therefore IRED's step size -- does
+# not depend on the energy form. It is still the first time IRED has run on a product energy.
+defaults:
+  - /policy/gmm/pretrain/gmm_ebm
+  - _self_
+
+config_name: null   # filled by run_job.py
+
+teacher_policy_path: 'data/gmm/general/train/2026.09.18/gmm_2026.09.18.13.50.01_gmm_diffusion/checkpoints/last/pretrained_model'
+init_from_teacher: true
+
+hydra:
+  run:
+    dir: data/gmm/general/distill/${now:%Y.%m.%d}/${hydra.job.name}
+  job:
+    name: gmm_${now:%Y.%m.%d.%H.%M.%S}_${env.name}_distill_product_dp
+
+wandb:
+  project: gmm-distill
+
+training:
+  offline_steps: 2500
+
+policy:
+  energy_mode: product
+  distill_sampler: teacher_rollout
+  distill_target: teacher_eps
+  # The contrastive term belongs to the ordinary loss, i.e. to the anchor, and the anchor is off.
+  supervise_energy_landscape: false
+  energy_landscape_loss_weight: 0.0

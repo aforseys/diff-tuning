@@ -1,0 +1,44 @@
+# @package _global_
+# Distil the base large-maze DP into a product-energy student -- the R1 recipe applied to the large
+# maze. Inherits everything from maze/pretrain/maze_large_ebm: unconditional, env_type large,
+# horizon 64, batch 256, lr 1e-4 cosine with 500-step warmup, DDIM 10/100, drop_n_last_frames 7.
+# No EMA.
+#
+# offline_steps 100000 -> 50000 (half), matching the 50k choice that looked good on the sparse maze.
+#
+# The large maze is UNCONDITIONAL, so there is no episode_goal and eval.metrics is [collision_rate]
+# alone -- _load_items and the field probes handle that (they only add the goal key when
+# policy.use_goal_cond).
+defaults:
+  - /policy/maze/pretrain/maze_large_ebm
+  - _self_
+
+config_name: null   # filled by run_job.py
+
+teacher_policy_path: 'data/maze2d_dp/large/general/train/pretrained_maze_dp'
+init_from_teacher: true
+
+hydra:
+  run:
+    dir: data/maze2d_dp/large/general/distill/${now:%Y.%m.%d}/${hydra.job.name}
+  job:
+    name: ${now:%H.%M.%S}_${env.name}_large_distill_product_dp
+
+wandb:
+  project: maze-distill
+
+eval:
+  field_match: data/maze2d-large-sparse-v1.hdf5
+  field_match_n: 256
+  field_match_seed: 0
+
+training:
+  offline_steps: 50000
+  num_workers: 8
+
+policy:
+  energy_mode: product
+  distill_sampler: teacher_rollout
+  distill_target: teacher_eps
+  supervise_energy_landscape: false
+  energy_landscape_loss_weight: 0.0
