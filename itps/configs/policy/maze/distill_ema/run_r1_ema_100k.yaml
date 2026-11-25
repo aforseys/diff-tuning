@@ -1,0 +1,31 @@
+# @package _global_
+# R1 with EMA weights, 100k steps. Nothing else changes from run_r1_product_dp_rollout -- same
+# teacher, same DP init, same product energy, same teacher-rollout sampler.
+#
+# EMA values are DP's standard schedule, copied from configs/policy/real_robot/pretrain/*.yaml.
+# With EMA on, pretrained_model/ holds the EMA weights and the online weights go to
+# training_state.pth; train.py evaluates BOTH, the EMA set under the usual metric names and the
+# online set suffixed `_online`.
+#
+# Why 100k: R1 converged by 20-30k, so the cosine schedule over 100k spends most of the run at a
+# learning rate the result does not need. This anneals over 100k instead -- NOT the same as the
+# 100k checkpoint of the 100k run, whose schedule is only part way down at that point.
+defaults:
+  - /policy/maze/distill/run_r1_product_dp_rollout
+  - _self_
+
+config_name: null   # filled by run_job.py
+
+hydra:
+  job:
+    name: ${now:%H.%M.%S}_${env.name}_r1_ema_100k
+
+training:
+  offline_steps: 100000
+  ema:
+    enable: true
+    update_after_step: 0
+    inv_gamma: 1.0
+    power: 0.75
+    min_value: 0.0
+    max_value: 0.9999
