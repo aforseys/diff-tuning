@@ -3,12 +3,16 @@
 #
 # Energy-based preference finetuning on the GMM, re-run from the DISTILLED base policy
 # (product energy, DP-initialized) instead of the original EBM base.
-# 60 runs = seed(10) x timestep_support(all|ddim) x finetune_loss_weight(5|10|20).
+# 60 runs = seed(10) x timestep_support(all|ddim) x finetune_loss_weight(5|10|20),
+# with the LANGEVIN IRED sampler (eval.opt_params langevin: True) -- the scheme that was live
+# 2026-09-30..2026-10-23 and produced the original gmm seeded numbers. The first distilled pass
+# (dir .../gmm_ebm_pref_only_distilled_seeded) used today's no-noise sampler; point CONFIGS_DIR
+# back at it to re-run that.
 #
 # STEP 1 -- generate the run configs ONCE (from the itps/ dir). The path must match CONFIGS_DIR below:
 #   python scripts/generate_configs.py \
-#       --config configs/policy/gmm_seeded/gmm_ebm_pref_only_distilled_seeded.yaml \
-#       --out_dir configs/policy/gmm_seeded/gmm_ebm_pref_only_distilled_seeded/
+#       --config configs/policy/gmm_seeded/gmm_ebm_pref_only_distilled_langevin_seeded.yaml \
+#       --out_dir configs/policy/gmm_seeded/gmm_ebm_pref_only_distilled_langevin_seeded/
 #
 # STEP 2 -- inspect that dir (expect 60 run_*.yaml) and confirm the distilled checkpoint is there:
 #   ls data/gmm/general/distill/2026.11.25/gmm_2026.11.25.20.00.02_gmm_distill_product_dp/checkpoints/last/pretrained_model
@@ -29,7 +33,7 @@ export PYTHONPATH="/home/gridsan/aforsey/diff-tuning:$PYTHONPATH"
 export WANDB_MODE=offline
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-CONFIGS_DIR="/home/gridsan/aforsey/diff-tuning/itps/configs/policy/gmm_seeded/gmm_ebm_pref_only_distilled_seeded"
+CONFIGS_DIR="/home/gridsan/aforsey/diff-tuning/itps/configs/policy/gmm_seeded/gmm_ebm_pref_only_distilled_langevin_seeded"
 SCRIPT="scripts/train.py"
 ENV_NAME="gmm"
 # ──────────────────────────────────────────────────────────────────────────────
