@@ -113,6 +113,10 @@ def method_labels(methods, opt_params, ired_prefix='IRED', ddim_label='DDIM'):
                 label += f'_last{params["t_subset"]}'
             if params["denoise"]:
                 label += '_denoise'
+            # Keeps the two IRED schemes apart in wandb; absent (the default) leaves every
+            # existing label byte-identical.
+            if params.get("langevin", False):
+                label += '_langevin'
             labels.append(label)
     if 'ddim' in methods:
         labels.append(ddim_label)

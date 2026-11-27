@@ -160,6 +160,10 @@ def _eval_maze(policy, cfg, split):
                 label+=f'_last{opt_params[i]["t_subset"]}'
             if opt_params[i]["denoise"]:
                 label+='_denoise'
+            # Keeps the two IRED schemes apart in wandb; absent (the default) leaves every
+            # existing label byte-identical.
+            if opt_params[i].get("langevin", False):
+                label+='_langevin'
 
         metrics_dict[label] ={
             f"{split}_{m}": {"mean": float(np.mean(vals)), "std": float(np.std(vals)), "per_obs": vals}

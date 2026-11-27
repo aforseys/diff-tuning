@@ -854,8 +854,29 @@ class EBMDiffusionModel(DiffusionModel):
         self.model = EBMWrapper(self.unet, config.energy_mode)
 
     # ========= inference  ============
-    def opt_energy(self, batch_size: int, global_cond: Tensor | None = None, generator: torch.Generator | None = None, *, steps_per_timestep: int, opt_subset: int | None, denoise: bool, return_grad_steps: bool = False
+    def opt_energy(self, batch_size: int, global_cond: Tensor | None = None, generator: torch.Generator | None = None, *, steps_per_timestep: int, opt_subset: int | None, denoise: bool, return_grad_steps: bool = False,
+                   langevin: bool = False,
     ) -> Tensor:
+        """
+        IRED-style energy optimization during sampling. `langevin=True` restores the scheme that was
+        live from 2026-09-30 (5286892) to 2026-10-23 (1bab10a) and produced the GMM seeded results;
+        False is the current scheme and the default, so every other config is unaffected.
+
+        Verified bit-identical to the 1bab10a^ (2026-10-22) module run with the same weights and
+        seed, rather than reconstructed from the commented block below -- that block's step is
+        faithful, but it leaves both clamps live, so uncommenting it is a third configuration.
+
+        The two differ in FOUR places, all restored together -- a partial restore is a scheme that
+        never ran:
+          1. gradient step    x - eta*grad        (langevin)  vs  x - eta*grad*2   (current)
+          2. injected noise   + sqrt(2*beta_t)*eps            vs  none
+          3. denoise re-projection  unclamped                 vs  clamped to +-sqrt(alpha_bar_t)
+          4. post-step clamp  none                            vs  clamped to +-sqrt(alpha_bar_t)
+        eta = beta_t / sqrt(1 - alpha_bar_t) in both. NOTE the noise is sqrt(2*beta_t), NOT
+        sqrt(2*eta) -- that was the 2026-09-24 version, superseded five days before the GMM configs
+        landed. `eps` deliberately does not take `generator`, matching the original; it still follows
+        the global torch seed train.py sets.
+        """
         device = get_device_from_parameters(self)
         dtype = get_dtype_from_parameters(self)
 
@@ -886,7 +907,8 @@ class EBMDiffusionModel(DiffusionModel):
                 pred_noise = self.model(sample, batched_t, global_cond=global_cond)
                 x0_hat = (sample - torch.sqrt(1-alpha_bar_t)*pred_noise)/torch.sqrt(alpha_bar_t)
                 sample_new = (torch.sqrt(alpha_bar_t) * x0_hat).detach()
-                sample_new = torch.clamp(torch.sqrt(alpha_bar_t) * x0_hat, -max_val, max_val).detach()
+                if not langevin:  # difference 3
+                    sample_new = torch.clamp(torch.sqrt(alpha_bar_t) * x0_hat, -max_val, max_val).detach()
 
                 if return_grad_steps:
                     # Undo the timestep scaling so callers only need to unnormalize.
@@ -904,15 +926,15 @@ class EBMDiffusionModel(DiffusionModel):
 
                     # IRED-style step size: beta_t / sqrt(1 - alpha_bar_t)
                     opt_step_size = beta_t / torch.sqrt(1 - alpha_bar_t)
-                    sample_new = sample - opt_step_size * grad * 2
-
-                    # Noise addition (scaled Langevin sampling)
-                    #scale=1
-                    #eps = torch.randn(sample.shape, device=sample.device)
-                    #sample_new = sample - opt_step_size * grad + torch.sqrt(2*beta_t*scale)*eps
-
-                    # clamp to expected scale at this noise level
-                    sample_new = torch.clamp(sample_new, -max_val, max_val)
+                    if langevin:
+                        # Differences 1, 2 and 4: single-strength gradient step, injected noise, and
+                        # no clamp. See the docstring.
+                        eps = torch.randn(sample.shape, device=sample.device)
+                        sample_new = sample - opt_step_size * grad + torch.sqrt(2 * beta_t) * eps
+                    else:
+                        sample_new = sample - opt_step_size * grad * 2
+                        # clamp to expected scale at this noise level
+                        sample_new = torch.clamp(sample_new, -max_val, max_val)
 
                     if return_grad_steps:
                         # Undo the timestep scaling so callers only need to unnormalize.
@@ -935,7 +957,7 @@ class EBMDiffusionModel(DiffusionModel):
         
         return sample
 
-    def generate_actions(self, batch: dict[str, Tensor], return_full=False, opt_energy=True, steps_per_timestep=None, opt_subset: int | None = None, denoise=None, return_grad_steps=False) -> dict[str, Tensor]:
+    def generate_actions(self, batch: dict[str, Tensor], return_full=False, opt_energy=True, steps_per_timestep=None, opt_subset: int | None = None, denoise=None, return_grad_steps=False, langevin: bool = False) -> dict[str, Tensor]:
         """
         Same as DiffusionModel.generate_actions, but samples with `opt_energy` (IRED) by default. Pass
         opt_energy=False to sample with the noise scheduler instead. With return_grad_steps, the IRED
@@ -954,7 +976,7 @@ class EBMDiffusionModel(DiffusionModel):
         global_cond = self._prepare_global_conditioning(batch)  # (B, global_cond_dim)
 
         # run sampling
-        result = self.opt_energy(batch_size, global_cond=global_cond, steps_per_timestep=steps_per_timestep, opt_subset=opt_subset, denoise=denoise, return_grad_steps=return_grad_steps)
+        result = self.opt_energy(batch_size, global_cond=global_cond, steps_per_timestep=steps_per_timestep, opt_subset=opt_subset, denoise=denoise, return_grad_steps=return_grad_steps, langevin=langevin)
         if return_grad_steps:
             actions, action_dict["grad_history"] = result
         else:
@@ -1225,7 +1247,8 @@ class EBMDiffusionPolicy(DiffusionPolicy):
         with `return_grad_steps`, the IRED gradient-step histories instead.
 
         `opt_params` is required for "ired": a list with one dict per IRED variant, e.g.
-        [{"n_opt": <int>, "t_subset": <int, or None for all timesteps>, "denoise": <bool>}].
+        [{"n_opt": <int>, "t_subset": <int, or None for all timesteps>, "denoise": <bool>,
+          "langevin": <bool, optional, default False -- see EBMDiffusionModel.opt_energy>}].
         """
         if "ired" in methods and opt_params is None:
             raise ValueError("IRED sampling requires `opt_params` (one dict per IRED variant).")
@@ -1240,7 +1263,9 @@ class EBMDiffusionPolicy(DiffusionPolicy):
         if 'ired' in methods:
             for p in opt_params: 
                 n, subset, denoise = (p["n_opt"], p["t_subset"], p["denoise"])
-                gen_actions.append(self.diffusion.generate_actions(observation_batch, return_full=return_full, steps_per_timestep=n, opt_subset=subset, denoise = denoise, return_grad_steps=return_grad_steps))
+                # Optional; absent means the current scheme, so existing opt_params are unchanged.
+                langevin = p.get("langevin", False)
+                gen_actions.append(self.diffusion.generate_actions(observation_batch, return_full=return_full, steps_per_timestep=n, opt_subset=subset, denoise = denoise, return_grad_steps=return_grad_steps, langevin=langevin))
         
         # if returning both, use denoising-based sampling as well
         if 'ddim' in methods: 
