@@ -1,0 +1,51 @@
+# @package _global_
+# Fine-tune the pretrained cup_multi_shelf DP (cmd joint labels) on 120 additional perturbed
+# demos, mixed 50/50 with the original 297. Inherits real_robot/cmd_labels/run_dp_visual_cmd wholesale -- same
+# architecture, cameras, crop, horizon, EMA, AMP -- so only the finetuning keys below differ.
+# action_labels: commanded is inherited and is GLOBAL -- it applies to the demo file too, so those
+# 120 demos must have been through build_cmd_labels.py as well.
+#
+# Mixing: finetune_demos runs two loaders and takes one batch from EACH per step, then sums two
+# denoising losses. batch_size 64 per side with weights 0.5/0.5 makes that EXACTLY the loss of one
+# pooled 128-sample batch, half old and half new: the same samples per step and the same loss scale
+# as pretraining at batch_size 128. Timesteps and noise are drawn independently per side.
+#
+# num_workers 8 PER LOADER, i.e. NTPP = 1 + 2*8 = 17, not pretraining's 9. Throughput-matching
+# alone would say 4 (each loader pulls 64 items/step against pretraining's one 128-batch on 8
+# workers, so 4 each is the same 16 items/worker/step). 8 is for margin: the two loaders are
+# consumed sequentially in the step, so if either falls behind its wait ADDS to the other's
+# instead of overlapping, and each pool prefetches only 4*2*64 = 512 items deep against
+# pretraining's 2048 -- less slack to absorb a deficit. A 40-core node covers 2 x 17 = 34.
+#
+# The normalizer comes from the CHECKPOINT, not the new demos (train.py passes dataset_stats=None
+# when finetuning) -- intended, the action space must stay fixed. Check the new demos' per-dim
+# action min/max against the checkpoint's normalize_targets.buffer_action.{min,max} first: anything
+# outside the original range maps beyond +-1 and clip_sample (range 1.0) clamps it away.
+defaults:
+  - /policy/real_robot/cmd_labels/run_dp_visual_cmd
+  - _self_
+
+dataset_root:
+  base: data/real_robot/cup_multi_shelf_cmd.hdf5
+  demo: data/real_robot/cup_shifted_middle_cmd.hdf5   # the 120 perturbed demos
+
+pretrained_policy_path: 'data/real_robot/train/2026.11.23/04.24.25_real_robot_diffusion_visual_cmd/checkpoints/last/pretrained_model'
+
+hydra:
+  run:
+    dir: data/real_robot/finetune/${now:%Y.%m.%d}/${hydra.job.name}
+  job:
+    name: ${now:%H.%M.%S}_${env.name}_${policy.name}_demos120_cmd
+
+training:
+  train_only_FiLM: False     # full finetuning; True would freeze everything but the FiLM layers
+  offline_steps: 100000      # 25% of the 400k pretrain
+  lr: 1.0e-5
+  batch_size: 64             # per loader; 64 + 64 = pretraining's 128 samples per step
+  num_workers: 8             # per loader; NTPP = 1 + 2*8 = 17
+  save_freq: 10000
+
+policy:
+  finetune_demos: true
+  gradient_loss_weight: 0.5      # 0.5*mean_base + 0.5*mean_demo == one pooled 128 batch
+  demo_finetune_loss_weight: 0.5
