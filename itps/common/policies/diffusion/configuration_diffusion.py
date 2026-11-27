@@ -186,18 +186,23 @@ class DiffusionConfig:
     finetune_demos: bool = False
     demo_finetune_loss_weight: float = 0.0
 
+    # Support of the per-step timestep draw that every loss term shares (DiffusionModel.compute_loss).
+    # "all" is uniform over num_train_timesteps, the ordinary behaviour. "ddim" restricts it to the
+    # num_inference_steps timesteps sampling actually visits, so training only ever looks at noise
+    # levels inference will see. Applies to whatever that draw feeds -- the denoising loss, the energy
+    # landscape term, and on a finetune run the preference pairs -- since all of them reuse it.
+    # teacher_rollout is unaffected: its timesteps come from the sampler grid by construction.
+    timestep_support: str = "all"
+
     # Distillation from a frozen teacher (cfg.teacher_policy_path). Defaults reproduce ordinary
     # training exactly, so every existing config is unaffected.
     #   distill_sampler         where x_t comes from: noised demo windows, or states the teacher's
     #                           own DDIM sampler visits (see DiffusionModel.teacher_rollout_points).
     #   distill_target          what eps_hat regresses onto: the drawn noise, or the teacher's eps.
-    #   distill_timestep_support  demo_noise only -- "ddim" restricts t to the inference grid so it
-    #                           matches where teacher_rollout can look. "all" samples all timesteps.
     #   distill_anchor_weight   lambda on the ordinary training loss (denoising + energy landscape)
     #                           added alongside the distillation term.
     distill_sampler: str = "demo_noise"
     distill_target: str = "true_noise"
-    distill_timestep_support: str = "all"
     distill_anchor_weight: float = 0.0
 
 
@@ -276,10 +281,10 @@ class DiffusionConfig:
                 f"`distill_target` must be one of {supported_targets}. Got {self.distill_target}."
             )
         supported_supports = ["all", "ddim"]
-        if self.distill_timestep_support not in supported_supports:
+        if self.timestep_support not in supported_supports:
             raise ValueError(
-                f"`distill_timestep_support` must be one of {supported_supports}. "
-                f"Got {self.distill_timestep_support}."
+                f"`timestep_support` must be one of {supported_supports}. "
+                f"Got {self.timestep_support}."
             )
         # "true_noise" is the noise that produced x_t, so it only exists where we did the noising.
         if self.distill_target == "true_noise" and self.distill_sampler != "demo_noise":

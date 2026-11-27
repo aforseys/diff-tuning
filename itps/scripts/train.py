@@ -405,7 +405,7 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
         ref_policy.requires_grad_(False)
         assert ref_policy.diffusion.num_inference_steps == policy.diffusion.num_inference_steps, (
             "teacher and student must share num_inference_steps: the teacher's sampler grid is where "
-            "the training points come from, and the student's is what distill_timestep_support reads."
+            "the training points come from, and the student's is what timestep_support reads."
         )
 
         # Distillation targets are the teacher's eps in the TEACHER's normalized action space, so the
@@ -511,21 +511,8 @@ def train(cfg: DictConfig, out_dir: str | None = None, job_name: str | None = No
                         max_episodes_rendered=4,
                         start_seed=cfg.seed,
                     )
-            aggregated = dict(eval_info["aggregated"])
-            # The eval above used the EMA copy when EMA is on, as in DP, and that is also what
-            # pretrained_model/ holds -- so those metrics keep the canonical names. Evaluate the
-            # ONLINE weights too and suffix them `_online`, so a run reports both curves instead of
-            # forcing a second run to see the other one. Registered envs only: the gym branch writes
-            # videos to a per-step directory and a second pass would collide.
-            if ema_policy is not None and is_registered(cfg.env.name):
-                policy.eval()
-                with torch.no_grad(), torch.autocast(device_type=device.type) if cfg.use_amp else nullcontext():
-                    online_info = get_env(cfg.env.name).evaluate(
-                        policy, cfg, seed=cfg.seed, ref_policy=ref_policy
-                    )
-                aggregated.update({f"{k}_online": v for k, v in online_info["aggregated"].items()})
             policy.train()
-            log_eval_info(logger, aggregated, step, cfg, offline_dataset, is_online=is_online)
+            log_eval_info(logger, eval_info["aggregated"], step, cfg, offline_dataset, is_online=is_online)
             if cfg.wandb.enable:
                 if not is_registered(cfg.env.name):
                     logger.log_video(eval_info["video_paths"][0], step, mode="eval")

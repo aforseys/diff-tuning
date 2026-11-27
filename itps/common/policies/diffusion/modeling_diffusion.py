@@ -145,27 +145,32 @@ class DiffusionPolicy(nn.Module, PyTorchModelHubMixin):
         `tune_batch` optionally carries fine-tuning data, {"pref": (pos_batch, neg_batch)} or
         {"demo": demo_batch}, normalized the same way as `batch`. Returns the loss and its logged components.
         """
+        batch = self._prepare_batch(batch)
+        if tune_batch is not None:
+            tune_batch = dict(tune_batch)  # shallow copy so the caller's tune_batch isn't modified
+            if "demo" in tune_batch:
+                tune_batch["demo"] = self._prepare_batch(tune_batch["demo"])
+            if "pref" in tune_batch:
+                pos_batch, neg_batch = tune_batch["pref"]
+                tune_batch["pref"] = (self._prepare_batch(pos_batch), self._prepare_batch(neg_batch))
+        loss, loss_components = self.diffusion.compute_loss(batch, tune_batch, ref_model)
+        return {"loss": loss, **loss_components}
+
+    def _prepare_batch(self, batch: dict[str, Tensor]) -> dict[str, Tensor]:
+        """
+        Normalize a batch and add the stacked `observation.images` key the conditioning expects.
+
+        EVERY batch that reaches `_prepare_global_conditioning` needs this, not just the base one:
+        the demo and preference batches go through the same observation encoder. Stacking only the
+        base batch left the demo and preference paths raising KeyError on any policy with image
+        inputs -- invisible until now because every demo/preference run had been state-only (GMM,
+        maze2d), where `expected_image_keys` is empty and this is just the two normalize calls.
+        """
         batch = self.normalize_inputs(batch)
         if len(self.expected_image_keys) > 0:
             batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
             batch["observation.images"] = torch.stack([batch[k] for k in self.expected_image_keys], dim=-4)
-        batch = self.normalize_targets(batch)
-        if tune_batch is not None:
-            tune_batch = dict(tune_batch)  # shallow copy so the caller's tune_batch isn't modified
-            if "demo" in tune_batch:
-                demo_batch = tune_batch["demo"]
-                demo_batch = self.normalize_inputs(demo_batch)
-                demo_batch = self.normalize_targets(demo_batch)
-                tune_batch["demo"] = demo_batch
-            if "pref" in tune_batch:
-                pos_batch, neg_batch = tune_batch["pref"]
-                pos_batch = self.normalize_inputs(pos_batch)
-                pos_batch = self.normalize_targets(pos_batch)
-                neg_batch = self.normalize_inputs(neg_batch)
-                neg_batch = self.normalize_targets(neg_batch)
-                tune_batch["pref"] = (pos_batch, neg_batch)
-        loss, loss_components = self.diffusion.compute_loss(batch, tune_batch, ref_model)
-        return {"loss": loss, **loss_components}
+        return self.normalize_targets(batch)
 
     def predict_noise(self, action_batch: dict[str, Tensor], t: int, observation_batch: dict[str, Tensor],
                       mask: Tensor | None = None):
@@ -284,7 +289,7 @@ class DiffusionModel(nn.Module):
 
         # The timesteps inference actually visits -- a strided subset of the training timesteps
         # (e.g. {0, 10, ..., 90} for 10 steps over 100). Derived, not configured. Used by
-        # distill_timestep_support="ddim" to restrict demo noising to where sampling can look.
+        # config.timestep_support="ddim" to restrict the shared draw to where sampling can look.
         # persistent=False keeps it out of state_dict, so existing checkpoints still load strictly.
         self.noise_scheduler.set_timesteps(self.num_inference_steps)
         self.register_buffer("_ddim_timesteps", self.noise_scheduler.timesteps.clone().long(),
@@ -497,14 +502,21 @@ class DiffusionModel(nn.Module):
         """
         self._validate_batches(batch, tune_batch)
 
-        # Sample a random noising timestep for each item in the batch, shared by every loss term.
+        # Sample a random noising timestep for each item in the batch, shared by every loss term --
+        # the denoising loss, the energy landscape term, and on a finetune run the preference pairs,
+        # which all reuse this one tensor. config.timestep_support picks what it is drawn from:
+        # uniform over all training timesteps, or only the ones inference visits.
         trajectory = batch["action"]
-        timesteps = torch.randint(
-            low=0,
-            high=self.noise_scheduler.config.num_train_timesteps,
-            size=(trajectory.shape[0],),
-            device=trajectory.device,
-        ).long()
+        if self.config.timestep_support == "ddim":
+            idx = torch.randint(0, len(self._ddim_timesteps), (trajectory.shape[0],), device=trajectory.device)
+            timesteps = self._ddim_timesteps[idx]
+        else:
+            timesteps = torch.randint(
+                low=0,
+                high=self.noise_scheduler.config.num_train_timesteps,
+                size=(trajectory.shape[0],),
+                device=trajectory.device,
+            ).long()
 
         components = {name: torch.tensor(-1, dtype=torch.float32) for name in self.loss_component_names}
 
@@ -616,22 +628,37 @@ class DiffusionModel(nn.Module):
         return loss, {"loss_mse": (w * loss_mse_raw).mean(), "loss_dpo_finetune": (w * loss_dpo_finetune).mean()}
 
     def _demo_loss(self, batch: dict[str, Tensor], tune_batch: dict, timesteps: Tensor):
-        """Fine-tuning on new demonstrations: denoising loss on `batch` plus denoising loss on the demos."""
+        """
+        Fine-tuning on new demonstrations: denoising loss on `batch` plus denoising loss on the demos.
+
+        The two terms draw their timesteps and noise INDEPENDENTLY, so with equal batch sizes and
+        equal weights the sum is exactly the loss of one pooled half-and-half batch. Sharing the
+        base batch's timesteps would be common random numbers -- same expectation, lower variance --
+        but it pairs the two halves, which is not what mixing two datasets means.
+        """
         assert "demo" in tune_batch, "Tuning batch must contain new demonstrations"
         demo_batch = tune_batch["demo"]
         trajectory = batch["action"]
 
-        # The demo batch uses the same sampled timesteps as the base batch.
+        # Both loaders read cfg.training.batch_size, so this is a config sanity check rather than a
+        # requirement of the loss -- the terms no longer share anything that forces equal sizes.
         assert demo_batch["action"].shape == trajectory.shape
         assert demo_batch["action"].device == trajectory.device
 
-        w = self._timestep_weight(timesteps)
         eps = torch.randn(trajectory.shape, device=trajectory.device)
-        loss_mse = w * self._compute_denoising_sq_error(batch, timesteps, eps, mask=self._padding_mask(batch))
+        loss_mse = self._timestep_weight(timesteps) * self._compute_denoising_sq_error(
+            batch, timesteps, eps, mask=self._padding_mask(batch)
+        )
 
+        demo_timesteps = torch.randint(
+            low=0,
+            high=self.noise_scheduler.config.num_train_timesteps,
+            size=(demo_batch["action"].shape[0],),
+            device=trajectory.device,
+        ).long()
         demo_eps = torch.randn(demo_batch["action"].shape, device=trajectory.device)
-        loss_demo_finetune = w * self._compute_denoising_sq_error(
-            demo_batch, timesteps, demo_eps, mask=self._padding_mask(demo_batch)
+        loss_demo_finetune = self._timestep_weight(demo_timesteps) * self._compute_denoising_sq_error(
+            demo_batch, demo_timesteps, demo_eps, mask=self._padding_mask(demo_batch)
         )
 
         loss = self.config.gradient_loss_weight * loss_mse + self.config.demo_finetune_loss_weight * loss_demo_finetune
@@ -690,8 +717,8 @@ class DiffusionModel(nn.Module):
         timesteps come from the sampler grid, so the batch's shared draw does not apply.
 
         "demo_noise" noises the batch's real trajectory in place, so the usual padding mask applies and
-        the shared timesteps are reused -- unless distill_timestep_support is "ddim", which restricts
-        them to the inference grid so the two samplers see the same set of noise levels.
+        the shared timesteps are reused as drawn -- restricting them to the inference grid is
+        config.timestep_support's job, applied upstream in compute_loss.
         """
         assert ref_model is not None, (
             "distill_target 'teacher_eps' needs a frozen teacher; set cfg.teacher_policy_path"
@@ -704,9 +731,6 @@ class DiffusionModel(nn.Module):
                 x_t, timesteps, target = ref_model.diffusion.teacher_rollout_points(batch, batch_size)
             return x_t, timesteps, target, None
 
-        if self.config.distill_timestep_support == "ddim":
-            idx = torch.randint(0, len(self._ddim_timesteps), (batch_size,), device=trajectory.device)
-            timesteps = self._ddim_timesteps[idx]
         eps = torch.randn(trajectory.shape, device=trajectory.device)
         x_t = self.noise_scheduler.add_noise(trajectory, eps, timesteps)
         with torch.no_grad():
