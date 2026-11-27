@@ -36,7 +36,7 @@ policy:
   energy_mode: product
   distill_sampler: demo_noise
   distill_target: teacher_eps
-  distill_timestep_support: ddim
+  timestep_support: ddim
   supervise_energy_landscape: false
   energy_landscape_loss_weight: 0.0
 
