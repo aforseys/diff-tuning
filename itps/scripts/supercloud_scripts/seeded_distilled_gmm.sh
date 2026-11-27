@@ -20,7 +20,9 @@
 # STEP 3 -- submit. NTPP only needs 1 main + cfg.training.num_workers (3, the default): the PREF
 # loader runs at num_workers=0 since its windows are preloaded, so a pref-only finetune costs
 # 1 + n threads, NOT the 1 + 2n a DEMO finetune costs.
-#   LLsub ./scripts/supercloud_scripts/seeded_distilled_gmm.sh [4,2,5] -g volta:2   # 8 procs, ~8 runs each
+#   LLsub ./scripts/supercloud_scripts/seeded_distilled_gmm.sh [1,4,5] -g volta:2   # 4 procs, 15 runs each
+# NPPN=4 packs two runs per GPU. A horizon-1, 2-dim model nowhere near saturates a V100, so this
+# is close to free; check nvidia-smi and drop to [1,2,5] if util or memory is above half.
 # Runs are ~1000 steps on a horizon-1 model, so these are minutes each.
 
 # Initialize the module command first

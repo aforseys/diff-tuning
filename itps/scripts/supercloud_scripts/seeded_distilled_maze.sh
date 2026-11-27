@@ -20,7 +20,9 @@
 # STEP 3 -- submit. NTPP only needs 1 main + cfg.training.num_workers (4 in this config): the PREF
 # loader runs at num_workers=0 since its windows are preloaded, so a pref-only finetune costs
 # 1 + n threads, NOT the 1 + 2n a DEMO finetune costs.
-#   LLsub ./scripts/supercloud_scripts/seeded_distilled_maze.sh [8,2,5] -g volta:2   # 16 procs, ~3 runs each
+#   LLsub ./scripts/supercloud_scripts/seeded_distilled_maze.sh [2,2,5] -g volta:2   # 4 procs, 10 runs each
+# NPPN=2 = one run per GPU. The EBM needs create_graph=True for the energy gradient, so its memory
+# footprint is higher than a plain DP's -- check nvidia-smi and go to [2,4,5] if there is headroom.
 # Runs are only 500 steps, but eval_freq 50 means 10 evals each at n_samples 32 over 2 obs splits
 # with methods ['ired','ddim'] -- the eval dominates the wall time, so size from the previous
 # maze_energy_ebm_pref_only_seeded sweep rather than from the step count.
