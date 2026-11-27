@@ -3,20 +3,24 @@
 #
 # Energy-landscape preference finetuning on the LARGE maze, re-run from the DISTILLED base policy
 # (product energy, DP-initialized) instead of the original EBM base.
-# 60 runs = seed(10) x timestep_support(all|ddim) x finetune_loss_weight(2|5|10).
+# 40 runs = seed(10) x timestep_support(all|ddim) x finetune_loss_weight(1|0.5).
+#
+# This is the SECOND pass. The first (weights 2/5/10, dir .../maze_energy_ebm_pref_only_distilled_seeded)
+# showed train/loss_mse climbing from ~0.05 to 0.25-0.65 on every run: all three weights were too
+# large and the denoising anchor collapsed. Point CONFIGS_DIR back at that dir to re-run the first pass.
 #
 # STEP 1 -- generate the run configs ONCE (from the itps/ dir). The path must match CONFIGS_DIR below:
 #   python scripts/generate_configs.py \
-#       --config configs/policy/maze_seeded/maze_energy_ebm_pref_only_distilled_seeded.yaml \
-#       --out_dir configs/policy/maze_seeded/maze_energy_ebm_pref_only_distilled_seeded/
+#       --config configs/policy/maze_seeded/maze_energy_ebm_pref_only_distilled_lowweight_seeded.yaml \
+#       --out_dir configs/policy/maze_seeded/maze_energy_ebm_pref_only_distilled_lowweight_seeded/
 #
-# STEP 2 -- inspect that dir (expect 60 run_*.yaml) and confirm the distilled checkpoint is there:
+# STEP 2 -- inspect that dir (expect 40 run_*.yaml) and confirm the distilled checkpoint is there:
 #   ls data/maze2d_dp/large/general/distill/2026.11.25/20.00.02_maze2d_large_distill_product_dp/checkpoints/last/pretrained_model
 #
 # STEP 3 -- submit. NTPP only needs 1 main + cfg.training.num_workers (4 in this config): the PREF
 # loader runs at num_workers=0 since its windows are preloaded, so a pref-only finetune costs
 # 1 + n threads, NOT the 1 + 2n a DEMO finetune costs.
-#   LLsub ./scripts/supercloud_scripts/seeded_distilled_maze.sh [8,2,5] -g volta:2   # 16 procs, ~4 runs each
+#   LLsub ./scripts/supercloud_scripts/seeded_distilled_maze.sh [8,2,5] -g volta:2   # 16 procs, ~3 runs each
 # Runs are only 500 steps, but eval_freq 50 means 10 evals each at n_samples 32 over 2 obs splits
 # with methods ['ired','ddim'] -- the eval dominates the wall time, so size from the previous
 # maze_energy_ebm_pref_only_seeded sweep rather than from the step count.
@@ -31,7 +35,7 @@ export PYTHONPATH="/home/gridsan/aforsey/diff-tuning:$PYTHONPATH"
 export WANDB_MODE=offline
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-CONFIGS_DIR="/home/gridsan/aforsey/diff-tuning/itps/configs/policy/maze_seeded/maze_energy_ebm_pref_only_distilled_seeded"
+CONFIGS_DIR="/home/gridsan/aforsey/diff-tuning/itps/configs/policy/maze_seeded/maze_energy_ebm_pref_only_distilled_lowweight_seeded"
 SCRIPT="scripts/train.py"
 ENV_NAME="maze2d"
 # ──────────────────────────────────────────────────────────────────────────────
