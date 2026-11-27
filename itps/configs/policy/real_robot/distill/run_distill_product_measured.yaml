@@ -1,0 +1,62 @@
+# @package _global_
+# Distil the DEMO-FINETUNED cup DP (measured joint labels) into a product-energy student: the R1
+# recipe -- product energy, teacher-weight init, teacher_rollout states, teacher_eps targets --
+# which is the arm that closed the sparse-maze collision gap. The teacher is the finetuned policy,
+# not the 400k base, so the student inherits the shifted-cup behaviour the finetune bought. The
+# student is what preference finetuning will later run on, hence the base EBM architecture.
+#
+# Inherits real_robot/pretrain/run_ebm_visual wholesale -- both cameras, crop 108x144, horizon 16,
+# batch 128, lr 1e-4 cosine with 500-step warmup, EMA, AMP, DDIM 10/100, drop_n_last_frames 7 --
+# so only the keys below differ from the base EBM run.
+#
+# OBSERVATION COVERAGE: teacher_rollout generates x_t from noise and takes only the CONDITIONING
+# from each batch, so `dataset_root` is exactly where the student is supervised. It therefore lists
+# BOTH demo sets -- the teacher was finetuned on both, and at shifted-cup observations a base-only
+# student would have no supervision at all. _load_real_robot_hdf5 concatenates a list, renumbering
+# episodes and rows to run continuously: 416 episodes, 111282 rows, of which the shifted set is
+# 28.6%. That is proportional, not the finetune's 50/50 -- deliberate, since the point here is to
+# distil evenly over the states the teacher covers, not to reweight them.
+# A DICT dataset_root would not work: it flips train.py's `finetune` switch, which routes through
+# tune_batch and silently disables distillation (compute_loss: `distilling = tune_batch is None`).
+#
+# WHAT IS LOGGED: with distill_anchor_weight at its default 0 the ordinary denoising term is not
+# computed, so `loss_mse` stays at its -1 sentinel and `loss_distill` is the metric. eval_freq MUST
+# stay 0: envs/__init__.py's get_env registers gmm, maze2d and robosuite only, so any positive
+# eval_freq raises NotImplementedError at the first eval step. There is no field-match metric here
+# either -- eval_field_match lives in MazeEnv.evaluate, and scripts/eval/compare_fields.py is
+# maze-specific (observation.environment_state / episode_goal / the maze hdf5).
+defaults:
+  - /policy/real_robot/pretrain/run_ebm_visual
+  - _self_
+
+config_name: null           # filled by run_job.py
+
+dataset_root:
+  - data/real_robot/cup_multi_shelf.hdf5       # 297 base demos
+  - data/real_robot/cup_shifted_middle.hdf5    # 119 shifted-cup demos
+
+# Output of run_dp_visual_demos_measured.yaml, at `last` (its full 100k finetune steps).
+teacher_policy_path: 'data/real_robot/finetune/2026.11.26/20.29.06_real_robot_diffusion_demos120_measured/checkpoints/last/pretrained_model'
+init_from_teacher: true
+
+hydra:
+  run:
+    dir: data/real_robot/distill/${now:%Y.%m.%d}/${hydra.job.name}
+  job:
+    name: ${now:%H.%M.%S}_${env.name}_distill_product_ft_measured
+
+wandb:
+  project: "real-robot-distill"
+
+training:
+  offline_steps: 200000      # half the 400k pretrain, the ratio the GMM distil used
+  save_freq: 20000           # 10 checkpoints, as in pretraining. R1 on the maze was converged by
+                             # 20-30% of its budget, so the 20k/40k checkpoints are worth reading.
+
+policy:
+  energy_mode: product
+  distill_sampler: teacher_rollout
+  distill_target: teacher_eps
+  # The contrastive term belongs to the ordinary loss, i.e. to the anchor, and the anchor is off.
+  supervise_energy_landscape: false
+  energy_landscape_loss_weight: 0.0

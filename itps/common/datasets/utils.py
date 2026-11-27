@@ -127,6 +127,12 @@ def _load_real_robot_hdf5(root, past_action_visible: bool = False, load_images: 
     from cmd/joint_pos -- the joint targets the robot was COMMANDED at each frame, added to a converted file by
     SimpleTrajectoryRecorder's scripts/cup_demos/build_cmd_labels.py: action = [q_cmd[k+1], width[k+1]], so the
     chunk-relative label is q_cmd[t+i] - q_meas[t]. The state (the model's input) and the gripper label stay measured.
+
+    `root` is one converted file, or a LIST of them concatenated into a single dataset -- demo sets recorded
+    separately (the base demos plus a perturbed set, say) with their episode and row indices renumbered to run
+    continuously, so episode boundaries still hold and nothing is shifted across files. Sampling is then
+    PROPORTIONAL to each file's row count, not balanced: a list widens the state coverage, it does not reweight
+    it. The files must agree on `cameras`, since one image array per camera is concatenated across all of them.
     """
     import h5py
     import numpy as np
@@ -136,36 +142,47 @@ def _load_real_robot_hdf5(root, past_action_visible: bool = False, load_images: 
     if action_labels not in ("measured", "commanded"):
         raise ValueError(f"action_labels must be 'measured' or 'commanded', got {action_labels!r}")
 
+    # One file, or several concatenated. A str/Path is a single file; anything else is a sequence of them
+    # (a hydra ListConfig is not a `list`, hence the test on the scalar types rather than on the sequence).
+    roots = [root] if isinstance(root, (str, Path)) else [str(r) for r in root]
+
     states, actions, episode_indices, frame_indices, timestamps, global_indices = [], [], [], [], [], []
-    with h5py.File(root, "r") as f:
-        cams = f.attrs["cameras"].split(",")
-        images = {f"observation.image.{cam}": [] for cam in cams}
-        demo_keys = sorted(f["data"].keys(), key=lambda k: int(k.split("_")[1]))
-        global_idx = 0
-        for ep_idx, key in enumerate(demo_keys):
-            g = f["data"][key]
-            q = g["obs/joint_pos"][:]           # (T, 7)
-            w = g["obs/gripper_width"][:]       # (T,)
-            n = len(q) - 1                      # rows that have a next frame
-            if action_labels == "commanded":
-                if "cmd/joint_pos" not in g:
-                    raise ValueError(f"{root}: {key} has no cmd/joint_pos -- action_labels: commanded needs a file "
-                                     f"built by build_cmd_labels.py")
-                q_label = g["cmd/joint_pos"][:]  # (T, 7) commanded joint targets at the same frames
-                if q_label.shape != q.shape:
-                    raise ValueError(f"{root}: {key} cmd/joint_pos {q_label.shape} != obs/joint_pos {q.shape}")
-            else:
-                q_label = q
-            states.append(np.concatenate([q[:n], w[:n, None]], axis=1).astype(np.float32))
-            actions.append(np.concatenate([q_label[1:], w[1:, None]], axis=1).astype(np.float32))
-            if load_images:
-                for cam in cams:
-                    images[f"observation.image.{cam}"].append(g[f"obs/{cam}_image"][:n].transpose(0, 3, 1, 2))
-            episode_indices.append(np.full(n, ep_idx, dtype=np.int64))
-            frame_indices.append(np.arange(n, dtype=np.int64))
-            timestamps.append(np.arange(n, dtype=np.float32) / 10.0)  # frames are on an exact 10 Hz grid
-            global_indices.append(np.arange(global_idx, global_idx + n, dtype=np.int64))
-            global_idx += n
+    cams, images = None, None
+    ep_idx, global_idx = 0, 0          # both run across files, so episodes and rows stay globally unique
+    for file_root in roots:
+        with h5py.File(file_root, "r") as f:
+            file_cams = f.attrs["cameras"].split(",")
+            if cams is None:
+                cams = file_cams
+                images = {f"observation.image.{cam}": [] for cam in cams}
+            elif file_cams != cams:
+                raise ValueError(f"{file_root}: cameras {file_cams} != {cams} from {roots[0]}")
+            demo_keys = sorted(f["data"].keys(), key=lambda k: int(k.split("_")[1]))
+            for key in demo_keys:
+                g = f["data"][key]
+                q = g["obs/joint_pos"][:]           # (T, 7)
+                w = g["obs/gripper_width"][:]       # (T,)
+                n = len(q) - 1                      # rows that have a next frame
+                if action_labels == "commanded":
+                    if "cmd/joint_pos" not in g:
+                        raise ValueError(f"{file_root}: {key} has no cmd/joint_pos -- action_labels: commanded "
+                                         f"needs a file built by build_cmd_labels.py")
+                    q_label = g["cmd/joint_pos"][:]  # (T, 7) commanded joint targets at the same frames
+                    if q_label.shape != q.shape:
+                        raise ValueError(f"{file_root}: {key} cmd/joint_pos {q_label.shape} != obs/joint_pos {q.shape}")
+                else:
+                    q_label = q
+                states.append(np.concatenate([q[:n], w[:n, None]], axis=1).astype(np.float32))
+                actions.append(np.concatenate([q_label[1:], w[1:, None]], axis=1).astype(np.float32))
+                if load_images:
+                    for cam in cams:
+                        images[f"observation.image.{cam}"].append(g[f"obs/{cam}_image"][:n].transpose(0, 3, 1, 2))
+                episode_indices.append(np.full(n, ep_idx, dtype=np.int64))
+                frame_indices.append(np.arange(n, dtype=np.int64))
+                timestamps.append(np.arange(n, dtype=np.float32) / 10.0)  # frames are on an exact 10 Hz grid
+                global_indices.append(np.arange(global_idx, global_idx + n, dtype=np.int64))
+                ep_idx += 1
+                global_idx += n
 
     hf_dataset = datasets.Dataset.from_dict({
         "observation.state": np.concatenate(states, axis=0),
