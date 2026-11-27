@@ -797,6 +797,12 @@ def concat_pairs_as_base(pos_ds, neg_ds, n_queries=None):
         # min/max, while aggregate_stats requires a "mean" for every key.
         stats=None,
         info=pos_ds.info,
+        # Carried from the source so the pooled dataset reads items identically. `_images` is
+        # None by the guard above. from_preloaded bypasses __init__, so these do not default
+        # themselves.
+        goal_horizon=pos_ds.goal_horizon,
+        action_anchor=pos_ds.action_anchor,
+        action_labels=pos_ds.action_labels,
+        images=None,
     )
-    dataset._images = None  # from_preloaded doesn't set it, and __getitem__ reads it
     return dataset

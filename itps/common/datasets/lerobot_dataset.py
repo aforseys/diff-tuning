@@ -308,6 +308,10 @@ class LeRobotDataset(torch.utils.data.Dataset):
         info=None,
         videos_dir=None,
         video_backend=None,
+        goal_horizon: int | None = 60,
+        action_anchor: str | None = None,
+        action_labels: str = "measured",
+        images=None,
     ) -> "LeRobotDataset":
         """Create a LeRobot Dataset from existing data and attributes instead of loading from the filesystem.
 
@@ -316,6 +320,12 @@ class LeRobotDataset(torch.utils.data.Dataset):
 
         Note: Meta-data attributes like `repo_id`, `version`, `root`, etc are optional and potentially
         meaningless depending on the downstream usage of the return dataset.
+
+        This bypasses __init__, so EVERY attribute __getitem__ reads has to be set here explicitly --
+        the defaults below mirror __init__'s. A field added to __init__ and not mirrored here raises
+        AttributeError on the first item, not at construction, so it surfaces as a dataloader-worker
+        crash far from the cause. Callers that have a source dataset should pass its values through
+        rather than take these defaults.
         """
         # create an empty object of type LeRobotDataset
         obj = cls.__new__(cls)
@@ -330,6 +340,10 @@ class LeRobotDataset(torch.utils.data.Dataset):
         obj.info = info if info is not None else {}
         obj.videos_dir = videos_dir
         obj.video_backend = video_backend if video_backend is not None else "pyav"
+        obj.goal_horizon = goal_horizon
+        obj.action_anchor = action_anchor
+        obj.action_labels = action_labels
+        obj._images = images
         return obj
 
 
