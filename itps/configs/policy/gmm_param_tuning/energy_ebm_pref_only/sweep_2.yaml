@@ -1,0 +1,173 @@
+# @package _global_
+# Parameter tuning for energy-based preference finetuning on the GMM, from the DISTILLED base policy
+# and with the LANGEVIN IRED sampler. Expand with:
+#   python scripts/generate_configs.py \
+#       --config configs/policy/gmm_param_tuning/energy_ebm_pref_only/sweep_2.yaml \
+#       --out_dir configs/policy/gmm_param_tuning/energy_ebm_pref_only/sweep_2/
+# 3 offline_steps x 4 finetune_loss_weight x 2 timestep_support x 3 seeds = 72 runs. sweep_1 used a
+# single seed; 3 here because the seeded passes showed enough spread that one seed could pick the
+# wrong cell, and 24 cells is cheap enough to afford it.
+#
+# WHY: sweep_1 swept weights [0.1, 1, 2, 5, 10] x offline_steps [100, 300, 500, 1000] over a 5x lr
+# and 2x batch grid, and the settings carried forward were lr 1e-3 / bs 64 / FiLM false / 1000 steps
+# / weight 5. The distilled runs have since stayed at weights 5/10/20, i.e. the top of that range.
+# This pass walks BOTH the weight and the step count down from there, the same correction the maze
+# needed, with lr, batch_size and train_only_FiLM fixed at sweep_1's cell.
+#
+# Weight 5 is kept as the anchor: it is where every distilled GMM run so far sat, so it ties the new
+# grid to known behaviour rather than floating free.
+#
+# SAMPLER: eval.opt_params keeps langevin: True -- the scheme live 2026-09-30..2026-10-23 that
+# produced the original gmm seeded numbers, restored in full (single-strength gradient step,
+# + sqrt(2*beta_t)*eps, and NEITHER clamp). The maze configs omit the key and keep today's scheme.
+#
+# eval_freq is 50, not sweep_1's 100: it must divide every offline_steps (eval fires on
+# (step+1) % eval_freq), and 250 is not a multiple of 100.
+#
+# READING IT: both axes shrink total preference pressure, so they bracket a window. Too much ->
+# train/loss_mse climbs and the policy degrades on the pretraining distribution; too little ->
+# win_rate_energy never moves and nothing was finetuned. A usable cell needs both a win-rate gain
+# and a flat loss_mse; if no cell has both, the objective is wrong rather than the numbers.
+
+sweep:
+  seed: [0, 1, 2]
+  training:
+    offline_steps: [250, 500, 1000]
+  policy:
+    timestep_support: [all, ddim]
+    finetune_loss_weight: [5, 1, 0.5, 0.1]
+
+seed: 0  # overridden by the sweep
+dataset_repo_id: gmm
+condition_type: unconditional
+# No 'base' entry: the preference winners and losers are pooled into the base dataset,
+# so the denoising anchor uses only the finetuning samples.
+dataset_root:
+  pos: 'data/gmm_obs/gmm_cluster_line_diagonal_any_100_1_unconditional_pos.npy'
+  neg: 'data/gmm_obs/gmm_cluster_line_diagonal_any_100_1_unconditional_neg.npy'
+pretrained_policy_path: 'data/gmm/general/distill/2026.11.25/gmm_2026.11.25.20.00.02_gmm_distill_product_dp/checkpoints/last/pretrained_model'
+
+env:
+  gmm_spec: cluster_line
+
+wandb:
+  enable: true
+  project: gmm-energy-ebm-pt-distilled-langevin   # NOT sweep_1's project: different base policy
+
+config_name: ???  # Set at runtime by run_job.py
+
+hydra:
+  run:
+    # Set `dir` to where you would like to save all of the run outputs. If you run another training session
+    # with the same value for `dir` its contents will be overwritten unless you set `resume` to true.
+    dir: data/gmm/general/param_tuning/energy_ebm_pref_only_distilled_langevin_sweep_2/${now:%Y.%m.%d}/${hydra.job.name}
+  job:
+    name: gmm_uncond_energy_distilled_langevin_seed${seed}_s${training.offline_steps}_${policy.timestep_support}_w${policy.finetune_loss_weight}_${now:%Y.%m.%d.%H.%M.%S}_${env.name}_${config_name}_${policy.name}
+
+device: "cuda"  # cpu
+
+training:
+  train_only_FiLM: false
+  offline_steps: 1000
+  online_steps: 0
+  eval_freq: 50              # must divide every swept offline_steps; 250 is not a multiple of 100
+  save_freq: ${training.offline_steps}  # final model only, kept for post-hoc D-MSE maps
+  log_freq: 50
+  save_checkpoint: True
+  batch_size: 64
+  grad_clip_norm: 10
+  lr: 1.0e-3
+  lr_scheduler: cosine
+  lr_warmup_steps: 50
+  adam_betas: [0.95, 0.999]
+  adam_eps: 1.0e-8
+  adam_weight_decay: 1.0e-6
+  online_steps_between_rollouts: 1
+
+  delta_timestamps:
+    observation.environment_state: "[0]"
+    observation.state: "[0]"
+    action: "[0]"
+
+  # The original implementation doesn't sample frames for the last 7 steps,
+  # which avoids excessive padding and leads to improved training results.
+  drop_n_last_frames: false #7  # ${policy.horizon} - ${policy.n_action_steps} - ${policy.n_obs_steps} + 1
+
+eval:
+  n_samples: 200
+  # langevin: True restores the IRED scheme that was live 2026-09-30..2026-10-23 and produced
+  # the ORIGINAL gmm seeded results -- single-strength gradient step, + sqrt(2*beta_t)*eps, and
+  # NEITHER clamp. All four differences together; see EBMDiffusionModel.opt_energy.
+  # The maze configs omit the key and keep today's scheme.
+  opt_params: [{'n_opt': 1, 't_subset': 5, 'denoise': True, 'langevin': True}]
+  methods: ['ired', 'ddim']
+  utility: diagonal
+  pref_test_set: 'data/gmm_obs/gmm_cluster_line_unconditional_200_2_20260930_094128.npy'
+  tie_tol: 0.2
+
+policy:
+  name: ebm_diffusion
+  energy_mode: product   # MUST match the distilled checkpoint; see the header
+
+  # Input / output structure.
+  n_obs_steps: 1
+  horizon: 1
+  n_action_steps: 1
+
+  input_shapes:
+    # TODO(rcadene, alexander-soare): add variables for height and width from the dataset/env?
+    observation.environment_state: [1]
+    observation.state: ["${env.state_dim}"]
+  output_shapes:
+    action: ["${env.action_dim}"]
+
+  # Normalization / Unnormalization
+  input_normalization_modes:
+    observation.environment_state: min_max
+    observation.state: min_max
+  output_normalization_modes:
+    action: min_max
+
+  # Architecture / modeling.
+  # Vision backbone.
+  vision_backbone: resnet18
+  crop_shape: [84, 84]
+  crop_is_random: True
+  pretrained_backbone_weights: null
+  use_group_norm: True
+  spatial_softmax_num_keypoints: 32
+  # Unet.
+  down_dims: [128, 256, 512]
+  kernel_size: 5
+  n_groups: 8
+  diffusion_step_embed_dim: 128
+  use_film_scale_modulation: True
+  # Noise scheduler.
+  noise_scheduler_type: DDIM
+  num_train_timesteps: 100
+  beta_schedule: squaredcos_cap_v2
+  beta_start: 0.0001
+  beta_end: 0.02
+  prediction_type: epsilon # epsilon / sample
+  clip_sample: True
+  clip_sample_range: 1.0
+
+  # Inference
+  num_inference_steps: 10  # if not provided, defaults to `num_train_timesteps`
+
+  # Loss computation
+  do_mask_loss_for_padding: false
+
+  gradient_loss_weight: 1.0
+
+  supervise_energy_landscape: false
+  energy_landscape_loss_weight: 0.0
+
+  finetune_energy_landscape: True
+  finetune_loss_weight: 5.0   # overridden by the sweep
+
+  finetune_demos: false
+  demo_finetune_loss_weight: 0.0
+
+  finetune_dpo: false
+  finetune_dpo_forward_kl: false
