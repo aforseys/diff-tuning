@@ -390,11 +390,15 @@ class DiffusionModel(nn.Module):
 
         for i in range(n_steps):
             t = grid[i]
+            # .to(dtype) because under AMP the forward returns fp16 while x/x_t/target are allocated at the
+            # parameters' dtype. `target[rows] = eps_t[rows]` is an in-place index_put, which cannot promote,
+            # so a half source into a float destination raises. Casting here also keeps the scheduler step and
+            # the regression targets in fp32 -- the ordinary AMP pattern: compute in half, accumulate in full.
             eps_t = self.model(
                 x,
                 torch.full((batch_size,), t, dtype=torch.long, device=device),
                 global_cond=global_cond,
-            ).detach()
+            ).detach().to(dtype)
             # Rows captured here: the eps just computed at this state IS their target, so no
             # separate target pass is needed.
             rows = hit[i]
